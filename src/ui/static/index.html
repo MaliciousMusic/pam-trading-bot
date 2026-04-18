@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PAM Council</title>
 <style>
   :root {
@@ -18,14 +19,18 @@
     height:100vh;display:flex;flex-direction:column;font-size:12px;overflow:hidden}
 
   /* ── HEADER ─────────────────────────── */
-  header{display:flex;align-items:center;gap:24px;padding:7px 16px;
+  header{display:flex;align-items:center;gap:16px;padding:7px 16px;
     border-bottom:1px solid var(--border);background:var(--bg2);
-    flex-shrink:0;z-index:2}
-  .brand{font-weight:600;letter-spacing:.25em;color:var(--muted);font-size:10px}
-  .hdr-item{display:flex;flex-direction:column;gap:1px}
-  .hdr-item .k{font-size:8.5px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase}
-  .hdr-item .v{font-family:var(--mono);font-size:14px;font-weight:600}
+    flex-shrink:0;z-index:2;overflow:hidden;min-width:0}
+  .brand{font-weight:600;letter-spacing:.25em;color:var(--muted);font-size:10px;flex-shrink:0}
+  .hdr-item{display:flex;flex-direction:column;gap:1px;flex-shrink:1;min-width:0}
+  .hdr-item .k{font-size:8.5px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;white-space:nowrap}
+  .hdr-item .v{font-family:var(--mono);font-size:14px;font-weight:600;white-space:nowrap}
   .spacer{flex:1}
+  #btn-export{background:none;border:1px solid var(--border);color:var(--muted);
+    font-size:8.5px;letter-spacing:.1em;padding:3px 8px;border-radius:2px;cursor:pointer;
+    font-family:var(--mono)}
+  #btn-export:hover{border-color:var(--fg);color:var(--fg)}
   #conn{padding:2px 8px;border-radius:2px;font-size:8.5px;
     background:var(--bg3);letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
   #conn.live{background:var(--buy);color:#000}
@@ -35,7 +40,7 @@
 
   /* ── MAIN 3-COLUMN GRID ─────────────── */
   main{flex:1;display:grid;
-    grid-template-columns:216px 1fr 268px;
+    grid-template-columns:minmax(160px,216px) 1fr minmax(200px,268px);
     grid-template-rows:1fr;
     gap:1px;background:var(--border);overflow:hidden;min-height:0}
 
@@ -125,9 +130,18 @@
   .chart-box.equity canvas{height:36px;flex:none}
   .pred-legend{display:flex;flex-wrap:wrap;gap:8px;margin-top:5px;flex-shrink:0;
     font-family:var(--mono);font-size:8.5px;color:var(--muted);letter-spacing:.03em}
-  .pred-legend span{display:inline-flex;align-items:center;gap:3px}
+  .pred-legend span{display:inline-flex;align-items:center;gap:3px;
+    cursor:pointer;user-select:none;padding:1px 4px;border-radius:2px;
+    border:1px solid transparent;transition:border-color .15s,opacity .15s}
+  .pred-legend span:hover{border-color:var(--border)}
+  .pred-legend span.off{opacity:.35}
+  .pred-legend span.off i{background:#2a2a2a !important}
   .pred-legend i{width:6px;height:6px;border-radius:50%;display:inline-block}
   .pred-legend b{font-weight:400;margin-left:2px;font-size:8px;color:#3a3a3a}
+  .pred-legend .sep{width:1px;background:var(--border);margin:0 2px;cursor:default}
+  .pred-legend .sep:hover{border-color:transparent}
+  .pred-legend .tgl{color:var(--muted)}
+  .pred-legend .tgl.off{opacity:.35}
   .pred-hint{margin-top:3px;font-family:var(--mono);font-size:7.5px;color:var(--dim)}
 
   /* ── RIGHT SIDEBAR ───────────────────── */
@@ -178,6 +192,43 @@
   .f-social_pulse.bear{color:var(--sell)}
   .f-social_pulse.bull{color:var(--buy)}
   .f-sentiment{color:var(--accent)}
+
+  /* ── RESPONSIVE ─────────────────────── */
+  /* Tablet: tighten columns */
+  @media (max-width:1200px){
+    main{grid-template-columns:minmax(140px,190px) 1fr minmax(180px,240px)}
+    header{gap:10px;padding:6px 10px}
+    .hdr-item .v{font-size:12px}
+    .hdr-item .k{font-size:8px}
+  }
+  /* Narrow laptop: scroll the page so every panel stays reachable */
+  @media (max-width:1100px){
+    body{overflow:auto;height:auto;min-height:100vh}
+    header{flex-wrap:wrap;gap:6px 10px;padding:6px 10px}
+    main{grid-template-columns:minmax(170px,220px) 1fr;
+         grid-template-rows:auto auto;gap:1px;overflow:visible}
+    .left-panel{grid-column:1;grid-row:1 / span 2;min-height:560px}
+    .charts-panel{grid-column:2;grid-row:1;min-height:480px;overflow:visible}
+    .sidebar{grid-column:2;grid-row:2;flex-direction:row;flex-wrap:wrap;
+             overflow:visible;max-height:none;padding:8px;gap:8px}
+    .sidebar .box{flex:1 1 240px;min-width:240px}
+    .ports{max-height:200px}
+    .chart-box.price{min-height:320px}
+    footer{height:auto;min-height:44px}
+  }
+  /* Mobile: full stack — every section gets its own row */
+  @media (max-width:720px){
+    header{padding:6px}
+    .brand{width:100%}
+    main{grid-template-columns:1fr;grid-template-rows:auto auto auto}
+    .left-panel,.charts-panel,.sidebar{grid-column:1;grid-row:auto;min-height:0}
+    .left-panel{min-height:420px}
+    .stage{min-height:300px}
+    .charts-panel{min-height:440px}
+    .chart-box.price{min-height:280px}
+    .sidebar{flex-direction:column}
+    .sidebar .box{min-width:0;flex:1 1 auto}
+  }
 </style>
 </head>
 <body>
@@ -190,6 +241,7 @@
   <div class="hdr-item"><span class="k">Tick</span><span class="v" id="h-tick">—</span></div>
   <div class="hdr-item"><span class="k">Sizing</span><span class="v curve-badge" id="h-curve">—</span></div>
   <span class="spacer"></span>
+  <button id="btn-export" onclick="exportReport()" title="Download session audit report">⬇ REPORT</button>
   <span id="conn">connecting</span>
 </header>
 
@@ -249,13 +301,16 @@
         <span class="v" id="price-d">—</span>
       </div>
       <div class="canvas-wrap"><canvas id="price-c"></canvas></div>
-      <div class="pred-legend">
-        <span><i style="background:#22d3ee"></i>+15s<b id="acc-15s"></b></span>
-        <span><i style="background:#60a5fa"></i>+1m<b id="acc-1m"></b></span>
-        <span><i style="background:#c084fc"></i>+5m<b id="acc-5m"></b></span>
-        <span><i style="background:#fb923c"></i>+10m<b id="acc-10m"></b></span>
+      <div class="pred-legend" id="pred-legend">
+        <span data-tgl="15s"><i style="background:#22d3ee"></i>+15s<b id="acc-15s"></b></span>
+        <span data-tgl="1m"><i style="background:#60a5fa"></i>+1m<b id="acc-1m"></b></span>
+        <span data-tgl="5m"><i style="background:#c084fc"></i>+5m<b id="acc-5m"></b></span>
+        <span data-tgl="10m"><i style="background:#fb923c"></i>+10m<b id="acc-10m"></b></span>
+        <span class="sep"></span>
+        <span data-tgl="proj" class="tgl">projection</span>
+        <span data-tgl="lines" class="tgl">écarts</span>
       </div>
-      <div class="pred-hint">● vert = direction correcte · ● rouge = inverse · trait = écart prédit/réel</div>
+      <div class="pred-hint">clic pour masquer · ● vert = direction correcte · ● rouge = inverse · trait = écart prédit/réel</div>
     </div>
     <div class="chart-box equity">
       <div class="chart-hdr">
@@ -318,6 +373,7 @@
   };
   const predictionTrail=[];
   let currentTick=0;
+  const VISIBLE={'15s':true,'1m':true,'5m':true,'10m':true,proj:true,lines:true};
 
   function tribePos(i,n){
     const a=(i/n)*2*Math.PI - Math.PI/2;
@@ -645,27 +701,27 @@
     const ctx=c.getContext('2d');ctx.scale(dpr,dpr);ctx.clearRect(0,0,w,h);
     if(hist.length<2)return;
 
-    const proj=[];let cumBps=0;
-    for(const s of steps){
-      cumBps+=(s.net_pressure||0)*CFG.bps_per_unit_pressure;
-      proj.push(currentPrice*(1+cumBps/10000));
+    const proj=VISIBLE.proj?[]:null;
+    let cumBps=0;
+    if(VISIBLE.proj){
+      for(const s of steps){
+        cumBps+=(s.net_pressure||0)*CFG.bps_per_unit_pressure;
+        proj.push(currentPrice*(1+cumBps/10000));
+      }
     }
+    const projLen=proj?proj.length:0;
 
-    const all=proj.length?hist.concat(proj):hist.slice();
-    if(trail&&trail.length){for(const e of trail) all.push(e.predicted_price);}
+    const all=projLen?hist.concat(proj):hist.slice();
+    if(trail&&trail.length){
+      for(const e of trail){ if(VISIBLE[e.label]) all.push(e.predicted_price); }
+    }
     const lo=Math.min(...all),hi=Math.max(...all);const r=hi-lo||1;
-    const total=Math.max(1, hist.length+proj.length-1);
+    const total=Math.max(1, hist.length+projLen-1);
     const xAt=i=>(i/total)*w;
     const yAt=v=>h-((v-lo)/r)*(h-6)-3;
 
-    // historic line
-    ctx.strokeStyle=histColor;ctx.lineWidth=1.5;ctx.beginPath();
-    hist.forEach((v,i)=>{const x=xAt(i),y=yAt(v);
-      if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);});
-    ctx.stroke();
-
-    // projection
-    if(proj.length){
+    // projection (drawn first, behind everything)
+    if(projLen){
       const nowX=xAt(hist.length-1);
       ctx.strokeStyle='rgba(80,80,80,.3)';ctx.lineWidth=1;
       ctx.setLineDash([2,3]);ctx.beginPath();
@@ -676,12 +732,13 @@
       ctx.stroke();
     }
 
-    // prediction dot trail
+    // prediction dot trail (behind price line)
     const accStats={'15s':{n:0,hit:0,err:0},'1m':{n:0,hit:0,err:0},
                     '5m':{n:0,hit:0,err:0},'10m':{n:0,hit:0,err:0}};
     if(trail&&trail.length){
       const earliestTick=tickNow - hist.length + 1;
       for(const e of trail){
+        if(!VISIBLE[e.label]) continue;
         const targetTick=e.tick + e.horizon_steps;
         let combined_i, matured=false, actualPrice=null;
         if(targetTick<=tickNow){
@@ -690,8 +747,9 @@
           actualPrice=hist[combined_i];
           matured=true;
         }else{
+          if(!projLen) continue;
           const projIdx=targetTick - tickNow - 1;
-          if(projIdx>=proj.length) continue;
+          if(projIdx>=projLen) continue;
           combined_i=hist.length + projIdx;
         }
         const x=xAt(combined_i), yPred=yAt(e.predicted_price);
@@ -702,22 +760,38 @@
           const errorBps=Math.abs(e.predicted_price - actualPrice)/e.base_price*10000;
           const s=accStats[e.label];
           if(s){s.n++;if(correct)s.hit++;s.err+=errorBps;}
-          const yAct=yAt(actualPrice);
-          ctx.strokeStyle=correct?'rgba(77,187,110,.55)':'rgba(217,79,79,.55)';
-          ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(x,yPred);ctx.lineTo(x,yAct);ctx.stroke();
-          ctx.globalAlpha=0.5;ctx.fillStyle=e.color;
-          ctx.beginPath();ctx.arc(x,yPred,2,0,Math.PI*2);ctx.fill();
-          ctx.globalAlpha=0.8;
+          if(VISIBLE.lines){
+            const yAct=yAt(actualPrice);
+            ctx.strokeStyle=correct?'rgba(77,187,110,.35)':'rgba(217,79,79,.35)';
+            ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(x,yPred);ctx.lineTo(x,yAct);ctx.stroke();
+          }
+          ctx.globalAlpha=0.35;ctx.fillStyle=e.color;
+          ctx.beginPath();ctx.arc(x,yPred,1.8,0,Math.PI*2);ctx.fill();
+          ctx.globalAlpha=0.55;
           ctx.strokeStyle=correct?'#4dbb6e':'#d94f4f';
-          ctx.lineWidth=1;ctx.beginPath();ctx.arc(x,yPred,3.2,0,Math.PI*2);ctx.stroke();
+          ctx.lineWidth=0.8;ctx.beginPath();ctx.arc(x,yPred,2.8,0,Math.PI*2);ctx.stroke();
           ctx.globalAlpha=1;
         }else{
-          ctx.fillStyle=e.color;ctx.globalAlpha=0.9;
-          ctx.beginPath();ctx.arc(x,yPred,2,0,Math.PI*2);ctx.fill();
+          ctx.fillStyle=e.color;ctx.globalAlpha=0.6;
+          ctx.beginPath();ctx.arc(x,yPred,1.8,0,Math.PI*2);ctx.fill();
           ctx.globalAlpha=1;
         }
       }
     }
+
+    // historic price line — drawn LAST so it stays readable above dots
+    ctx.strokeStyle='#000';ctx.lineWidth=3.5;ctx.lineJoin='round';ctx.beginPath();
+    hist.forEach((v,i)=>{const x=xAt(i),y=yAt(v);
+      if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);});
+    ctx.stroke();
+    ctx.strokeStyle=histColor;ctx.lineWidth=2;ctx.beginPath();
+    hist.forEach((v,i)=>{const x=xAt(i),y=yAt(v);
+      if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);});
+    ctx.stroke();
+    // current price marker
+    const lastX=xAt(hist.length-1), lastY=yAt(hist[hist.length-1]);
+    ctx.fillStyle=histColor;ctx.beginPath();ctx.arc(lastX,lastY,3,0,Math.PI*2);ctx.fill();
+    ctx.strokeStyle='#000';ctx.lineWidth=1.2;ctx.stroke();
     for(const k of Object.keys(accStats)){
       const s=accStats[k];
       const el=document.getElementById('acc-'+k);if(!el)continue;
@@ -791,13 +865,45 @@
       draw('eq-c',eqHist,ed>=0?'#4dbb6e':'#d94f4f');
     }
   }
+  // Legend toggles — click to hide/show each horizon or the projection
+  const legend=$('pred-legend');
+  if(legend){
+    legend.querySelectorAll('span[data-tgl]').forEach(el=>{
+      el.addEventListener('click',()=>{
+        const k=el.getAttribute('data-tgl');
+        VISIBLE[k]=!VISIBLE[k];
+        el.classList.toggle('off',!VISIBLE[k]);
+        requestAnimationFrame(redrawCharts);
+      });
+    });
+  }
+
   // Redraw on window resize so canvases fill their containers at any size
-  const ro=new ResizeObserver(redrawCharts);
+  const ro=new ResizeObserver(()=>requestAnimationFrame(redrawCharts));
   ro.observe(document.querySelector('.charts-panel'));
-  window.addEventListener('resize',redrawCharts);
+  window.addEventListener('resize',()=>requestAnimationFrame(redrawCharts));
 
   Promise.all([loadConfig(),loadTribes()]).then(connect);
 })();
+
+async function exportReport(){
+  const btn = document.getElementById('btn-export');
+  btn.textContent = '… loading';
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/audit/report');
+    const txt = await r.text();
+    const blob = new Blob([txt], {type:'text/plain'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    const cd = r.headers.get('content-disposition') || '';
+    const m = cd.match(/filename="([^"]+)"/);
+    a.download = m ? m[1] : 'pam_audit.txt';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  } catch(e) { alert('Export failed: ' + e); }
+  finally { btn.textContent = '⬇ REPORT'; btn.disabled = false; }
+}
 </script>
 </body>
 </html>

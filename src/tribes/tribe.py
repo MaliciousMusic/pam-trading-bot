@@ -1,11 +1,22 @@
 """Runtime Tribe — wraps a spec and produces Votes at tick time.
 
-A Tribe is nearly stateless: strategies read from MarketState. The
-instance keeps only the minimum it genuinely needs (cooldowns, rolling
-personal memory if any).
+Each tribe simulates its own open/hold/close lifecycle. The key invariant:
+conviction represents the NET IMBALANCE within this archetype, not an
+all-in position. A market-maker tribe at 38% weight always has buyers AND
+sellers — the vote reflects only the directional excess.
+
+When FLAT: looks for entry signal. Enters with full conviction.
+When HOLDING: re-evaluates strategy each tick. Hold conviction scales with
+  how much the CURRENT strategy confirms the position. If the strategy is
+  fighting the held direction, conviction collapses toward zero (the tribe
+  is internally balanced). When strategy flips with enough conviction the
+  position closes.
+On CLOSE: fires a brief counter-vote (unwind signal), enters cooldown.
 """
 from __future__ import annotations
 
+import math
+import random
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
@@ -15,11 +26,25 @@ from .market_state import MarketState
 from .spec import TribeSpec
 from .strategies import get as get_strategy
 
+# Peak conviction emitted while holding (net imbalance cap).
+_HOLD_CONVICTION_MAX = 0.05
+# Minimum strategy conviction to trigger a new entry (when flat).
+_ENTRY_MIN_CONV = 0.10
+# Minimum strategy conviction to trigger an early exit (direction flip).
+_FLIP_MIN_CONV = 0.15
+# Exit vote = this fraction of entry conviction, reverse side.
+_EXIT_SCALE = 0.50
+
 
 class Tribe:
     def __init__(self, spec: TribeSpec) -> None:
         self.spec = spec
         self._cooldown_until: datetime | None = None
+        # Simulated position state
+        self._sim_side: Side | None = None          # None = flat
+        self._sim_entry_ts: datetime | None = None
+        self._sim_entry_conv: float = 0.0
+        self._sim_hold_seconds: float = 0.0
 
     @property
     def id(self) -> str:
@@ -30,37 +55,22 @@ class Tribe:
         return self.spec.flow.weight
 
     def presence_factor(self, ts: datetime) -> float:
-        """0..1 multiplier on this tribe's weight at the given UTC hour.
-        Captures 'the APAC crowd is asleep right now' — people sleep, bots
-        don't. Retail tribes should drop here; 24/7 algos stay at 1.0."""
         hour = ts.astimezone(timezone.utc).hour
         curve = self.spec.circadian.presence_by_hour_utc
         if not curve:
             return 1.0
-        # Tolerant of misconfigured curves (not exactly length 24).
         return max(0.0, min(1.0, float(curve[hour % len(curve)])))
 
     def effective_weight(self, ts: datetime) -> float:
         return self.weight * self.presence_factor(ts)
 
     def observe(self, ev: Event) -> None:
-        """Optional hook. MarketState already absorbs everything — override
-        only if this tribe needs private memory beyond what MarketState offers.
-        """
         return None
 
     def indicator_blend(self, state: MarketState) -> tuple[float, dict[str, float]]:
-        """Evaluate this tribe's declared indicator lens. Returns
-        (signed_signal in [-1,+1], per-indicator breakdown for logging)."""
         return evaluate_indicators(state, self.spec.indicators)
 
     def _effective_indicator_weight(self, state: MarketState) -> float:
-        """Blend weight, optionally shifted by realized-volatility regime.
-
-        Low-vol whipsaw punishes indicator-heavy tribes unless they fade
-        (grid bots live in chop). High-vol trending rewards momentum /
-        RSI / zscore readings. When `indicator_regime_range == 0` the
-        weight is the static spec value (old behavior)."""
         w = max(0.0, min(1.0, float(self.spec.indicator_weight)))
         rng = float(getattr(self.spec, "indicator_regime_range", 0.0) or 0.0)
         if rng == 0.0:
@@ -75,23 +85,12 @@ class Tribe:
         if hi <= lo:
             return w
         norm = max(0.0, min(1.0, (realized_bps - lo) / (hi - lo)))
-        side = 2.0 * norm - 1.0  # -1 at/below lo, +1 at/above hi
+        side = 2.0 * norm - 1.0
         if str(self.spec.indicator_regime_prefer).lower() == "low":
             side = -side
         return max(0.0, min(1.0, w + rng * side))
 
     def _blend_with_indicators(self, state: MarketState, v: Vote) -> Vote:
-        """Mix the indicator-lens signal into the strategy's vote.
-
-          final_signed = (1-w)·strat_signed + w·blend
-          w            = spec.indicator_weight ∈ [0,1], optionally regime-shifted
-
-        Agreement amplifies conviction (both vectors point same way);
-        disagreement shrinks it (honest reflection of internal conflict).
-        Side flips to follow the blended sign so the tribe never votes
-        against its own indicator reading just because the strat flipped
-        first on noise. When net combined is ≈0, the vote abstains — the
-        archetype has no read."""
         if not self.spec.indicators or self.spec.indicator_weight <= 0:
             return v
         if v.side is Side.ABSTAIN:
@@ -109,38 +108,110 @@ class Tribe:
         return replace(v, side=side, conviction=abs(combined),
                        reason=v.reason + f" | ind={blend:+.2f}")
 
+    def _sample_hold_seconds(self) -> float:
+        lo, hi = self.spec.flow.typical_hold_seconds
+        lo = max(1.0, float(lo))
+        hi = max(lo, float(hi))
+        log_lo = math.log(lo)
+        log_hi = math.log(hi)
+        return min(math.exp(random.uniform(log_lo, log_hi)), 86400.0)
+
+    def _fresh_signal(self, ts: datetime, state: MarketState) -> Vote:
+        strat = get_strategy(self.spec.strategy.family)
+        v = strat(self, ts, state)
+        return self._blend_with_indicators(state, v)
+
     def vote(self, ts: datetime, state: MarketState) -> Vote:
-        if self._cooldown_until and ts < self._cooldown_until:
-            # Resting from a strong take, but still present — idle lean only.
-            v = self._idle_lean("cooldown")
-        else:
-            strat = get_strategy(self.spec.strategy.family)
-            v = strat(self, ts, state)
-            # Co-sign with declarative indicator lens. The strategy produced
-            # its core signed conviction; the tribe's indicator block is its
-            # "view of the tape" — windows, thresholds, follow/fade actions
-            # tuned to this archetype. Blending them means the final vote
-            # reflects BOTH the programmatic strat and the indicator reading.
-            v = self._blend_with_indicators(state, v)
-            cd = self.spec.flow.cooldown_seconds
-            trigger = float(getattr(self.spec.flow, "strong_vote_conviction", 0.3))
-            if v.side is not Side.ABSTAIN and v.conviction >= trigger and cd > 0:
-                self._cooldown_until = ts + timedelta(seconds=cd)
-        # Population-model corrections, applied to every vote:
-        #   1) Circadian presence: the cohort that's asleep contributes less.
-        #   2) Activation rate: only a fraction of the population is actually
-        #      expressing a directional view this tick (0.5% for app newbies,
-        #      100% for colo MMs). This scales CONVICTION, not weight — a
-        #      newbie tribe with 0.5% activation means "most newbies aren't
-        #      trading right now", so their aggregate force is dampened. We
-        #      keep conviction in (0,1] instead of collapsing to idle so the
-        #      few who ARE active still move the signal proportionally.
+        v = self._lifecycle_vote(ts, state)
         eff = self.effective_weight(ts)
         act = max(0.0, min(1.0, float(getattr(self.spec.flow, "activation_rate", 1.0))))
         new_conv = v.conviction * act
         if eff != v.weight or new_conv != v.conviction:
             v = replace(v, weight=eff, conviction=max(0.0, min(1.0, new_conv)))
         return v
+
+    def _lifecycle_vote(self, ts: datetime, state: MarketState) -> Vote:
+        if self._sim_side is None:
+            return self._flat_vote(ts, state)
+        return self._inposition_vote(ts, state)
+
+    def _flat_vote(self, ts: datetime, state: MarketState) -> Vote:
+        if self._cooldown_until and ts < self._cooldown_until:
+            return self._idle_lean("cooldown")
+
+        v = self._fresh_signal(ts, state)
+
+        if v.side is not Side.ABSTAIN and v.conviction >= _ENTRY_MIN_CONV:
+            self._sim_side = v.side
+            self._sim_entry_ts = ts
+            self._sim_entry_conv = v.conviction
+            self._sim_hold_seconds = self._sample_hold_seconds()
+            return replace(v, reason=v.reason + f" | SIM_OPEN hold≈{self._sim_hold_seconds:.0f}s")
+
+        return v
+
+    def _inposition_vote(self, ts: datetime, state: MarketState) -> Vote:
+        assert self._sim_entry_ts is not None
+        held_s = (ts - self._sim_entry_ts).total_seconds()
+
+        # Fresh strategy signal — used for both exit detection and hold sizing.
+        sig = self._fresh_signal(ts, state)
+
+        # Exit: hold window expired OR direction flip with enough conviction.
+        hold_expired = held_s >= self._sim_hold_seconds
+        direction_flip = (
+            sig.side is not Side.ABSTAIN
+            and sig.side is not self._sim_side
+            and sig.conviction >= _FLIP_MIN_CONV
+        )
+        if hold_expired or direction_flip:
+            return self._close_sim(ts, held_s, "expired" if hold_expired else "flip")
+
+        # Hold conviction reflects the NET imbalance at this moment.
+        # When the current strategy confirms the position: tribe is tilted,
+        # emit up to _HOLD_CONVICTION_MAX. When strategy is flat or opposing:
+        # the tribe's buyers and sellers are balanced → near-zero.
+        if sig.side is self._sim_side:
+            alignment = sig.conviction          # 0..1 confirming
+            hold_conv = _HOLD_CONVICTION_MAX * max(0.2, alignment)
+        elif sig.side is Side.ABSTAIN:
+            hold_conv = _HOLD_CONVICTION_MAX * 0.3   # no read → quiet
+        else:
+            hold_conv = _HOLD_CONVICTION_MAX * 0.05  # fighting → near-silent
+
+        reason = (f"SIM_HOLD {held_s:.0f}s/{self._sim_hold_seconds:.0f}s "
+                  f"sig={sig.conviction:+.2f}")
+        return Vote(
+            tribe_id=self.spec.id,
+            side=self._sim_side,
+            conviction=hold_conv,
+            horizon_seconds=max(0, int(self._sim_hold_seconds - held_s)),
+            weight=self.weight,
+            reason=reason,
+        )
+
+    def _close_sim(self, ts: datetime, held_s: float, why: str) -> Vote:
+        exit_side = Side.SELL if self._sim_side is Side.BUY else Side.BUY
+        exit_conv = self._sim_entry_conv * _EXIT_SCALE
+        reason = f"SIM_CLOSE {why} held={held_s:.0f}s"
+
+        cd = self.spec.flow.cooldown_seconds
+        if cd > 0:
+            self._cooldown_until = ts + timedelta(seconds=cd)
+
+        self._sim_side = None
+        self._sim_entry_ts = None
+        self._sim_entry_conv = 0.0
+        self._sim_hold_seconds = 0.0
+
+        return Vote(
+            tribe_id=self.spec.id,
+            side=exit_side,
+            conviction=max(0.0, min(1.0, exit_conv)),
+            horizon_seconds=0,
+            weight=self.weight,
+            reason=reason,
+        )
 
     def _idle_lean(self, reason: str) -> Vote:
         d = self.spec.disposition
@@ -151,9 +222,8 @@ class Tribe:
             conv = 0.0
         else:
             side = Side.BUY if bias > 0 else Side.SELL
-            conv = conv * abs(bias)        # scale conviction by |bias|
+            conv = conv * abs(bias)
         return Vote(
             tribe_id=self.spec.id, side=side, conviction=conv,
             horizon_seconds=0, weight=self.weight, reason=reason,
         )
-
