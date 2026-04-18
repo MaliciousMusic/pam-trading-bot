@@ -84,7 +84,12 @@ class ChessProjector:
         signal_quality = sum(
             (1.0 - s.uncertainty) * w for s, w in zip(step_aggs, kernel)
         ) / k_sum
-        abs_activity = sum(abs(b) for b in step_bps_list)
+        # Directional consistency uses kernel-weighted absolute activity so
+        # that far-horizon noise (which barely contributes to expected_move
+        # because of the decay kernel) doesn't pollute the denominator.
+        # Numerator and denominator now use the same weighting — otherwise
+        # extending horizon mechanically crushes conf toward zero.
+        abs_activity = sum(abs(b) * w for b, w in zip(step_bps_list, kernel))
         directional = abs(expected_move_bps) / abs_activity if abs_activity > 0 else 0.0
         final_conf = max(0.0, min(1.0, signal_quality * directional))
 
