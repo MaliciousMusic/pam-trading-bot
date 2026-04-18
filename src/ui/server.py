@@ -4,7 +4,8 @@ Endpoints:
   GET  /                 → the single-file dashboard
   GET  /api/tribes       → tribe metadata (served once at startup)
   GET  /api/backscore    → MAE + hit-rate per forecast horizon (trailing window)
-  GET  /api/calibration  → per-tribe skill scores (Phase G audit→calibration loop)
+  GET  /api/calibration  → per-tribe skill scores (audit→calibration loop)
+  GET  /api/kernel       → projector-gain fit snapshot (Phase A)
   WS   /ws               → tick + event stream; replays recent tick buffer on connect
 """
 from __future__ import annotations
@@ -19,6 +20,9 @@ from loguru import logger
 
 from ..audit.backscore import ForecastAuditor
 from ..audit.calibrator import TribeCalibrator
+from ..projector.kernel_calibrator import KernelCalibrator
+from ..regime.classifier import RegimeClassifier
+from ..tribes.market_state import MarketState
 from .broadcaster import UIBroadcaster
 
 
@@ -32,6 +36,9 @@ def create_app(
     *,
     auditor: ForecastAuditor | None = None,
     calibrator: TribeCalibrator | None = None,
+    kernel_calibrator: KernelCalibrator | None = None,
+    regime_classifier: RegimeClassifier | None = None,
+    state: MarketState | None = None,
 ) -> FastAPI:
     app = FastAPI(title="PAM Council", docs_url=None, redoc_url=None)
 
@@ -97,12 +104,16 @@ def create_app(
         if calibrator is not None:
             cal = calibrator.snapshot()
             lines += ["", "  PER-TRIBE SKILL (EWMA directional accuracy)", "  " + "-" * 40]
-            for tid, info in cal.get("tribes", {}).items():
+            for info in cal.get("tribes", []):
+                tid = info.get("tribe_id", "?")
                 mult = info.get("multiplier", 1.0)
-                acc = info.get("ewma_accuracy")
-                n = info.get("n_resolved", 0)
+                acc = info.get("ewma_hit")
+                fast = info.get("ewma_hit_fast")
+                n = info.get("n", 0)
                 acc_str = f"{acc*100:.1f}%" if acc is not None else " n/a "
-                lines.append(f"  {tid:<36}  acc={acc_str}  mult={mult:.2f}x  n={n}")
+                fast_str = f" fast={fast*100:.1f}%" if fast is not None else ""
+                shift_flag = "  ◂REGIME-SHIFT▸" if info.get("regime_shift") else ""
+                lines.append(f"  {tid:<36}  acc={acc_str}{fast_str}  mult={mult:.2f}x  n={n}{shift_flag}")
             lines.append("")
         content = "\n".join(lines) + "\n"
         filename = f"pam_audit_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M')}.txt"
@@ -116,6 +127,24 @@ def create_app(
         if calibrator is None:
             return JSONResponse({"enabled": False})
         return JSONResponse({"enabled": True, **calibrator.snapshot()})
+
+    @app.get("/api/kernel")
+    async def kernel():
+        if kernel_calibrator is None:
+            return JSONResponse({"enabled": False})
+        return JSONResponse({"enabled": True, **kernel_calibrator.snapshot()})
+
+    @app.get("/api/regime")
+    async def regime():
+        # Classifier is stateless across calls — re-reading MarketState on
+        # demand is cheap (a couple of rolling-window queries), so the
+        # endpoint always reflects "right now" rather than the last tick.
+        if regime_classifier is None or state is None:
+            return JSONResponse({"enabled": False})
+        if state.last_price is None:
+            return JSONResponse({"enabled": True, "warming_up": True})
+        r = regime_classifier.classify(state)
+        return JSONResponse({"enabled": True, **r.to_dict()})
 
     @app.websocket("/ws")
     async def ws_endpoint(ws: WebSocket):

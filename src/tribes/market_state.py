@@ -116,13 +116,16 @@ class TaggedSeries:
 class MarketState:
     """Shared read model the voting tribes query."""
 
-    MAX_AGE_S = 600.0  # biggest window any tribe will ask for; extend if needed.
-
-    def __init__(self) -> None:
+    def __init__(self, max_age_s: float = 600.0) -> None:
+        self.MAX_AGE_S = float(max_age_s)
         self.taker_flow = RollingSeries(self.MAX_AGE_S)   # signed notional (+buy, -sell)
         self.long_liq = RollingSeries(self.MAX_AGE_S)      # long-position liquidation notional
         self.short_liq = RollingSeries(self.MAX_AGE_S)     # short-position liquidation notional
-        self.prices = RollingSeries(self.MAX_AGE_S)        # mark/trade price samples
+        # Prices retained for 1h — covers swing_trend_follower's 30min long
+        # window, leverage_cycle's 1h window, and the event-wave projector's
+        # gaussian integration. Kept independent of MAX_AGE_S (which sits at
+        # 600s for fast flow series) so hourly strategies see non-truncated data.
+        self.prices = RollingSeries(3600.0)
         # Social/sentiment series — signed score ∈ [-1,+1] per reddit post / pulse.
         # Kept longer than market windows because headlines carry across minutes.
         self.social = RollingSeries(1800.0)                # 30min social pulse history
@@ -157,6 +160,18 @@ class MarketState:
         # The event-wave projector reads this list to inject a Gaussian
         # propagation wave into its per-step pressure.
         self.pending_events: list[dict] = []
+        # Phase F — per-venue OI history. Each series stores USD notional
+        # samples; an hour of poll-cadence snapshots is plenty for the
+        # "OI built up over the rally" / "OI drained during the flush"
+        # heuristics that leverage_builder and capitulation_detector need.
+        # Keyed by venue label (binance|bybit|okx|…).
+        self.oi: dict[str, RollingSeries] = {}
+        self.last_oi_usd: dict[str, float] = {}
+        # Per-venue cross-venue taker flow (signed notional). Intentionally
+        # NOT merged with `taker_flow` so Binance's own flow (the execution
+        # venue's actual felt pressure) stays distinguishable from external
+        # venues. Lets cross_venue_arb tribes detect divergence.
+        self.cross_flow: dict[str, RollingSeries] = {}
 
     # -- ingest ---------------------------------------------------------
 
@@ -205,6 +220,22 @@ class MarketState:
                 self.last_spread_bps = p.get("spread_bps")
                 self.bid_depth_5bps_usd = p.get("bid_depth_5bps_usd")
                 self.ask_depth_5bps_usd = p.get("ask_depth_5bps_usd")
+        elif ev.kind == "oi":
+            # Per-venue OI snapshot. Persist both the USD series (for
+            # delta queries) and the last value (for "sum across venues").
+            venue = str(ev.payload.get("venue") or ev.source.split(".", 1)[0])
+            usd = float(ev.payload.get("oi_usd") or 0.0)
+            if usd > 0:
+                series = self.oi.setdefault(venue, RollingSeries(3600.0))
+                series.add(ev.ts, usd)
+                self.last_oi_usd[venue] = usd
+        elif ev.kind == "cross_trade":
+            # Cross-venue taker flow. Store signed notional per venue.
+            venue = str(ev.payload.get("venue") or ev.source.split(".", 1)[0])
+            n = float(ev.payload.get("notional_usd") or 0.0)
+            signed = -n if ev.payload.get("is_sell_aggressor") else n
+            series = self.cross_flow.setdefault(venue, RollingSeries(self.MAX_AGE_S))
+            series.add(ev.ts, signed)
         elif ev.kind == "news":
             # Signed score in [-1,+1] — RSS poller already clipped. Severity is
             # the source-weighted impact (SEC=1.0, HN=0.3) and becomes the
@@ -259,6 +290,63 @@ class MarketState:
     def price_range(self, window_s: float) -> tuple[float, float] | None:
         return self.prices.min_max(window_s)
 
+    # -- open interest --------------------------------------------------
+
+    def oi_total_usd(self) -> float:
+        """Sum of the latest per-venue OI snapshots. 0 until at least one
+        poll has landed; missing venues contribute 0 (partial view is
+        acceptable — tribes treat missing data as no-signal)."""
+        return float(sum(self.last_oi_usd.values()))
+
+    def oi_delta_pct(self, window_s: float) -> float:
+        """% change in summed OI over `window_s`. Positive = leverage
+        building. Approach: take per-venue first_last within the window,
+        sum both sides, compute (end-start)/start. Returns 0.0 if we
+        don't have a non-zero start."""
+        start_total = 0.0
+        end_total = 0.0
+        for series in self.oi.values():
+            fl = series.first_last(window_s)
+            if fl is None:
+                continue
+            start_total += fl[0]
+            end_total += fl[1]
+        if start_total <= 0:
+            return 0.0
+        return (end_total - start_total) / start_total * 100.0
+
+    def oi_by_venue_usd(self) -> dict[str, float]:
+        """Snapshot of the last-seen OI per venue. Empty until polls land."""
+        return dict(self.last_oi_usd)
+
+    # -- cross-venue flow -----------------------------------------------
+
+    def cross_venue_flow_usd(self, venue: str, window_s: float) -> float:
+        """Signed taker flow at an external venue. Positive = buy-aggression
+        dominates. Returns 0.0 if the venue has no data yet."""
+        series = self.cross_flow.get(venue)
+        return series.sum(window_s) if series else 0.0
+
+    def cross_venue_divergence(self, window_s: float) -> float:
+        """Signed divergence between Binance flow and the external-venue
+        average. Positive = Binance more aggressive than the rest (often
+        precedes a spread-close move against Binance). Zero when we
+        have no cross-venue data.
+
+        Normalized by the absolute total flow so the value stays in
+        [-1, +1] regardless of volume scale."""
+        if not self.cross_flow:
+            return 0.0
+        venues = list(self.cross_flow.keys())
+        flows = [self.cross_flow[v].sum(window_s) for v in venues]
+        external_mean = sum(flows) / max(1, len(flows))
+        binance_flow = self.taker_flow.sum(window_s)
+        diff = binance_flow - external_mean
+        denom = abs(binance_flow) + sum(abs(f) for f in flows)
+        if denom <= 0:
+            return 0.0
+        return max(-1.0, min(1.0, diff / denom))
+
     # -- sentiment queries ----------------------------------------------
 
     def social_score(self, window_s: float) -> float:
@@ -308,7 +396,7 @@ class MarketState:
     def snapshot(self) -> "MarketState":
         """Full copy so the chess projector can mutate freely without
         corrupting the live read model."""
-        s = MarketState()
+        s = MarketState(self.MAX_AGE_S)
         s.taker_flow._data = deque(self.taker_flow._data)
         s.long_liq._data = deque(self.long_liq._data)
         s.short_liq._data = deque(self.short_liq._data)
@@ -329,6 +417,17 @@ class MarketState:
         s.bid_depth_5bps_usd = self.bid_depth_5bps_usd
         s.ask_depth_5bps_usd = self.ask_depth_5bps_usd
         s.pending_events = list(self.pending_events)  # shallow copy of dicts
+        # Phase F — deep-copy per-venue series so the projector's virtual
+        # clock can trim them independently.
+        for venue, series in self.oi.items():
+            ns = RollingSeries(series.max_age_s)
+            ns._data = deque(series._data)
+            s.oi[venue] = ns
+        for venue, series in self.cross_flow.items():
+            ns = RollingSeries(series.max_age_s)
+            ns._data = deque(series._data)
+            s.cross_flow[venue] = ns
+        s.last_oi_usd = dict(self.last_oi_usd)
         return s
 
     def advance_clock(self, ts: datetime) -> None:
@@ -338,4 +437,8 @@ class MarketState:
         self.prices.advance_clock(ts)
         self.social.advance_clock(ts)
         self.news.advance_clock(ts)
+        for series in self.oi.values():
+            series.advance_clock(ts)
+        for series in self.cross_flow.values():
+            series.advance_clock(ts)
         self.last_update = ts

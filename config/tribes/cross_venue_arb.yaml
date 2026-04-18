@@ -1,0 +1,109 @@
+id: cross_venue_arb
+name: Cross-Venue Spread Arb
+description: >-
+  Spread traders reading Binance taker aggression against Bybit/OKX flow.
+  When Binance runs materially hotter than the external-venue average (one
+  venue leading, rest of market quiet), they fade — the spread usually
+  closes over the next 30-120 seconds as either external venues catch up
+  or the leading venue reverts. Uses MarketState.cross_venue_divergence
+  over short + long windows for persistence confirmation.
+
+demographics:
+  # Quant shops + sharp retail running multi-venue connections. Smaller
+  # cohort than basis arb but lower capital per head (this is execution
+  # alpha, not structural carry).
+  capital_band_usd: [20000, 1000000]
+  count_estimate: 1500
+  experience_years: [3, 15]
+  jurisdiction: [NA, EU, APAC]
+
+hardware:
+  # Needs low-latency multi-venue connectivity. Most are workstation +
+  # cloud co-located on Tokyo/AWS-SG to keep external-venue round-trip tight.
+  tier: workstation
+  typical_latency_ms: 50
+  uptime: continuous
+  specs:
+    screens: 2-3
+    connectivity: colo_or_cloud
+
+software:
+  platforms: [binance_pro, bybit, okx]
+  tools: [custom_spread_bot, multi_venue_ws, coinglass_free]
+  charting: advanced
+  order_types_used: [limit, post_only_limit, ioc]
+  data_feeds: [trade, cross_trade, orderbook]
+
+strategy:
+  family: cross_venue_arb
+  params:
+    # Short window to detect the divergence; long window to confirm it's
+    # not a single-print artifact.
+    short_window_s: 60
+    long_window_s: 300
+    strong_divergence: 0.35     # |divergence| at which a full fade fires
+    confirm_divergence: 0.15    # long-window must exceed this, same sign
+    hold_seconds: 300           # 5min mean-reversion horizon
+
+attention:
+  kinds: [trade, cross_trade, book]
+  tags: [trade, cross_trade]
+  ignored_tags: [news, social, liq_long, liq_short]
+  min_severity: 0.0
+
+personality:
+  # Quant-run arb — disciplined, no FOMO or panic. Moderately patient
+  # (mean-reversion horizon is short but the setup can take minutes to
+  # resolve).
+  risk_tolerance: 0.60
+  fomo: 0.05
+  panic: 0.10
+  patience: 0.55
+  herding: 0.10
+  # Colo/cloud-grade reaction — sub-second to divergence detection.
+  reaction_mu_seconds: 0.8
+  reaction_sigma_seconds: 1.5
+
+flow:
+  # weight is OVERRIDDEN at load time (see derive.py).
+  weight: 0.05
+  # Spread bots scan continuously; every tick the evaluator is re-pricing.
+  # ~20% of cohort is actively scaling a spread position each tick.
+  activation_rate: 0.20
+  typical_hold_seconds: [60, 900]
+  default_conviction: 0.7
+  cooldown_seconds: 30
+
+disposition:
+  # Always slightly fade whatever divergence currently exists. Near-zero
+  # flat when venues are perfectly in sync.
+  idle_bias: 0.0
+  idle_conviction: 0.05
+
+circadian:
+  # Multi-venue bots run 24/7. Modest dips during low-liquidity hours
+  # when spreads are widest but divergence signal is noisier.
+  timezone_label: "24/7 (spread bot)"
+  presence_by_hour_utc:
+    [0.90, 0.85, 0.85, 0.85, 0.85, 0.90, 0.95, 1.00,
+     1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00,
+     1.00, 0.95, 0.90, 0.90, 0.90, 0.90, 0.90, 0.90]
+
+# Cross-venue lens: divergence is the core signal and lives in the
+# strategy itself (no indicator yet). Indicators add secondary confirmation
+# via taker_imbalance on Binance and volatility_regime (spread arb is
+# more reliable in calm tape; violent moves swamp the micro-structural
+# mean reversion).
+indicators:
+  taker_imbalance:
+    window_s: 60
+    reference_usd: 500000
+    action: fade                # fade the execution venue's own aggression
+    weight: 0.5
+  volatility_regime:
+    window_s: 300
+    low_bps: 10
+    high_bps: 80
+    prefer: low                 # spread arb prefers calm
+    weight: 0.4
+indicator_weight: 0.35

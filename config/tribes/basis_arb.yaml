@@ -1,0 +1,115 @@
+id: basis_arb
+name: Cash-and-Carry Basis Arb
+description: >-
+  Structural capital that reads annualized basis (funding × 3 × 365), the
+  perp/mark premium, and open-interest expansion together. Fades persistent
+  rich basis — short perp, long spot — and leans harder when OI is building
+  on the paid side (the crowded trade is about to unwind). Slow, patient
+  holds. Distinct from the contrarian funding fader: they key off
+  *annualized persistence* and OI buildup, not the single-epoch print.
+
+demographics:
+  # Prop desks + sophisticated retail running futures-basis sheets. Narrower
+  # cohort than funding_fader but larger per-capita size. Cross-venue aware.
+  capital_band_usd: [50000, 5000000]
+  count_estimate: 2500
+  experience_years: [4, 20]
+  jurisdiction: [NA, EU, APAC]
+
+hardware:
+  tier: workstation
+  typical_latency_ms: 250
+  uptime: continuous
+  specs:
+    screens: 2-4
+    connectivity: business_fiber
+
+software:
+  platforms: [binance_pro, bybit, okx, deribit, coinbase_prime]
+  tools: [custom_basis_sheet, coinglass_free, tradingview, spot_futures_pair_scanner]
+  charting: advanced
+  order_types_used: [limit, post_only_limit, iceberg, twap]
+  data_feeds: [funding, mark_price, oi, spot_index, perp_premium]
+
+strategy:
+  family: basis_arb
+  params:
+    # Annualized pct at which the position is considered "rich" and worth
+    # a full-conviction fade. 15% annualized ≈ 0.000137/8h funding.
+    rich_annualized_pct: 15.0
+    # OI-expansion window + reference. 2% build over an hour is "material".
+    oi_window_s: 3600
+    oi_reference_pct: 2.0
+    # Perp premium reference (bps). 10bps of perp-over-mark is meaningful
+    # for a structural arb.
+    premium_reference_bps: 10.0
+    # 4h baseline hold. Actual desk holds span 4-24h around basis cycles.
+    hold_seconds: 14400
+
+attention:
+  kinds: [funding, oi, trade]
+  tags: [funding, mark_price, oi]
+  ignored_tags: [news, social, liq_long, liq_short]
+  min_severity: 0.0
+
+personality:
+  # Patient, analytical. Don't FOMO or panic — basis trades are held
+  # through noise by design. High patience is the defining trait.
+  risk_tolerance: 0.55
+  fomo: 0.05
+  panic: 0.10
+  patience: 0.95
+  herding: 0.10
+  # Reacts on funding-epoch cadence (8h), but position scaling inside
+  # each epoch is ~15-30min. Mean reaction mu = 15min with wide sigma.
+  reaction_mu_seconds: 900.0
+  reaction_sigma_seconds: 1800.0
+
+flow:
+  # weight is OVERRIDDEN at load time (see derive.py). Value below = pre-derivation hand-tune.
+  weight: 0.06
+  # Structural capital — positions are long-lived, but the scanner loop
+  # that re-evaluates size/delta runs continuously. ~8% of cohort is
+  # actively adjusting any given tick.
+  activation_rate: 0.08
+  typical_hold_seconds: [7200, 86400]
+  default_conviction: 0.65
+  cooldown_seconds: 1200
+
+disposition:
+  # Structural slight short-carry bias (BTC perps historically trade
+  # at positive funding on average, so basis traders are structurally
+  # short the perp more often than long).
+  idle_bias: -0.03
+  idle_conviction: 0.07
+
+circadian:
+  # Institutional desks + global prop — 24/7 but concentrated around
+  # funding prints (00/08/16 UTC) and US/EU trading hours.
+  timezone_label: "24/7 (institutional arb)"
+  presence_by_hour_utc:
+    [0.95, 0.85, 0.80, 0.80, 0.80, 0.85, 0.90, 0.95,
+     1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00,
+     1.00, 0.95, 0.90, 0.85, 0.85, 0.85, 0.90, 0.95]
+
+# Basis-arb lens: funding_extreme is primary (they live on it), but their
+# strategy reads it through an "annualized" lens that the static indicator
+# doesn't capture. The indicator blend adds secondary confirmation signals:
+# price_zscore for perp/spot dislocation, volatility_regime for calm bias.
+indicators:
+  funding_extreme:
+    extreme: 0.0001                # 11% annualized — low trigger, active often
+    action: fade
+    weight: 1.0
+  price_zscore:
+    window_s: 3600
+    extreme: 2.5
+    action: fade                   # price stretched + rich basis = textbook setup
+    weight: 0.5
+  volatility_regime:
+    window_s: 600
+    low_bps: 10
+    high_bps: 80
+    prefer: low                    # they want calm — cascades are ENEMIES of basis trades
+    weight: 0.4
+indicator_weight: 0.4              # strategy math carries most of the weight

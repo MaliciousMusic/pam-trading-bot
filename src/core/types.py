@@ -42,13 +42,25 @@ class Event:
 
 @dataclass(slots=True)
 class Vote:
-    """A single tribe's decision for a tick."""
+    """A single tribe's decision for a tick.
+
+    `conviction` is the net directional signal (activation-rate-scaled).
+    `buy_frac` / `sell_frac` are the fractions of the tribe's weight that
+    respectively buy and sell this tick, derived from the internal distribution:
+        active = activation_rate
+        buy_frac  = active * (0.5 + raw_conviction/2)   [if side=BUY]
+        sell_frac = active * (0.5 - raw_conviction/2)   [if side=BUY]
+    This ensures the opposing minority within each tribe contributes to the
+    opposite mass in aggregation, eliminating the monolithic-vote bias.
+    """
     tribe_id: str
     side: Side
-    conviction: float    # 0..1
+    conviction: float    # net directional strength, activation-scaled (0..1)
     horizon_seconds: int # how long the tribe expects to hold
     weight: float        # the tribe's current aggregate weight (flow share)
     reason: str = ""     # short string for audit
+    buy_frac: float = 0.0   # fraction of weight that buys this tick
+    sell_frac: float = 0.0  # fraction of weight that sells this tick
 
 
 @dataclass(slots=True)

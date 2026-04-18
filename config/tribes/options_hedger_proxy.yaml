@@ -1,0 +1,100 @@
+id: options_hedger_proxy
+name: Options Dealer Hedge Proxy
+description: >-
+  Synthetic proxy for options-dealer hedge flow. Without Deribit book
+  access on the free tier, this archetype reads realized-vol regime +
+  time-of-day as a proxy for the dominant hedging pattern: in calm tape
+  dealers are assumed LONG gamma (fade moves), in violent tape they're
+  assumed SHORT gamma (amplify moves). Weighted by daily hedge windows —
+  Asia open (UTC 23-02) and US open (UTC 13-15). Explicitly a PROXY —
+  treated as one voice in the council, not truth.
+
+demographics:
+  # Proxy for a narrow pro cohort. Real dealers are ~20 firms globally;
+  # their hedge flow shows up here as a single synthetic voice.
+  capital_band_usd: [100000, 10000000]
+  count_estimate: 100
+  experience_years: [5, 25]
+  jurisdiction: [NA, EU, APAC]
+
+hardware:
+  tier: colo
+  typical_latency_ms: 5
+  uptime: continuous
+  specs:
+    screens: 4-8
+    connectivity: colo
+
+software:
+  platforms: [deribit, binance_pro, bybit]
+  tools: [custom_dealer_risk, proprietary_gvv_model, vol_surface_live]
+  charting: custom
+  order_types_used: [limit, post_only_limit, vwap, twap]
+  data_feeds: [options_chain, vol_surface, spot_perp_futures]
+
+strategy:
+  family: options_hedger_proxy
+  params:
+    move_window_s: 900           # 15min intraday move
+    move_reference_bps: 20.0     # move size at which fade fires fully
+    vol_window_s: 300            # realized vol window
+    flip_vol_bps: 60.0           # above this, flip to short-gamma / amplify
+    hold_seconds: 1800           # 30min hedge horizon typical
+
+attention:
+  kinds: [trade, book]
+  tags: [trade, mark_price]
+  ignored_tags: [news, social]
+  min_severity: 0.0
+
+personality:
+  # Systematic dealer-risk desks — disciplined, low fomo/panic.
+  risk_tolerance: 0.50
+  fomo: 0.02
+  panic: 0.08
+  patience: 0.70
+  herding: 0.05
+  # Sub-second dealer hedge fire — colo grade.
+  reaction_mu_seconds: 0.5
+  reaction_sigma_seconds: 1.0
+
+flow:
+  weight: 0.05
+  # Dealer hedge bots scan continuously, but only rebalance in non-trivial
+  # size when the delta drifts materially. ~15% of cohort-equivalent per tick.
+  activation_rate: 0.15
+  typical_hold_seconds: [600, 7200]
+  default_conviction: 0.55
+  cooldown_seconds: 120
+
+disposition:
+  # No structural bias — dealers hedge whatever inventory they've been
+  # given by retail. Idle is flat.
+  idle_bias: 0.0
+  idle_conviction: 0.05
+
+circadian:
+  # Concentrated at the two daily rebalance windows (Asia open / US open);
+  # modestly active through the middle of each session, minimal mid-gap.
+  timezone_label: "2x daily hedge windows"
+  presence_by_hour_utc:
+    [1.00, 1.00, 1.00, 0.70, 0.50, 0.40, 0.40, 0.40,
+     0.40, 0.50, 0.60, 0.70, 0.90, 1.00, 1.00, 1.00,
+     0.70, 0.50, 0.45, 0.40, 0.45, 0.55, 0.80, 1.00]
+
+# Options-hedger lens: the strategy logic embodies the regime-flip math;
+# indicator blend adds light confirmation via volatility_regime (they
+# care about the regime itself).
+indicators:
+  volatility_regime:
+    window_s: 300
+    low_bps: 15
+    high_bps: 80
+    prefer: low                  # base case is long-gamma / calm
+    weight: 0.6
+  price_momentum:
+    window_s: 900
+    ref_bps: 20
+    action: fade                 # dominant direction is the fade — flip handled in strat
+    weight: 0.4
+indicator_weight: 0.30

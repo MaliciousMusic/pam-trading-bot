@@ -307,6 +307,14 @@ CURATED_FEEDS: list[FeedSpec] = [
     FeedSpec(id="theblock", category="news", weight=0.7, bitcoin_filter=True,
              url="https://www.theblock.co/rss.xml",
              tags=["crypto_press", "business"]),
+    # CryptoPanic aggregates BTC news from ~100 sources — their public RSS
+    # needs no API key. Moderate weight because they re-broadcast items
+    # already covered by the majors above; dedupe is per-feed so we'd
+    # emit twice otherwise. Still useful: they catch long-tail sources
+    # (e.g. regional exchanges' press) the dedicated feeds miss.
+    FeedSpec(id="cryptopanic_btc", category="news", weight=0.5, bitcoin_filter=False,
+             url="https://cryptopanic.com/news/btc/feed/",
+             tags=["crypto_press", "aggregator"]),
 
     # ── Business / mainstream — often moves price via mainstream attention
     FeedSpec(id="reuters_business", category="business", weight=0.7, bitcoin_filter=True,

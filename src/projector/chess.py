@@ -18,12 +18,11 @@ both in [0,1]:
 This replaces the prior pure-geometric decay (0.9^steps ≈ 0.12 regardless
 of signal), so confidence actually moves with the forecast's quality.
 
-What this projector intentionally does NOT simulate yet:
-  - Cascade-triggered liquidations on projected price moves.
-  - Synthetic taker flow from projected activity.
+What this projector intentionally does NOT simulate:
+  - Cascade-triggered liquidations (creates echo-chamber amplification — avoided).
+  - Synthetic taker flow (same reason — self-reinforcing, inflates confidence).
   - Funding shifts.
-These are honest simplifications. When audit data shows they matter,
-we graduate them — not before.
+Each step's price feeds the next, but only from the tribe vote signal alone.
 """
 from __future__ import annotations
 
@@ -54,14 +53,12 @@ class ChessProjector:
         self.tick_seconds = tick_seconds
         self.bps_per_unit_pressure = bps_per_unit_pressure
         self.confidence_decay = confidence_decay
-        # Depth-aware kernel. The per-step bps becomes:
-        #   step_bps = pressure × bps_per_unit_pressure × (depth_ref / depth_now)
-        # so a thinner book than reference amplifies the move and a deeper
-        # book absorbs it. Defaults: 10M USD reference (typical BTC-perp 5bps
-        # depth), 500k floor so a momentarily empty book doesn't explode the
-        # ratio. When no book is live yet, we fall back to the constant.
         self.depth_ref_usd = depth_ref_usd
         self.depth_floor_usd = depth_floor_usd
+        # Phase E — regime overlay. Engine writes this each tick from the
+        # RegimeClassifier; default 1.0 means "no regime adjustment" so the
+        # projector stays identical when no classifier is wired.
+        self.regime_multiplier: float = 1.0
 
     def project(self, state: MarketState) -> Forecast:
         sim = state.snapshot()
@@ -69,57 +66,44 @@ class ChessProjector:
         ts = start_ts
         step_aggs: list = []
         step_bps_list: list[float] = []
-        # Snapshot cooldown state per tribe so the projection doesn't mutate
-        # the live Tribe object. Without this, a strong projected vote would
-        # put the REAL tribe into cooldown.
-        saved_cooldowns = [t._cooldown_until for t in self.tribes]
+        # project_vote() bypasses the tribe lifecycle (flat/hold/cooldown) so
+        # every step gets a fresh strategy read. Using vote() instead caused
+        # all tribes to "enter" simulated positions at step 1 and then emit
+        # near-zero hold-conviction for steps 2–200, flattening the forecast.
         prev_ts = ts
-        try:
-            for _ in range(self.steps):
-                prev_ts = ts
-                ts = ts + timedelta(seconds=self.tick_seconds)
-                sim.advance_clock(ts)
-                # Route through Tribe.vote() so circadian presence AND
-                # activation_rate dampening are honored inside the projection.
-                # Otherwise retail tribes vote at full conviction 24/7 in the
-                # forecast, inflating confidence in off-peak hours.
-                votes = [t.vote(ts, sim) for t in self.tribes]
-                agg = aggregate_votes(votes, ts)
-                step_aggs.append(agg)
-                vote_bps = agg.net_pressure * self.bps_per_unit_pressure
-                # Event wave: classified news items inject a Gaussian-spread
-                # impact_bps whose mass arrives in this step is proportional
-                # to how many tribes just "woke up" to the headline.
-                event_bps = step_event_bps(
-                    sim.pending_events, self.tribes,
-                    prev_ts.timestamp(), ts.timestamp(),
-                )
-                total_bps = vote_bps + event_bps
-                # Depth-aware scale: the side that has to absorb the total
-                # flow sets the scale. Positive → ASK book absorbs; negative
-                # → BID. Thinner absorbing side ⇒ bigger move.
-                side_depth = (
-                    sim.ask_depth_5bps_usd if total_bps >= 0
-                    else sim.bid_depth_5bps_usd
-                )
-                if side_depth and side_depth > 0:
-                    scale = self.depth_ref_usd / max(side_depth, self.depth_floor_usd)
-                else:
-                    scale = 1.0
-                step_bps = total_bps * scale
-                step_bps_list.append(step_bps)
-                if sim.last_price is not None and sim.last_price > 0:
-                    sim.last_price = sim.last_price * (1 + step_bps / 10_000.0)
-                    sim.prices.add(ts, sim.last_price)
-                # Funding drifts toward zero as the market digests the move.
-                # Crude, but better than the frozen value — long enough
-                # horizons need SOME funding-dynamic so trend_follower's
-                # funding_guard isn't stuck looking at stale extreme funding.
-                if sim.last_funding_rate is not None:
-                    sim.last_funding_rate *= 0.995
-        finally:
-            for t, cd in zip(self.tribes, saved_cooldowns):
-                t._cooldown_until = cd
+        # Fold the regime overlay into the effective gain for this projection.
+        # Cascade regimes amplify (thin book, liquidations cascade), chop
+        # dampens (price mean-reverts, pressure doesn't stick). Kept as a
+        # single scalar so the projector stays interpretable.
+        effective_gain = self.bps_per_unit_pressure * self.regime_multiplier
+        for _ in range(self.steps):
+            prev_ts = ts
+            ts = ts + timedelta(seconds=self.tick_seconds)
+            sim.advance_clock(ts)
+            votes = [t.project_vote(ts, sim) for t in self.tribes]
+            agg = aggregate_votes(votes, ts)
+            step_aggs.append(agg)
+            vote_bps = agg.net_pressure * effective_gain
+            event_bps = step_event_bps(
+                sim.pending_events, self.tribes,
+                prev_ts.timestamp(), ts.timestamp(),
+            )
+            total_bps = vote_bps + event_bps
+            side_depth = (
+                sim.ask_depth_5bps_usd if total_bps >= 0
+                else sim.bid_depth_5bps_usd
+            )
+            if side_depth and side_depth > 0:
+                scale = self.depth_ref_usd / max(side_depth, self.depth_floor_usd)
+            else:
+                scale = 1.0
+            step_bps = total_bps * scale
+            step_bps_list.append(step_bps)
+            if sim.last_price is not None and sim.last_price > 0:
+                sim.last_price = sim.last_price * (1 + step_bps / 10_000.0)
+                sim.prices.add(ts, sim.last_price)
+            if sim.last_funding_rate is not None:
+                sim.last_funding_rate *= 0.995
 
         kernel = [self.confidence_decay ** i for i in range(len(step_bps_list))]
         k_sum = sum(kernel) or 1.0

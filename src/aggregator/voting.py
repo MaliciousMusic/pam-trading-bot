@@ -1,26 +1,30 @@
 """Weighted synthesis of per-tribe Votes → single Aggregate.
 
-Formulation (kept deliberately simple; tune later against audit data):
+Formulation:
 
-    signed_mass(v) = v.weight * v.conviction * (+1 BUY, -1 SELL, 0 ABSTAIN)
-    net_pressure   = sum(signed_mass) / sum(all v.weight)          ∈ [-1, +1]
+    Each tribe carries buy_frac / sell_frac representing the INTERNAL
+    DISTRIBUTION within the active slice of that tribe:
 
-    active_mass    = buy_mass + sell_mass
-    agreement      = |buy_mass - sell_mass| / active_mass          (1 unanimous, 0 split)
-    uncertainty    = 1 - agreement                                 (pure disagreement signal)
+        buy_frac  = activation_rate * (0.5 + raw_conviction/2)   [BUY tribe]
+        sell_frac = activation_rate * (0.5 - raw_conviction/2)   [BUY tribe]
 
-Uncertainty reflects only DISAGREEMENT among tribes that are voting,
-NOT how much of the population is voting. Population participation is
-already modeled upstream via each tribe's `activation_rate` (which
-scales conviction per tick). Mixing participation into uncertainty
-would double-penalize: a retail-heavy crowd with 0.5% activation would
-automatically have participation≈0 even when everyone active agreed,
-stranding the forecast at zero confidence. The net_pressure magnitude
-already reflects low participation (small convictions → small pressure).
+    This means a tribe voting BUY at conviction 0.6 is NOT treated as 100%
+    buying — 20% of its active members are implicitly selling. Both sides
+    contribute to buy_mass / sell_mass:
 
-Abstention is preserved in the denominator, so a silent majority
-correctly suppresses net_pressure even when a few conviction-heavy
-tribes are active. That's the user's first-class-abstention contract.
+        buy_mass  = Σ weight_i * buy_frac_i
+        sell_mass = Σ weight_i * sell_frac_i
+
+    net_pressure is mathematically equivalent to the old signed-mass formula
+    (the opposing fractions cancel in the difference), but buy_mass and
+    sell_mass are now realistic, which makes uncertainty meaningful:
+
+        active_mass = buy_mass + sell_mass
+        agreement   = |buy_mass - sell_mass| / active_mass   (1 = unanimous)
+        uncertainty = 1 - agreement                          (true disagreement)
+
+Abstaining tribes add weight to the denominator only, correctly suppressing
+net_pressure when a silent majority holds.
 """
 from __future__ import annotations
 
@@ -39,18 +43,17 @@ def aggregate_votes(votes: list[Vote], ts: datetime) -> Aggregate:
     total_weight = 0.0
     for v in votes:
         total_weight += v.weight
-        if v.side is Side.BUY:
-            buy_mass += v.weight * v.conviction
-        elif v.side is Side.SELL:
-            sell_mass += v.weight * v.conviction
-        else:
+        if v.side is Side.ABSTAIN:
             abstain_mass += v.weight
+        else:
+            # Use the pre-computed internal distribution fractions so that
+            # the opposing minority within each tribe is counted correctly.
+            buy_mass += v.weight * v.buy_frac
+            sell_mass += v.weight * v.sell_frac
     denom = max(total_weight, _EPS)
     net_pressure = (buy_mass - sell_mass) / denom
     active_mass = buy_mass + sell_mass
     agreement = abs(buy_mass - sell_mass) / max(active_mass, _EPS)
-    # Pure disagreement measure — decoupled from participation. Low activation
-    # is already captured by small convictions → small net_pressure.
     uncertainty = 1.0 - agreement
     return Aggregate(
         ts=ts,
