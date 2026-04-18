@@ -29,6 +29,12 @@ sources:
     poll_seconds: 30
 
   reddit_public:
-    enabled: false             # r/Bitcoin, r/CryptoCurrency, r/BitcoinMarkets hot posts
+    enabled: true              # r/Bitcoin, r/CryptoCurrency, r/BitcoinMarkets via /new/.rss
     kind: rest_poll
-    poll_seconds: 60
+    poll_seconds: 180
+    subs: [Bitcoin, CryptoCurrency, BitcoinMarkets]
+
+  fear_greed_index:
+    enabled: true              # alternative.me FGI — free, daily-updated
+    kind: rest_poll
+    poll_seconds: 3600

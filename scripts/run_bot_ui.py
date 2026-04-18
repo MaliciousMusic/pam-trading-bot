@@ -11,6 +11,7 @@ import asyncio
 import uvicorn
 from loguru import logger
 
+from src.audit.scheduler import DailyAuditScheduler
 from src.core.bus import EventBus
 from src.core.config import data_sources, settings
 from src.core.engine import TradingEngine
@@ -18,6 +19,8 @@ from src.decision.engine import DecisionEngine
 from src.execution.ledger import Ledger
 from src.execution.paper import PaperExecutor
 from src.ingress.binance_ws import BinancePerpsWS
+from src.ingress.fgi import FGIPoller
+from src.ingress.reddit_rss import RedditRSSPoller
 from src.projector.chess import ChessProjector
 from src.tribes.loader import load_all
 from src.tribes.market_state import MarketState
@@ -42,7 +45,8 @@ def _tribe_meta(tribes):
 
 async def main() -> None:
     cfg = settings()
-    ds = data_sources()["sources"]["binance_perps_ws"]
+    sources_cfg = data_sources()["sources"]
+    ds = sources_cfg["binance_perps_ws"]
 
     tribes = load_all()
     if not tribes:
@@ -84,9 +88,29 @@ async def main() -> None:
     port = int(cfg.get("ui", {}).get("port", 8765))
     server = uvicorn.Server(uvicorn.Config(app, host=host, port=port, log_level="warning"))
 
+    # Tasks to gather. Core trading loop + exchange stream always on.
+    coros = [client.run(), engine.run(), server.serve()]
+
+    # Sentiment feeds (free) — wake up the news_reactor tribe.
+    if sources_cfg.get("fear_greed_index", {}).get("enabled"):
+        coros.append(FGIPoller(bus).run())
+    if sources_cfg.get("reddit_public", {}).get("enabled"):
+        subs = sources_cfg["reddit_public"].get("subs")
+        coros.append(RedditRSSPoller(bus, subs=subs).run())
+
+    # Daily audit scheduler — fires once at 00:00 UTC; generates hypotheses
+    # (atomic single-param mutations) and writes child variants. The parent
+    # keeps trading uninterrupted.
+    tribe_specs = [t.spec for t in tribes]
+    audit_horizon = int(cfg.get("audit", {}).get("horizon_seconds", 60))
+    coros.append(DailyAuditScheduler(horizon_seconds=audit_horizon).run(tribe_specs))
+
     logger.info("mode={} symbol={} equity=${:.2f}  UI at http://{}:{}",
                 cfg["mode"], cfg["symbol"], executor.equity_usd, host, port)
-    await asyncio.gather(client.run(), engine.run(), server.serve())
+    logger.info("[boot] {} background tasks: exchange WS, trading engine, UI server, "
+                "audit scheduler + {} sentiment feed(s)",
+                len(coros), len(coros) - 4)
+    await asyncio.gather(*coros)
 
 
 if __name__ == "__main__":

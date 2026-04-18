@@ -32,8 +32,12 @@ strategy:
   family: news_reactor
   params:
     hold_seconds: 300
+    social_window_s: 900         # 15-min rolling sentiment
+    min_social_volume: 3         # at least 3 scored posts in window
+    extreme_social_score: 2.5    # |summed-score| above this → fade
+    fgi_extreme: 0.5             # |fgi-50|/50 above this → fade (fallback)
   style_notes: >-
-    Placeholder behavior — will activate when `kind=news` events start flowing.
+    Live-wired: fades the crowd when reddit pulse or FGI goes extreme.
 
 attention:
   kinds: [news]

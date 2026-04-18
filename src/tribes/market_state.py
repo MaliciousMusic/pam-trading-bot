@@ -74,9 +74,15 @@ class MarketState:
         self.long_liq = RollingSeries(self.MAX_AGE_S)      # long-position liquidation notional
         self.short_liq = RollingSeries(self.MAX_AGE_S)     # short-position liquidation notional
         self.prices = RollingSeries(self.MAX_AGE_S)        # mark/trade price samples
+        # Social/sentiment series — signed score ∈ [-1,+1] per reddit post / pulse.
+        # Kept longer than market windows because headlines carry across minutes.
+        self.social = RollingSeries(1800.0)                # 30min social pulse history
         self.last_price: float | None = None
         self.last_mark_price: float | None = None
         self.last_funding_rate: float = 0.0
+        self.fgi_value: int | None = None                  # 0..100
+        self.fgi_classification: str = ""
+        self.fgi_ts: datetime | None = None
         self.last_update: datetime | None = None
 
     # -- ingest ---------------------------------------------------------
@@ -105,6 +111,17 @@ class MarketState:
                     self.last_price = mp
                 self.prices.add(ev.ts, mp)
             self.last_funding_rate = ev.payload.get("funding_rate", 0.0)
+        elif ev.kind == "social_pulse":
+            score = float(ev.payload.get("score", 0.0))
+            if score != 0.0:
+                self.social.add(ev.ts, score)
+        elif ev.kind == "sentiment":
+            # FGI update — keep the latest value; it changes at most daily.
+            v = ev.payload.get("value")
+            if isinstance(v, (int, float)):
+                self.fgi_value = int(v)
+                self.fgi_classification = str(ev.payload.get("classification", ""))
+                self.fgi_ts = ev.ts
 
     # -- queries --------------------------------------------------------
 
@@ -126,6 +143,24 @@ class MarketState:
     def price_range(self, window_s: float) -> tuple[float, float] | None:
         return self.prices.min_max(window_s)
 
+    # -- sentiment queries ----------------------------------------------
+
+    def social_score(self, window_s: float) -> float:
+        """Summed signed sentiment over `window_s`. Positive = bullish chatter."""
+        return self.social.sum(window_s)
+
+    def social_volume(self, window_s: float) -> int:
+        """Raw count of scored social pulses in the window."""
+        # RollingSeries exposes trimming via sum path; reuse _window().
+        return sum(1 for _ in self.social._window(window_s))
+
+    def fgi_bias(self) -> float:
+        """Return FGI as a signed bias in [-1,+1] — positive = greed, negative = fear.
+        Zero when unknown."""
+        if self.fgi_value is None:
+            return 0.0
+        return (self.fgi_value - 50) / 50.0
+
     # -- projection support --------------------------------------------
 
     def snapshot(self) -> "MarketState":
@@ -136,9 +171,13 @@ class MarketState:
         s.long_liq._data = deque(self.long_liq._data)
         s.short_liq._data = deque(self.short_liq._data)
         s.prices._data = deque(self.prices._data)
+        s.social._data = deque(self.social._data)
         s.last_price = self.last_price
         s.last_mark_price = self.last_mark_price
         s.last_funding_rate = self.last_funding_rate
+        s.fgi_value = self.fgi_value
+        s.fgi_classification = self.fgi_classification
+        s.fgi_ts = self.fgi_ts
         s.last_update = self.last_update
         return s
 
@@ -147,4 +186,5 @@ class MarketState:
         self.long_liq.advance_clock(ts)
         self.short_liq.advance_clock(ts)
         self.prices.advance_clock(ts)
+        self.social.advance_clock(ts)
         self.last_update = ts

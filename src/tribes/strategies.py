@@ -209,7 +209,37 @@ def funding_fader(tribe: "Tribe", ts: datetime, state: MarketState) -> Vote:
 
 @register("news_reactor")
 def news_reactor(tribe: "Tribe", ts: datetime, state: MarketState) -> Vote:
-    """Placeholder: will consume `kind='news'` events once that source is wired.
-    Until then the correct behavior is to abstain — the tribe's attention surface
-    simply isn't receiving its input."""
-    return _abstain(tribe, "news source not yet wired")
+    """Fades overreactions. Two signals, either can trigger:
+
+      1. Social pulse (reddit keyword sentiment summed over `social_window_s`):
+         when |score| is extreme and volume is non-trivial, we take the
+         OPPOSITE side (panic → buy, euphoria → sell).
+
+      2. Fear-Greed Index: if FGI is in extreme_fear or extreme_greed territory
+         AND social signal is absent/weak, we fade the FGI bias.
+    """
+    p = tribe.spec.strategy.params
+    win = float(p.get("social_window_s", 900))          # 15 min
+    min_vol = int(p.get("min_social_volume", 3))         # at least 3 scored posts
+    extreme = float(p.get("extreme_social_score", 2.5))  # summed |score| threshold
+    fgi_extreme = float(p.get("fgi_extreme", 0.5))       # |fgi_bias| above this = fade
+
+    soc = state.social_score(win)
+    vol = state.social_volume(win)
+    fgi = state.fgi_bias()
+
+    if vol >= min_vol and abs(soc) >= extreme:
+        # Fade the crowd.
+        side = Side.SELL if soc > 0 else Side.BUY
+        conviction = min(1.0, abs(soc) / (extreme * 2.0))
+        return _vote(tribe, side, conviction, horizon_seconds=int(p.get("hold_seconds", 300)),
+                     reason=f"fade social {soc:+.1f} (n={vol})")
+
+    if abs(fgi) >= fgi_extreme:
+        # Fade extreme FGI only when social is quiet (no better signal).
+        side = Side.SELL if fgi > 0 else Side.BUY
+        conviction = min(0.7, abs(fgi))     # cap: FGI alone is weaker than live chatter
+        return _vote(tribe, side, conviction, horizon_seconds=int(p.get("hold_seconds", 600)),
+                     reason=f"fade FGI {state.fgi_value} ({state.fgi_classification})")
+
+    return _abstain(tribe, "no sentiment extreme")

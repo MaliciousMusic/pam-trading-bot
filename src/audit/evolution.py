@@ -13,14 +13,16 @@ from __future__ import annotations
 
 import random
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from pathlib import Path
 
+import orjson
 import yaml
 from loguru import logger
 
 from ..core.config import CONFIG_DIR
 from ..tribes.spec import TribeSpec
+from .hypothesis import Hypothesis, hypothesis_to_dict
 
 
 VARIANTS_DIR = CONFIG_DIR / "tribes_variants"
@@ -106,3 +108,78 @@ def write_variants(variants: list[list[TribeSpec]], generation_tag: str) -> list
             written.append(path)
     logger.info("wrote {} variant files under {}", len(written), base)
     return written
+
+
+def _deep_set(obj: dict, path: str, value) -> None:
+    parts = path.split(".")
+    for k in parts[:-1]:
+        obj = obj[k]
+    obj[parts[-1]] = value
+
+
+def spawn_from_hypotheses(
+    tribes: list[TribeSpec],
+    hypotheses: list[Hypothesis],
+) -> list[tuple[Hypothesis, list[TribeSpec]]]:
+    """One variant per hypothesis — the "atomic observation" rule.
+
+    Each child is a full council clone with exactly ONE parameter changed
+    on ONE tribe. Attribution is trivial: if the variant's equity beats
+    the parent's, the single change is credited.
+    """
+    variants: list[tuple[Hypothesis, list[TribeSpec]]] = []
+    for h in hypotheses:
+        clone: list[TribeSpec] = []
+        for spec in tribes:
+            if spec.id != h.tribe_id:
+                clone.append(spec.model_copy(deep=True))
+                continue
+            data = spec.model_dump()
+            try:
+                # Preserve type: most fields are numeric.
+                cur = _get(data, h.field)
+                new_val = type(cur)(h.proposed) if not isinstance(cur, bool) else cur
+                _deep_set(data, h.field, new_val)
+            except (KeyError, TypeError) as e:
+                logger.warning("could not apply hypothesis {}: {}", h.field, e)
+            clone.append(TribeSpec.model_validate(data))
+        variants.append((h, clone))
+    return variants
+
+
+def write_hypothesis_variants(
+    variants: list[tuple[Hypothesis, list[TribeSpec]]],
+    generation_tag: str,
+) -> Path:
+    """Persist hypothesis-driven variants with lineage metadata.
+
+    Layout:
+      config/tribes_variants/<tag>/
+        generation.json             — hypotheses list + priority ordering
+        variant_0/<tribe>.yaml ...  — full tribe set for child 0
+        variant_K/...
+    """
+    base = VARIANTS_DIR / generation_tag
+    base.mkdir(parents=True, exist_ok=True)
+
+    lineage = {
+        "generation": generation_tag,
+        "variant_count": len(variants),
+        "hypotheses": [],
+    }
+    for i, (h, tribe_set) in enumerate(variants):
+        vdir = base / f"variant_{i}"
+        vdir.mkdir(exist_ok=True)
+        for spec in tribe_set:
+            with (vdir / f"{spec.id}.yaml").open("w", encoding="utf-8") as f:
+                yaml.safe_dump(spec.model_dump(), f, sort_keys=False)
+        entry = hypothesis_to_dict(h)
+        entry["variant_dir"] = str(vdir.relative_to(VARIANTS_DIR))
+        lineage["hypotheses"].append(entry)
+
+    with (base / "generation.json").open("wb") as f:
+        f.write(orjson.dumps(lineage, option=orjson.OPT_INDENT_2))
+
+    logger.info("generation {} → {} variants (adaptive branching)",
+                generation_tag, len(variants))
+    return base

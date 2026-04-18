@@ -58,6 +58,7 @@ class TradingEngine:
         self.tick_seconds = tick_seconds
         self.broadcaster = broadcaster
         self._tick_count = 0
+        self._starting_equity: float = executor.equity_usd
 
     async def run(self) -> None:
         tasks = [
@@ -142,6 +143,15 @@ class TradingEngine:
         if intent.action != "hold":
             self.executor.execute(intent, self.state)
 
+        # Session fitness — equity is THE quality signal. Print a running
+        # line every 20 ticks (≈5min) so it's visible without opening the UI.
+        if self._tick_count % 20 == 0:
+            delta = self.executor.equity_usd - self._starting_equity
+            pct = 0.0 if self._starting_equity == 0 else delta / self._starting_equity
+            logger.info("[fitness] tick={} Δequity=${:+.2f} ({:+.2%})  trades={}",
+                        self._tick_count, delta, pct,
+                        getattr(self.executor, "trades_completed", 0))
+
         if self.broadcaster is not None:
             pos = self.executor.position
             await self.broadcaster.publish({
@@ -169,6 +179,7 @@ class TradingEngine:
                     "entry_price": pos.entry_price,
                 },
                 "equity_usd": self.executor.equity_usd,
+                "starting_equity_usd": self._starting_equity,
                 "trades": getattr(self.executor, "trades_completed", 0),
                 "wins": getattr(self.executor, "wins", 0),
                 "action": intent.action,
