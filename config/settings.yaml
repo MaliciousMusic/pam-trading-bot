@@ -9,15 +9,28 @@ clock:
 
 risk:
   max_concurrent_positions: 1
-  per_trade_risk_pct: 1.0     # % of equity at risk per trade
   min_hold_seconds: 30
   max_hold_seconds: 600
 
 decision:
-  min_expected_move_bps: 15   # must beat fees + slippage by a margin
-  min_confidence: 0.25
-  max_uncertainty: 0.85
+  min_expected_move_bps: 8    # must beat fees + slippage by a margin
+  min_confidence: 0.15        # floor to even consider a trade — below this we always hold
+  max_uncertainty: 0.90
   reversal_factor: 1.2        # how strongly forecast must flip to kill a position
+
+# Confidence-bracketed position sizing. At conf = min_confidence we inject
+# `min_pct_equity`; at conf = 1.0 we inject `max_pct_equity`. This lets us
+# (a) take far more trades by dropping the hard conf gate toward a soft
+# size-weighted one, and (b) measure whether higher-conf trades actually
+# produce better P&L and whether that relationship is linear or exponential.
+#
+# Curves:
+#   linear     — size grows in proportion to (conf - min_conf)
+#   quadratic  — size grows with the square; low-conf entries stay very small
+sizing:
+  min_pct_equity: 0.5
+  max_pct_equity: 4.0
+  curve: linear
 
 projector:
   bps_per_unit_pressure: 8.0  # linear kernel: net_pressure=1.0 → 8bps per step
