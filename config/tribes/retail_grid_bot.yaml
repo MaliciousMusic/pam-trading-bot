@@ -51,6 +51,9 @@ personality:
   panic: 0.0
   patience: 1.0
   herding: 0.0
+  # Bots mechanically rebalance on price touches — event-driven in seconds.
+  reaction_mu_seconds: 5.0
+  reaction_sigma_seconds: 10.0
 
 flow:
   # weight is OVERRIDDEN at load time (see derive.py). Value below = pre-derivation hand-tune.
@@ -99,3 +102,11 @@ indicators:
     prefer: low               # calm markets = grid paradise
     weight: 0.3
 indicator_weight: 0.5
+# Grid bots thrive in chop, bleed in trends. Regime-shift UP in low vol,
+# DOWN when realized vol runs hot. `prefer: low` flips the sign so low
+# realized-vol → more indicator lean; high vol → grids mute themselves.
+indicator_regime_range: 0.35
+indicator_regime_low_bps: 10
+indicator_regime_high_bps: 60
+indicator_regime_prefer: low
+indicator_regime_window_s: 600

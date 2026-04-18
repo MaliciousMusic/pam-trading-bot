@@ -11,6 +11,8 @@ import asyncio
 import uvicorn
 from loguru import logger
 
+from src.audit.backscore import ForecastAuditor
+from src.audit.calibrator import TribeCalibrator
 from src.audit.scheduler import DailyAuditScheduler
 from src.core.bus import EventBus
 from src.core.config import data_sources, settings
@@ -77,6 +79,19 @@ async def main() -> None:
         confidence_decay=float(cfg["projector"]["confidence_decay"]),
     )
     decision = DecisionEngine(cfg)
+    auditor = ForecastAuditor()
+    # Audit→calibration closed loop. `apply=False` by default: measure
+    # per-tribe skill from resolved anchors, surface it via /api/calibration,
+    # but don't scale votes yet. Flip the yaml flag once there's enough
+    # signal (≥ min_samples resolved anchors per tribe — default 30).
+    cal_cfg = cfg.get("calibration", {}) or {}
+    calibrator = TribeCalibrator(
+        halflife_resolved=int(cal_cfg.get("halflife_resolved", 500)),
+        min_samples=int(cal_cfg.get("min_samples", 30)),
+        max_shrink=float(cal_cfg.get("max_shrink", 0.6)),
+        max_boost=float(cal_cfg.get("max_boost", 1.4)),
+        apply=bool(cal_cfg.get("apply", False)),
+    )
 
     engine = TradingEngine(
         bus=bus, tribes=tribes, state=state,
@@ -84,6 +99,8 @@ async def main() -> None:
         executor=executor, ledger=ledger,
         tick_seconds=int(cfg["clock"]["tick_seconds"]),
         broadcaster=broadcaster,
+        auditor=auditor,
+        calibrator=calibrator,
     )
 
     client = BinancePerpsWS(bus, streams=ds["streams"])
@@ -103,7 +120,8 @@ async def main() -> None:
         "projector_steps": int(cfg["clock"]["projector_steps"]),
         "tick_seconds": int(cfg["clock"]["tick_seconds"]),
     }
-    app = create_app(broadcaster, _tribe_meta(tribes), ui_cfg)
+    app = create_app(broadcaster, _tribe_meta(tribes), ui_cfg,
+                     auditor=auditor, calibrator=calibrator)
 
     host = cfg.get("ui", {}).get("host", "127.0.0.1")
     port = int(cfg.get("ui", {}).get("port", 8765))

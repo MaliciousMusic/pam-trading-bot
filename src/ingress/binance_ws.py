@@ -108,6 +108,67 @@ def _normalize_mark_price(data: dict) -> Event:
     )
 
 
+def _depth_within_bps(levels: list, mid: float, bps: float, side: str) -> float:
+    """Sum USD notional of all levels whose price is within `bps` of mid on the
+    given side. `levels` is list of [price,qty] strings as Binance sends."""
+    if mid <= 0 or not levels:
+        return 0.0
+    threshold = mid * (bps / 10_000.0)
+    total = 0.0
+    for lvl in levels:
+        try:
+            p = float(lvl[0]); q = float(lvl[1])
+        except (IndexError, ValueError, TypeError):
+            continue
+        if side == "bid" and (mid - p) > threshold:
+            continue
+        if side == "ask" and (p - mid) > threshold:
+            continue
+        total += p * q
+    return total
+
+
+def _normalize_book_depth(data: dict, stream_name: str = "") -> Event | None:
+    """Partial book depth snapshot (e.g. btcusdt@depth20@100ms).
+
+    The combined-stream envelope's inner payload has no `e` field; it carries
+    `{"lastUpdateId", "bids":[[px,qty],...], "asks":[[px,qty],...]}`. We flatten
+    to a single `book` event with top-of-book + depth-at-5bps on each side,
+    which is all the projector kernel and liquidity-sensitive strategies need."""
+    bids = data.get("bids") or data.get("b") or []
+    asks = data.get("asks") or data.get("a") or []
+    if not bids or not asks:
+        return None
+    try:
+        best_bid = float(bids[0][0]); best_ask = float(asks[0][0])
+    except (IndexError, ValueError, TypeError):
+        return None
+    if best_bid <= 0 or best_ask <= 0 or best_ask <= best_bid:
+        return None
+    mid = 0.5 * (best_bid + best_ask)
+    spread_bps = (best_ask - best_bid) / mid * 10_000.0
+    bid_depth_5 = _depth_within_bps(bids, mid, 5.0, "bid")
+    ask_depth_5 = _depth_within_bps(asks, mid, 5.0, "ask")
+    # Extract symbol from "btcusdt@depth20@100ms" → "btcusdt".upper()
+    sym = stream_name.split("@", 1)[0].upper() if stream_name else None
+    return Event(
+        ts=Event.now_utc(),
+        source="binance.depth20",
+        kind="book",
+        symbol=sym,
+        payload={
+            "best_bid": best_bid,
+            "best_ask": best_ask,
+            "mid": mid,
+            "spread_bps": spread_bps,
+            "bid_depth_5bps_usd": bid_depth_5,
+            "ask_depth_5bps_usd": ask_depth_5,
+        },
+        tags={"orderbook_tick", "book"},
+        severity=0.0,
+    )
+
+
 _NORMALIZERS = {
     "aggTrade": _normalize_agg_trade,
     "forceOrder": _normalize_force_order,
@@ -150,6 +211,19 @@ class BinancePerpsWS:
             logger.error("binance_ws: bad json {!r}", raw[:200])
             return
         data = msg.get("data") or msg
+        stream_name = msg.get("stream", "")
+        # Partial book-depth streams have no `e` field in the inner payload,
+        # so we route on the stream name.
+        if "@depth" in stream_name and not data.get("e"):
+            try:
+                ev = _normalize_book_depth(data, stream_name)
+            except (KeyError, TypeError, ValueError) as e:
+                logger.error("binance_ws: book depth normalize failed: {}", e)
+                return
+            if ev is None:
+                return
+            await self.bus.publish(ev)
+            return
         event_type = data.get("e")
         norm = _NORMALIZERS.get(event_type)
         if norm is None:

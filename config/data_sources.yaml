@@ -10,13 +10,10 @@ sources:
       - btcusdt@aggTrade       # aggregated trades (taker flow)
       - btcusdt@forceOrder     # liquidations
       - btcusdt@markPrice@1s   # mark price + funding rate (1s cadence)
-
-  binance_perps_depth:
-    enabled: false             # will add once ingest/tribe plumbing is stable
-    kind: websocket
-    endpoint: wss://fstream.binance.com/stream
-    streams:
-      - btcusdt@depth20@100ms
+      - btcusdt@depth20@100ms  # top 20 bids/asks, 100ms snapshots — feeds
+                               # depth-aware projector kernel (thin book →
+                               # pressure moves price more; deep book →
+                               # same pressure gets absorbed).
 
   coinglass_oi:
     enabled: false             # open interest aggregated across venues (free tier)

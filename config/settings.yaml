@@ -9,11 +9,11 @@ base_capital_usd: 50000       # paper-only; bumped so per-trade P&L is visible
 leverage: 15
 
 clock:
-  tick_seconds: 15            # voting cadence
-  # 60 × 15s = 15-minute forward horizon. The UI pins prediction anchors at
-  # +15s, +1min, +5min, +10min, +15min and colors them; over time you get a
-  # dot-trail you can compare against actual price.
-  projector_steps: 60
+  tick_seconds: 3             # voting cadence — fast enough to act on micro-moves
+  # 200 × 3s = 10-minute forward horizon. The UI pins prediction anchors at
+  # +15s, +1min, +5min, +10min and colors them; over time you get a
+  # dot-trail you can compare against actual price. (+15m dropped; beyond horizon.)
+  projector_steps: 200
 
 risk:
   # Portfolio caps. Every tick that passes entry gates opens a NEW trade
@@ -29,8 +29,15 @@ risk:
 
 decision:
   min_expected_move_bps: 4    # lowered from 8; realistic market rarely projects >8bps cumulative
-  min_confidence: 0.08        # lowered from 0.15; signal_quality × directional rarely hits that
-  max_uncertainty: 0.90
+  # Conf = signal_quality (agreement-weighted) × directional. With participation
+  # no longer collapsing signal_quality, real agreement regularly hits 0.4-0.8,
+  # so the floor rises to a meaningful "forecast must be non-trivial" bar.
+  min_confidence: 0.25
+  # Uncertainty now = 1 - agreement (pure disagreement among voting tribes).
+  # 0.70 means "tolerate up to 30% disagreement on the CURRENT tick". Tighter
+  # than old 0.90 because 0.90 was mostly measuring low participation, not real
+  # disagreement.
+  max_uncertainty: 0.70
   reversal_factor: 1.2        # how strongly forecast must flip to kill a position
   # Fee-aware entry gate: the forecast expected_move must clear the
   # ROUND-TRIP cost (entry+exit fees+slippage) with some margin, else
@@ -68,6 +75,18 @@ execution:
 
 audit:
   horizon_seconds: 60           # forward-price window used to score each tribe vote
+
+# Per-tribe skill calibration (Phase G audit→calibration closed loop).
+# Consumes resolved forecast anchors, tracks an EWMA of conviction-weighted
+# directional accuracy per tribe, and (optionally) scales that tribe's vote
+# conviction by a clamped multiplier in future ticks. `apply: false` is the
+# safe default — measure first, close the loop once there's real data.
+calibration:
+  apply: false                 # flip to true to scale convictions by skill
+  halflife_resolved: 500       # EWMA halflife in resolved anchors
+  min_samples: 30              # don't multiply until this many resolutions per tribe
+  max_shrink: 0.6              # unreliable tribe: down to 0.6× its conviction
+  max_boost: 1.4               # reliable tribe: up to 1.4× its conviction
 
 ui:
   host: 127.0.0.1

@@ -49,6 +49,9 @@ personality:
   panic: 0.85
   patience: 0.1
   herding: 0.9
+  # App push notification → screen unlock → panic tap — 15min mean, 30min σ.
+  reaction_mu_seconds: 900.0
+  reaction_sigma_seconds: 1800.0
 
 flow:
   # weight is OVERRIDDEN at load time (see derive.py). Value below = pre-derivation hand-tune.

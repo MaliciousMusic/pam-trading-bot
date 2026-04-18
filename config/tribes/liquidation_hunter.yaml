@@ -6,8 +6,12 @@ description: >-
   they stay short into the flush, not against it.
 
 demographics:
+  # Sources: Coinglass Pro / Hyblock paid subscriptions (+custom scanner
+  # tooling adoption from GitHub stars on public liquidation-bot repos).
+  # Cohort is narrow and pro-leaning — ~4k genuine specialists across the
+  # big three venues; prior 5k was slightly generous.
   capital_band_usd: [50000, 2000000]
-  count_estimate: 5000
+  count_estimate: 4000
   experience_years: [2, 15]
   jurisdiction: [NA, EU, APAC]
 
@@ -45,6 +49,9 @@ personality:
   panic: 0.15
   patience: 0.55
   herding: 0.3
+  # Pro workstation scanning liq tape continuously — sub-5s reaction.
+  reaction_mu_seconds: 2.0
+  reaction_sigma_seconds: 5.0
 
 flow:
   # weight is OVERRIDDEN at load time (see derive.py). Value below = pre-derivation hand-tune.
@@ -94,3 +101,10 @@ indicators:
     prefer: high              # cascades happen in vol, not calm
     weight: 0.5
 indicator_weight: 0.5
+# Cascades only exist in high realized vol. Crank up indicator lean when
+# the tape is moving; dial it back in dead chop (there's nothing to hunt).
+indicator_regime_range: 0.40
+indicator_regime_low_bps: 20
+indicator_regime_high_bps: 120
+indicator_regime_prefer: high
+indicator_regime_window_s: 300

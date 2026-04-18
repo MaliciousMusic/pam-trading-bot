@@ -7,7 +7,13 @@ description: >-
   flow they PULL quotes (abstain) rather than catch knives — toxicity defense.
 
 demographics:
-  capital_band_usd: [1000000, 500000000]
+  # Sources: Wintermute disclosures (~$1B book), Jump Crypto, GSR, Jane Street
+  # BTC-perps desks; Glassnode/Kaiko MM flow reports. Roughly 60–100 firms
+  # actively quote BTC perps on Binance+Bybit+OKX during US/EU hours.
+  # Active-inventory (not total AUM) per firm ranges ~$5M small-shop MM up to
+  # $500M tier-1 book → geo_mid = ~$50M is closer to reality than [1M, 500M]
+  # which biased toward sub-scale firms.
+  capital_band_usd: [5000000, 500000000]
   count_estimate: 80
   experience_years: [3, 30]
   jurisdiction: [NA, EU, APAC, offshore]
@@ -49,14 +55,21 @@ personality:
   panic: 0.0
   patience: 0.5
   herding: 0.0
+  # Colo latency — event-wave sees them on the same tick as the headline.
+  reaction_mu_seconds: 0.5
+  reaction_sigma_seconds: 1.0
 
 flow:
   # weight is OVERRIDDEN at load time by derive.py (count × geo_mid(capital) × activation_rate, normalized).
   # The value here is documentation — last hand-tuned figure pre-derivation.
   weight: 0.30
-  # Colo'd MMs have live quotes on every tick of every symbol. Activation = 1.0.
-  # Directional lean is small (low default_conviction) but presence is total.
-  activation_rate: 1.0
+  # Colo'd MMs quote both sides on every tick — but activation_rate is
+  # DIRECTIONAL expression, not presence. Two-sided quotes are a zero
+  # directional vote; an inventory skew that tilts the mid is directional.
+  # Kaiko MM flow decomposition shows ~25-35% of MM ticks carry a net
+  # directional push (inventory bleed, cross-venue arb, vol-spike fades);
+  # the rest are balanced. 0.30 is the honest number.
+  activation_rate: 0.30
   typical_hold_seconds: [5, 300]
   default_conviction: 0.35
   cooldown_seconds: 0
@@ -94,3 +107,10 @@ indicators:
     prefer: low             # low-vol = tight quotes = happy MM
     weight: 0.5
 indicator_weight: 0.35     # MM math carries the vote; indicators tune it
+# Toxicity defense: in high realized vol MMs mute their directional lean
+# (pull quotes / stay flat). Low-vol regimes → lean harder on mean reversion.
+indicator_regime_range: 0.25
+indicator_regime_low_bps: 8
+indicator_regime_high_bps: 50
+indicator_regime_prefer: low
+indicator_regime_window_s: 300

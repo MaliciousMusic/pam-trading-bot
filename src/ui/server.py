@@ -3,6 +3,8 @@
 Endpoints:
   GET  /                 → the single-file dashboard
   GET  /api/tribes       → tribe metadata (served once at startup)
+  GET  /api/backscore    → MAE + hit-rate per forecast horizon (trailing window)
+  GET  /api/calibration  → per-tribe skill scores (Phase G audit→calibration loop)
   WS   /ws               → tick + event stream; replays recent tick buffer on connect
 """
 from __future__ import annotations
@@ -13,6 +15,8 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from loguru import logger
 
+from ..audit.backscore import ForecastAuditor
+from ..audit.calibrator import TribeCalibrator
 from .broadcaster import UIBroadcaster
 
 
@@ -23,6 +27,9 @@ def create_app(
     broadcaster: UIBroadcaster,
     tribe_meta: list[dict],
     config: dict | None = None,
+    *,
+    auditor: ForecastAuditor | None = None,
+    calibrator: TribeCalibrator | None = None,
 ) -> FastAPI:
     app = FastAPI(title="PAM Council", docs_url=None, redoc_url=None)
 
@@ -37,6 +44,22 @@ def create_app(
     @app.get("/api/config")
     async def cfg():
         return JSONResponse(config or {})
+
+    @app.get("/api/backscore")
+    async def backscore(window_s: float = 3600.0, limit: int = 200):
+        if auditor is None:
+            return JSONResponse({"enabled": False})
+        return JSONResponse({
+            "enabled": True,
+            "snapshot": auditor.snapshot(window_s=window_s),
+            "recent": auditor.recent(limit=limit),
+        })
+
+    @app.get("/api/calibration")
+    async def calibration():
+        if calibrator is None:
+            return JSONResponse({"enabled": False})
+        return JSONResponse({"enabled": True, **calibrator.snapshot()})
 
     @app.websocket("/ws")
     async def ws_endpoint(ws: WebSocket):

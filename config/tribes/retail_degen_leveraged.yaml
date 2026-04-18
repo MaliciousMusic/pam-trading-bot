@@ -49,6 +49,9 @@ personality:
   panic: 0.6
   patience: 0.15
   herding: 0.8
+  # Sees a move, FOMOs in — minute-ish reaction with wide spread.
+  reaction_mu_seconds: 90.0
+  reaction_sigma_seconds: 180.0
 
 flow:
   # weight is OVERRIDDEN at load time (see derive.py). Value below = pre-derivation hand-tune.
@@ -96,3 +99,10 @@ indicators:
     action: follow
     weight: 0.6
 indicator_weight: 0.45
+# Degens come out of the woodwork when the tape moves. Quiet tape = they
+# scroll TikTok instead. `prefer: high` → indicator lean scales up in vol.
+indicator_regime_range: 0.25
+indicator_regime_low_bps: 15
+indicator_regime_high_bps: 80
+indicator_regime_prefer: high
+indicator_regime_window_s: 180
