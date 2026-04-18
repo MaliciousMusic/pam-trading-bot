@@ -569,10 +569,10 @@
     edEl.style.color=ed>=0?'var(--buy)':'var(--sell)';
     draw('eq-c',eqHist,ed>=0?'#4dbb6e':'#d94f4f');
 
-    renderPortfolio(t.positions||[], t.total_notional_usd||0, t.equity_usd, t.price);
+    renderPortfolio(t.positions||[], t.total_notional_usd||0, t.equity_usd, t.price, t.ts);
   }
 
-  function renderPortfolio(ps, totalNotional, equity, mark){
+  function renderPortfolio(ps, totalNotional, equity, mark, tickTs){
     const root=$('ports'); root.innerHTML='';
     const n=ps.length;
     $('pos-summary').textContent = n===0 ? '0 open'
@@ -582,16 +582,23 @@
       const e=document.createElement('div'); e.className='port-empty';
       e.textContent='no open trades'; root.appendChild(e); return;
     }
+    const now = tickTs ? new Date(tickTs) : new Date();
     for(const p of [...ps].reverse()){
       const row=document.createElement('div');
       row.className='port-row '+(p.side==='buy'?'long':'short');
-      const dTP=mark>0?((p.tp_price-mark)/mark*10000):0;
-      const dSL=mark>0?((p.sl_price-mark)/mark*10000):0;
+      // Unrealized PnL in bps from entry price
+      const upnl = mark > 0
+        ? (mark - p.entry_price) / p.entry_price * 10000 * (p.side === 'buy' ? 1 : -1)
+        : 0;
+      // Hold duration in seconds
+      const held = p.entry_ts ? Math.round((now - new Date(p.entry_ts)) / 1000) : 0;
+      const upnlStr = (upnl >= 0 ? '+' : '') + upnl.toFixed(1) + 'bps';
       row.innerHTML=
         `<span class="pid">${p.id}</span>`+
         `<span class="psd">${p.side==='buy'?'LONG':'SHORT'}</span>`+
         `<span class="pmt">$${fmt(p.size_usd)} @ ${fmt(p.entry_price)}</span>`+
-        `<span class="pbr">TP ${dTP>=0?'+':''}${dTP.toFixed(0)} / SL ${dSL>=0?'+':''}${dSL.toFixed(0)}</span>`;
+        `<span class="pbr" style="color:${upnl>=0?'var(--buy)':'var(--sell)'}">`+
+        `${upnlStr} · ${held}s</span>`;
       root.appendChild(row);
     }
   }

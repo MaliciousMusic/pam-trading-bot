@@ -28,17 +28,14 @@ risk:
   max_hold_seconds: 600         # hard backstop if TP/SL never hit
 
 decision:
-  # Council-driven entry: every non-flat council projection opens a trade.
-  # No confidence / uncertainty / emove / fee gates — the strategy rests
-  # on the council's signed forecast, period. Bad trades surface in
-  # backscore (MAE / hit-rate per horizon) and per-tribe skill EWMA,
-  # not as pre-filtered silence.
+  # Council-driven entry AND exit. Every non-flat projection opens a trade;
+  # each open position is re-evaluated every tick and closed the moment the
+  # council flips against it (emove sign reverses beyond the dead zone).
+  # No TP/SL brackets — the forecast IS the exit signal.
   #
-  # Stop-loss: each position's SL is at `sl_ratio × expected_move_bps` against
-  # us, floored by `sl_min_bps` to avoid micro-stops on noise. TP is at the
-  # forecasted expected_move. With sl_ratio=0.7 that yields R:R ≈ 1.4:1.
-  sl_ratio: 0.7
-  sl_min_bps: 20.0
+  # Dead zone: how far the flipped emove must exceed 0 before closing.
+  # Prevents whipsaw when the forecast oscillates near zero.
+  exit_dead_zone_bps: 0.5
 
 # Confidence-weighted position sizing. At conf = 0 we inject `min_pct_equity`;
 # at conf = 1.0 we inject `max_pct_equity`. Every non-flat council projection
