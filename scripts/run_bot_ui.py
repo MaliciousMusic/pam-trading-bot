@@ -105,9 +105,6 @@ async def main() -> None:
 
     client = BinancePerpsWS(bus, streams=ds["streams"])
     ui_cfg = {
-        "min_confidence": float(cfg["decision"]["min_confidence"]),
-        "min_expected_move_bps": float(cfg["decision"]["min_expected_move_bps"]),
-        "max_uncertainty": float(cfg["decision"]["max_uncertainty"]),
         "size_min_pct": float(cfg["sizing"]["min_pct_equity"]),
         "size_max_pct": float(cfg["sizing"]["max_pct_equity"]),
         "sizing_curve": str(cfg["sizing"]["curve"]),

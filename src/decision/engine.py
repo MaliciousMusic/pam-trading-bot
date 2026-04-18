@@ -6,20 +6,22 @@ mark-to-market. The tick loop therefore looks like:
 
     1) executor.mark_to_market(price)   — close anything that hit bracket
     2) votes → forecast
-    3) decision.decide(forecast, ...)   — maybe open one NEW position
+    3) decision.decide(forecast, ...)   — open a NEW position iff the
+                                          council is not flat
     4) executor.execute(intent)         — stack it into the portfolio
 
-Entry gating (all configurable via settings.yaml > decision):
-  - forecast confidence ≥ min_confidence
-  - last-step uncertainty ≤ max_uncertainty
-  - |expected_move_bps| ≥ round_trip_fee_bps + fee_safety_margin_bps
-      (we refuse trades that lose even if the forecast is right — fees
-      alone would eat the move)
+Council-driven entry: the council's signed forecast IS the trading signal.
+No confidence / uncertainty / emove-floor / fee-floor gates — every
+non-flat council projection opens a trade. Bad predictions surface in
+backscore (MAE / hit-rate per horizon) and in the per-tribe skill EWMA,
+not as pre-filtered silence. If the council is mis-balanced or a tribe is
+missing context, the fix is to audit + retune, not to add gates that hide
+the problem.
 
-At entry we compute:
-  - size_usd = equity × size_pct(conf) × leverage        (notional)
-  - TP = entry × (1 ± expected_move_bps/10000)           (the forecast)
-  - SL = entry × (1 ∓ max(|expected_move|×sl_ratio, sl_min_bps)/10000)
+Per-trade size scales with forecast confidence so trades in noisy regimes
+cost less; TP at the forecasted move; SL at sl_ratio × |emove| floored at
+sl_min_bps. Risk caps (max_concurrent_positions, max_total_notional_pct)
+live in the executor — those are portfolio-level, not signal gates.
 """
 from __future__ import annotations
 
@@ -32,10 +34,6 @@ from ..tribes.market_state import MarketState
 class DecisionEngine:
     def __init__(self, settings: dict) -> None:
         d = settings.get("decision", {})
-        self.min_expected_move_bps = float(d.get("min_expected_move_bps", 8.0))
-        self.min_confidence = float(d.get("min_confidence", 0.15))
-        self.max_uncertainty = float(d.get("max_uncertainty", 0.90))
-        self.fee_safety_margin_bps = float(d.get("fee_safety_margin_bps", 2.0))
         self.sl_ratio = float(d.get("sl_ratio", 0.7))
         self.sl_min_bps = float(d.get("sl_min_bps", 20.0))
 
@@ -46,12 +44,6 @@ class DecisionEngine:
         self.size_min_pct = float(s.get("min_pct_equity", 0.5))
         self.size_max_pct = float(s.get("max_pct_equity", 4.0))
         self.size_curve = str(s.get("curve", "linear")).lower()
-
-        e = settings.get("execution", {})
-        self.fee_rate_bps = float(e.get("fee_rate_bps", 5.0))
-        self.slippage_bps = float(e.get("slippage_bps", 2.0))
-        # Round-trip = entry + exit. Each leg pays fee + slippage.
-        self.round_trip_bps = 2.0 * (self.fee_rate_bps + self.slippage_bps)
 
         self.leverage = float(settings.get("leverage", 1.0))
 
@@ -65,27 +57,13 @@ class DecisionEngine:
         price = state.last_price or 0.0
         emove = forecast.expected_move_bps
         conf = forecast.confidence
-        # Near-term uncertainty — the last step saturates near 1.0 over a
-        # 60-step projection because per-step uncertainty compounds, which
-        # would permanently block trades. The gate is about "are tribes in
-        # disagreement RIGHT NOW?", so step[0] is the right signal.
-        unc = forecast.steps[0].uncertainty if forecast.steps else 1.0
 
-        # Fee-aware move floor. No trade opens unless the forecast clears
-        # the round-trip cost with margin — even a correct forecast below
-        # this threshold loses money after fees.
-        net_floor = max(self.min_expected_move_bps,
-                        self.round_trip_bps + self.fee_safety_margin_bps)
-
-        if conf < self.min_confidence:
-            return self._hold(ts, price, emove, conf, f"conf {conf:.2f} below floor")
-        if unc > self.max_uncertainty:
-            return self._hold(ts, price, emove, conf, f"uncertainty {unc:.2f} too high")
-        if abs(emove) < net_floor:
-            return self._hold(ts, price, emove, conf,
-                              f"emove {emove:+.1f}bps below net floor {net_floor:.1f}bps")
+        # The only non-council gate: we need a live mark to price the
+        # entry + brackets against. Everything else is the council's call.
         if price <= 0:
             return self._hold(ts, price, emove, conf, "no mark price")
+        if emove == 0:
+            return self._hold(ts, price, emove, conf, "council flat")
 
         side = Side.BUY if emove > 0 else Side.SELL
         pct = self._size_pct(conf)
@@ -106,7 +84,7 @@ class DecisionEngine:
             sl_price = price * (1 + sl_bps / 10_000.0)
             action = "open_short"
 
-        reason = (f"emove {emove:+.1f}bps conf={conf:.2f} unc={unc:.2f} "
+        reason = (f"emove {emove:+.1f}bps conf={conf:.2f} "
                   f"size={pct:.2f}%×{self.leverage:.0f}x({self.size_curve}) "
                   f"TP={tp_bps:.0f}bps SL={sl_bps:.0f}bps hz={horizon}s")
         return TradeIntent(
@@ -118,18 +96,13 @@ class DecisionEngine:
 
     def _size_pct(self, conf: float) -> float:
         """Map forecast confidence → % of equity per trade.
-        At conf = min_confidence, use `min_pct_equity`. At conf = 1.0, use
-        `max_pct_equity`. `linear` is proportional; `quadratic` weights big
-        confidence much more. Clamped at the bracket ends."""
-        lo = self.min_confidence
-        if conf <= lo:
-            return self.size_min_pct
-        if conf >= 1.0:
-            return self.size_max_pct
-        t = (conf - lo) / max(1.0 - lo, 1e-9)
+        conf ∈ [0, 1] maps linearly (or quadratically) between
+        `size_min_pct` and `size_max_pct`. No gate — even conf=0 opens a
+        minimum-size trade so noisy regimes trade small, not silent."""
+        c = max(0.0, min(1.0, conf))
         if self.size_curve == "quadratic":
-            t = t * t
-        return self.size_min_pct + (self.size_max_pct - self.size_min_pct) * t
+            c = c * c
+        return self.size_min_pct + (self.size_max_pct - self.size_min_pct) * c
 
     @staticmethod
     def _hold(ts, price, emove, conf, reason) -> TradeIntent:
