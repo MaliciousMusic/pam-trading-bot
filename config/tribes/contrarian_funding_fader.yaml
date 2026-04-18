@@ -41,6 +41,9 @@ personality:
   panic: 0.15
   patience: 0.9
   herding: 0.15
+  # Funding-epoch driven — reacts over the 30-60min post-print window.
+  reaction_mu_seconds: 1800.0
+  reaction_sigma_seconds: 3600.0
 
 flow:
   # weight is OVERRIDDEN at load time (see derive.py). Value below = pre-derivation hand-tune.

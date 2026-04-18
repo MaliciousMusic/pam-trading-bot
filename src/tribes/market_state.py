@@ -140,6 +140,23 @@ class MarketState:
         self.fgi_classification: str = ""
         self.fgi_ts: datetime | None = None
         self.last_update: datetime | None = None
+        # Top-of-book + depth snapshot from @depth20@100ms. The projector
+        # kernel uses `bid_depth_5bps_usd` / `ask_depth_5bps_usd` to scale
+        # pressure → bps: thin book amplifies, deep book absorbs. None
+        # until the first book tick lands, in which case the projector
+        # falls back to the constant kernel.
+        self.last_best_bid: float | None = None
+        self.last_best_ask: float | None = None
+        self.last_mid: float | None = None
+        self.last_spread_bps: float | None = None
+        self.bid_depth_5bps_usd: float | None = None
+        self.ask_depth_5bps_usd: float | None = None
+        # Pending classified events (news with event_type != "none"). Each is
+        # {"ts": epoch_s, "side": +/-1, "impact_bps": float, "event_type": str}.
+        # Trimmed on ingest/advance_clock to items younger than `MAX_AGE_S`.
+        # The event-wave projector reads this list to inject a Gaussian
+        # propagation wave into its per-step pressure.
+        self.pending_events: list[dict] = []
 
     # -- ingest ---------------------------------------------------------
 
@@ -178,6 +195,16 @@ class MarketState:
                 self.fgi_value = int(v)
                 self.fgi_classification = str(ev.payload.get("classification", ""))
                 self.fgi_ts = ev.ts
+        elif ev.kind == "book":
+            p = ev.payload
+            bb = p.get("best_bid"); ba = p.get("best_ask")
+            if bb and ba and ba > bb > 0:
+                self.last_best_bid = bb
+                self.last_best_ask = ba
+                self.last_mid = p.get("mid") or 0.5 * (bb + ba)
+                self.last_spread_bps = p.get("spread_bps")
+                self.bid_depth_5bps_usd = p.get("bid_depth_5bps_usd")
+                self.ask_depth_5bps_usd = p.get("ask_depth_5bps_usd")
         elif ev.kind == "news":
             # Signed score in [-1,+1] — RSS poller already clipped. Severity is
             # the source-weighted impact (SEC=1.0, HN=0.3) and becomes the
@@ -191,6 +218,26 @@ class MarketState:
                 # Regulation/macro items still register at 0 score — their
                 # occurrence alone is a regime signal for swing/news tribes.
                 self.news.add(ev.ts, effective, ev.tags)
+            # If the classifier tagged this as a structured event with a
+            # calibrated impact_bps, enqueue it for the event-wave projector.
+            # The projector will consume it by distributing impact across
+            # the next ~hour of virtual steps, weighted by each tribe's
+            # Gaussian reaction latency.
+            et = ev.payload.get("event_type")
+            imp = float(ev.payload.get("impact_bps", 0.0))
+            side = int(ev.payload.get("side", 0))
+            if et and et != "none" and imp > 0 and side != 0:
+                self.pending_events.append({
+                    "ts": ev.ts.timestamp(),
+                    "side": side,
+                    "impact_bps": imp,
+                    "event_type": et,
+                })
+                # Keep the list bounded — 7200s matches the news window.
+                cutoff = ev.ts.timestamp() - self.MAX_AGE_S * 12  # 2h worth
+                self.pending_events = [
+                    e for e in self.pending_events if e["ts"] >= cutoff
+                ]
 
     # -- queries --------------------------------------------------------
 
@@ -275,6 +322,13 @@ class MarketState:
         s.fgi_classification = self.fgi_classification
         s.fgi_ts = self.fgi_ts
         s.last_update = self.last_update
+        s.last_best_bid = self.last_best_bid
+        s.last_best_ask = self.last_best_ask
+        s.last_mid = self.last_mid
+        s.last_spread_bps = self.last_spread_bps
+        s.bid_depth_5bps_usd = self.bid_depth_5bps_usd
+        s.ask_depth_5bps_usd = self.ask_depth_5bps_usd
+        s.pending_events = list(self.pending_events)  # shallow copy of dicts
         return s
 
     def advance_clock(self, ts: datetime) -> None:

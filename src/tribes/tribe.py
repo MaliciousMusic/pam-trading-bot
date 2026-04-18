@@ -54,11 +54,37 @@ class Tribe:
         (signed_signal in [-1,+1], per-indicator breakdown for logging)."""
         return evaluate_indicators(state, self.spec.indicators)
 
+    def _effective_indicator_weight(self, state: MarketState) -> float:
+        """Blend weight, optionally shifted by realized-volatility regime.
+
+        Low-vol whipsaw punishes indicator-heavy tribes unless they fade
+        (grid bots live in chop). High-vol trending rewards momentum /
+        RSI / zscore readings. When `indicator_regime_range == 0` the
+        weight is the static spec value (old behavior)."""
+        w = max(0.0, min(1.0, float(self.spec.indicator_weight)))
+        rng = float(getattr(self.spec, "indicator_regime_range", 0.0) or 0.0)
+        if rng == 0.0:
+            return w
+        window = float(getattr(self.spec, "indicator_regime_window_s", 300.0))
+        rng_band = state.price_range(window)
+        if rng_band is None or rng_band[0] <= 0:
+            return w
+        realized_bps = (rng_band[1] - rng_band[0]) / rng_band[0] * 10_000.0
+        lo = float(self.spec.indicator_regime_low_bps)
+        hi = float(self.spec.indicator_regime_high_bps)
+        if hi <= lo:
+            return w
+        norm = max(0.0, min(1.0, (realized_bps - lo) / (hi - lo)))
+        side = 2.0 * norm - 1.0  # -1 at/below lo, +1 at/above hi
+        if str(self.spec.indicator_regime_prefer).lower() == "low":
+            side = -side
+        return max(0.0, min(1.0, w + rng * side))
+
     def _blend_with_indicators(self, state: MarketState, v: Vote) -> Vote:
         """Mix the indicator-lens signal into the strategy's vote.
 
           final_signed = (1-w)·strat_signed + w·blend
-          w            = spec.indicator_weight ∈ [0,1]
+          w            = spec.indicator_weight ∈ [0,1], optionally regime-shifted
 
         Agreement amplifies conviction (both vectors point same way);
         disagreement shrinks it (honest reflection of internal conflict).
@@ -73,7 +99,7 @@ class Tribe:
         blend, _ = self.indicator_blend(state)
         if blend == 0.0:
             return v
-        w = max(0.0, min(1.0, float(self.spec.indicator_weight)))
+        w = self._effective_indicator_weight(state)
         strat_signed = v.conviction if v.side is Side.BUY else -v.conviction
         combined = max(-1.0, min(1.0, (1.0 - w) * strat_signed + w * blend))
         if abs(combined) < 1e-6:

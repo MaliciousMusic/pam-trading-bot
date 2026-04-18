@@ -6,8 +6,13 @@ description: >-
   Not glued to every tick; reacts when a clean setup prints.
 
 demographics:
+  # Sources: TradingView Premium paid-seat counts (crypto-tagged users),
+  # Binance/Bybit "VIP 0–3" BTC-perps active-account bands from their
+  # rebate-tier disclosures, and Coinglass Pro subscriber counts. Genuine
+  # daily-active TA screen-traders on BTC perps ≈ 80k; prior 120k was
+  # optimistic (it mixed in alt-focused screen-traders).
   capital_band_usd: [2000, 50000]
-  count_estimate: 120000
+  count_estimate: 80000
   experience_years: [1, 8]
   jurisdiction: [global]
 
@@ -45,6 +50,9 @@ personality:
   panic: 0.3
   patience: 0.65
   herding: 0.35
+  # Watches chart, confirms setup, then clicks — ~1min post-event.
+  reaction_mu_seconds: 60.0
+  reaction_sigma_seconds: 120.0
 
 flow:
   # weight is OVERRIDDEN at load time (see derive.py). Value below = pre-derivation hand-tune.
@@ -98,3 +106,10 @@ indicators:
     prefer: high           # they WANT volatility; low vol = stand aside
     weight: 0.4
 indicator_weight: 0.5
+# Setups need range breaks with volume — both pick up in expanding vol.
+# In dead chop breakouts fail and traders stand aside → reduce indicator lean.
+indicator_regime_range: 0.30
+indicator_regime_low_bps: 12
+indicator_regime_high_bps: 70
+indicator_regime_prefer: high
+indicator_regime_window_s: 600

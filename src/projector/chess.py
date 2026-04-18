@@ -35,6 +35,7 @@ from ..aggregator.voting import aggregate_votes
 from ..core.types import Forecast
 from ..tribes.market_state import MarketState
 from ..tribes.tribe import Tribe
+from .event_wave import step_event_bps
 
 
 class ChessProjector:
@@ -45,12 +46,22 @@ class ChessProjector:
         tick_seconds: int,
         bps_per_unit_pressure: float = 8.0,
         confidence_decay: float = 0.9,
+        depth_ref_usd: float = 10_000_000.0,
+        depth_floor_usd: float = 500_000.0,
     ) -> None:
         self.tribes = tribes
         self.steps = steps
         self.tick_seconds = tick_seconds
         self.bps_per_unit_pressure = bps_per_unit_pressure
         self.confidence_decay = confidence_decay
+        # Depth-aware kernel. The per-step bps becomes:
+        #   step_bps = pressure × bps_per_unit_pressure × (depth_ref / depth_now)
+        # so a thinner book than reference amplifies the move and a deeper
+        # book absorbs it. Defaults: 10M USD reference (typical BTC-perp 5bps
+        # depth), 500k floor so a momentarily empty book doesn't explode the
+        # ratio. When no book is live yet, we fall back to the constant.
+        self.depth_ref_usd = depth_ref_usd
+        self.depth_floor_usd = depth_floor_usd
 
     def project(self, state: MarketState) -> Forecast:
         sim = state.snapshot()
@@ -62,8 +73,10 @@ class ChessProjector:
         # the live Tribe object. Without this, a strong projected vote would
         # put the REAL tribe into cooldown.
         saved_cooldowns = [t._cooldown_until for t in self.tribes]
+        prev_ts = ts
         try:
             for _ in range(self.steps):
+                prev_ts = ts
                 ts = ts + timedelta(seconds=self.tick_seconds)
                 sim.advance_clock(ts)
                 # Route through Tribe.vote() so circadian presence AND
@@ -73,7 +86,27 @@ class ChessProjector:
                 votes = [t.vote(ts, sim) for t in self.tribes]
                 agg = aggregate_votes(votes, ts)
                 step_aggs.append(agg)
-                step_bps = agg.net_pressure * self.bps_per_unit_pressure
+                vote_bps = agg.net_pressure * self.bps_per_unit_pressure
+                # Event wave: classified news items inject a Gaussian-spread
+                # impact_bps whose mass arrives in this step is proportional
+                # to how many tribes just "woke up" to the headline.
+                event_bps = step_event_bps(
+                    sim.pending_events, self.tribes,
+                    prev_ts.timestamp(), ts.timestamp(),
+                )
+                total_bps = vote_bps + event_bps
+                # Depth-aware scale: the side that has to absorb the total
+                # flow sets the scale. Positive → ASK book absorbs; negative
+                # → BID. Thinner absorbing side ⇒ bigger move.
+                side_depth = (
+                    sim.ask_depth_5bps_usd if total_bps >= 0
+                    else sim.bid_depth_5bps_usd
+                )
+                if side_depth and side_depth > 0:
+                    scale = self.depth_ref_usd / max(side_depth, self.depth_floor_usd)
+                else:
+                    scale = 1.0
+                step_bps = total_bps * scale
                 step_bps_list.append(step_bps)
                 if sim.last_price is not None and sim.last_price > 0:
                     sim.last_price = sim.last_price * (1 + step_bps / 10_000.0)

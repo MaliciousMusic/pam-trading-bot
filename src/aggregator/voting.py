@@ -7,8 +7,16 @@ Formulation (kept deliberately simple; tune later against audit data):
 
     active_mass    = buy_mass + sell_mass
     agreement      = |buy_mass - sell_mass| / active_mass          (1 unanimous, 0 split)
-    participation  = active_mass / sum(all v.weight)
-    uncertainty    = 1 - agreement * participation                 (low when engaged AND unanimous)
+    uncertainty    = 1 - agreement                                 (pure disagreement signal)
+
+Uncertainty reflects only DISAGREEMENT among tribes that are voting,
+NOT how much of the population is voting. Population participation is
+already modeled upstream via each tribe's `activation_rate` (which
+scales conviction per tick). Mixing participation into uncertainty
+would double-penalize: a retail-heavy crowd with 0.5% activation would
+automatically have participation≈0 even when everyone active agreed,
+stranding the forecast at zero confidence. The net_pressure magnitude
+already reflects low participation (small convictions → small pressure).
 
 Abstention is preserved in the denominator, so a silent majority
 correctly suppresses net_pressure even when a few conviction-heavy
@@ -41,8 +49,9 @@ def aggregate_votes(votes: list[Vote], ts: datetime) -> Aggregate:
     net_pressure = (buy_mass - sell_mass) / denom
     active_mass = buy_mass + sell_mass
     agreement = abs(buy_mass - sell_mass) / max(active_mass, _EPS)
-    participation = active_mass / denom
-    uncertainty = 1.0 - agreement * participation
+    # Pure disagreement measure — decoupled from participation. Low activation
+    # is already captured by small convictions → small net_pressure.
+    uncertainty = 1.0 - agreement
     return Aggregate(
         ts=ts,
         net_pressure=max(-1.0, min(1.0, net_pressure)),

@@ -7,6 +7,7 @@ import yaml
 from loguru import logger
 
 from ..core.config import CONFIG_DIR
+from .calibration import log_calibration
 from .derive import apply_and_log
 from .spec import TribeSpec
 from .strategies import available as available_strategies
@@ -38,4 +39,9 @@ def load_all() -> list[Tribe]:
     # × per-tick activation. Logs a before/after table so the override is
     # auditable.
     apply_and_log(specs)
-    return [Tribe(s) for s in specs]
+    tribes = [Tribe(s) for s in specs]
+    # Phase F companion: log the honest tick-level contribution share
+    # (weight × activation × presence). Warns if any cohort dominates
+    # or is effectively silent — catches mis-calibrated populations.
+    log_calibration(tribes)
+    return tribes

@@ -20,6 +20,9 @@ from loguru import logger
 from datetime import timezone
 
 from ..aggregator.voting import aggregate_votes
+from ..audit.backscore import ForecastAuditor
+from ..audit.calibrator import TribeCalibrator
+from dataclasses import replace
 from ..core.bus import EventBus
 from ..core.types import Event, Side
 from ..decision.engine import DecisionEngine
@@ -47,6 +50,8 @@ class TradingEngine:
         ledger: Ledger,
         tick_seconds: int,
         broadcaster: "UIBroadcaster | None" = None,
+        auditor: ForecastAuditor | None = None,
+        calibrator: TribeCalibrator | None = None,
     ) -> None:
         self.bus = bus
         self.tribes = tribes
@@ -57,6 +62,8 @@ class TradingEngine:
         self.ledger = ledger
         self.tick_seconds = tick_seconds
         self.broadcaster = broadcaster
+        self.auditor = auditor
+        self.calibrator = calibrator
         self._tick_count = 0
         self._starting_equity: float = executor.equity_usd
         # Prediction anchors. Each is (label, step_index) where step_index is
@@ -157,7 +164,26 @@ class TradingEngine:
         #    so equity/notional caps reflect this tick's reality.
         self.executor.mark_to_market(ts, self.state.last_price)
 
-        votes = [t.vote(ts, self.state) for t in self.tribes]
+        raw_votes = [t.vote(ts, self.state) for t in self.tribes]
+        # Skill overlay: scale each tribe's conviction by its measured
+        # skill multiplier before aggregation. Multiplier is 1.0 when the
+        # overlay is disabled or the tribe has too few resolved samples,
+        # so this is a no-op until there's real data and `apply=True`.
+        if self.calibrator is not None:
+            votes = []
+            for v in raw_votes:
+                m = self.calibrator.skill_multiplier(v.tribe_id)
+                if m != 1.0 and v.side is not Side.ABSTAIN:
+                    new_conv = max(0.0, min(1.0, v.conviction * m))
+                    votes.append(replace(v, conviction=new_conv,
+                                         reason=v.reason + f" | skill×{m:.2f}"))
+                else:
+                    votes.append(v)
+            # Record the RAW vote (pre-multiplier) as the skill signal —
+            # the multiplier is the policy, the raw vote is the data.
+            self.calibrator.record_votes(ts.timestamp(), raw_votes)
+        else:
+            votes = raw_votes
         agg = aggregate_votes(votes, ts)
         forecast = self.projector.project(self.state)
         intent = self.decision.decide(
@@ -183,6 +209,28 @@ class TradingEngine:
         # later replay: where did we think price would be in 5 min? where
         # did it actually go?
         predictions = self._compute_predictions(forecast)
+
+        # Forecast backscoring: resolve any anchors that matured at this
+        # tick (target_ts ≤ now) against the realized price, then enqueue
+        # the fresh anchors we just computed. The auditor persists each
+        # resolved record to data/forecasts/YYYY-MM-DD.jsonl and keeps a
+        # trailing window in memory for the UI.
+        backscore_snapshot: dict | None = None
+        calibrator_snapshot: dict | None = None
+        if self.auditor is not None:
+            resolved_now = self.auditor.record_tick(
+                ts, self.state.last_price, predictions,
+                forecast_conf=forecast.confidence,
+                forecast_emove_bps=forecast.expected_move_bps,
+                net_pressure=agg.net_pressure,
+            )
+            backscore_snapshot = self.auditor.snapshot()
+            # Phase G loop: feed freshly resolved anchors to the skill
+            # calibrator so each tribe's EWMA moves toward the truth.
+            if self.calibrator is not None and resolved_now:
+                self.calibrator.apply_resolved(resolved_now)
+        if self.calibrator is not None and self._tick_count % 20 == 0:
+            calibrator_snapshot = self.calibrator.snapshot()
 
         # Tick record for daily audit
         self.ledger.write({
@@ -255,4 +303,6 @@ class TradingEngine:
                 "wins": getattr(self.executor, "wins", 0),
                 "action": intent.action,
                 "reason": intent.reason,
+                "backscore": backscore_snapshot,
+                "calibration": calibrator_snapshot,
             })

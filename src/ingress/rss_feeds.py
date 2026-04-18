@@ -39,6 +39,7 @@ from loguru import logger
 
 from ..core.bus import EventBus
 from ..core.types import Event
+from .event_classifier import classify as classify_event
 
 
 USER_AGENT = "pam-council/0.2 (research bot; https://github.com/MaliciousMusic/pam-trading-bot)"
@@ -236,16 +237,36 @@ class RSSFeedPoller:
             logger.debug("[rss] {}: +{} emitted", f.id, new_emitted)
 
     async def _emit(self, f: FeedSpec, title: str, summary: str, score: float) -> None:
+        # Event classifier promotes a matched news item from "±1 sentiment
+        # score" to "this is a MonetaryPolicyEasing with ~90bps priors and
+        # a +1 side." When it fires, we override the keyword-derived side
+        # and carry the calibrated impact_bps in the payload so the
+        # event-latency projector (Phase D) can inject an appropriately
+        # sized pressure wave. When it misses, we keep the original ±1
+        # score — at worst we fall back to the crude-but-present signal.
+        cls = classify_event(title, summary, f.category, f"rss.{f.id}")
+        if cls.event_type != "none":
+            # Side from classifier overrides sentiment in both tags and
+            # the score (score now ∈ {-1, 0, +1} × ~weight for back-compat).
+            score = float(cls.side) * min(1.0, cls.impact_bps / 200.0)
         side_tag = "news_bull" if score > 0 else "news_bear" if score < 0 else "news_neutral"
         tags = {"news", f.category, side_tag, *f.tags}
+        if cls.event_type != "none":
+            tags.add(f"event:{cls.event_type}")
         severity = min(1.0, abs(score) * f.weight) if score != 0 else min(0.5, 0.3 * f.weight)
         ev = Event(
             ts=Event.now_utc(),
             source=f"rss.{f.id}",
             kind="news",
             symbol=None,
-            payload={"title": title[:240], "score": score, "category": f.category,
-                     "summary": summary[:400]},
+            payload={
+                "title": title[:240], "score": score, "category": f.category,
+                "summary": summary[:400],
+                "event_type": cls.event_type,
+                "impact_bps": cls.impact_bps,
+                "side": cls.side,
+                "classifier_reason": cls.reason,
+            },
             tags=tags,
             severity=severity,
         )

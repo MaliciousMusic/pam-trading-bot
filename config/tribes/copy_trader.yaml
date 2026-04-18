@@ -54,6 +54,9 @@ personality:
   panic: 0.4
   patience: 0.25
   herding: 0.95
+  # Always lagging the leader/signal — 3min average, wide spread.
+  reaction_mu_seconds: 180.0
+  reaction_sigma_seconds: 300.0
 
 flow:
   # weight is OVERRIDDEN at load time (see derive.py). Value below = pre-derivation hand-tune.

@@ -62,6 +62,15 @@ class Personality(_Base):
     panic: float = 0.5
     patience: float = 0.5
     herding: float = 0.5
+    # Reaction-latency distribution to exogenous events (news, liquidations).
+    # Used by the event-wave projector (src/projector/event_wave.py) to
+    # spread a classified event's impact_bps across time: a Gaussian mass
+    # centered on `reaction_mu_seconds` with `reaction_sigma_seconds`
+    # spread describes when this tribe's capital actually presses the
+    # button after the headline prints. Colo MMs fire in < 1s; app-only
+    # retail takes minutes. Defaults are "typical informed retail".
+    reaction_mu_seconds: float = 60.0
+    reaction_sigma_seconds: float = 90.0
 
 
 class Flow(_Base):
@@ -144,3 +153,15 @@ class TribeSpec(_Base):
     # indicators are decorative (voter still calls strat logic). 1 = blend
     # fully co-signs the strat's signed signal.
     indicator_weight: float = 0.5
+    # Regime-aware blend weight. When non-zero, the effective weight shifts
+    # with realized vol:
+    #   w_eff = indicator_weight + indicator_regime_range × side
+    # where `side ∈ [-1, +1]` is a signed distance from the [low_bps, high_bps]
+    # band (-1 at or below low, +1 at or above high), flipped if
+    # `indicator_regime_prefer == "low"`. Leave `indicator_regime_range = 0`
+    # to keep the static constant behavior (backward compatible).
+    indicator_regime_range: float = 0.0
+    indicator_regime_low_bps: float = 15.0
+    indicator_regime_high_bps: float = 60.0
+    indicator_regime_prefer: str = "high"   # "high" | "low"
+    indicator_regime_window_s: float = 300.0

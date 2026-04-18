@@ -7,8 +7,13 @@ description: >-
   crowded side is already paying heavy funding against the move.
 
 demographics:
+  # Sources: Glassnode "long-term holder" cohort (restricted to BTC-perps
+  # active, not HODLers); Bookmap / TradingView Premium paid-seat counts;
+  # Coinalyze analytics subscriber stats. Genuine positional BTC-perps
+  # traders are a small fraction of the "swing trader" label — ~20k is more
+  # honest than 30k, which over-counted dormant account holders.
   capital_band_usd: [10000, 500000]
-  count_estimate: 30000
+  count_estimate: 20000
   experience_years: [3, 20]
   jurisdiction: [NA, EU, APAC]
 
@@ -44,6 +49,9 @@ personality:
   panic: 0.2
   patience: 0.85
   herding: 0.2
+  # Positions through moves — react on timescales of minutes to hours.
+  reaction_mu_seconds: 600.0
+  reaction_sigma_seconds: 900.0
 
 flow:
   # weight is OVERRIDDEN at load time (see derive.py). Value below = pre-derivation hand-tune.
@@ -102,3 +110,11 @@ indicators:
     action: fade
     weight: 0.5
 indicator_weight: 0.55
+# Trend-followers live for directional regimes. Expanding realized vol
+# confirms the regime — lean harder on the indicator blend. Dead chop
+# (flat tape) tells them to sit on hands — shrink toward base weight.
+indicator_regime_range: 0.30
+indicator_regime_low_bps: 20
+indicator_regime_high_bps: 120
+indicator_regime_prefer: high
+indicator_regime_window_s: 1800

@@ -51,6 +51,9 @@ personality:
   panic: 0.2
   patience: 0.5
   herding: 0.25
+  # News-desk pros — headline-to-click in ~15s.
+  reaction_mu_seconds: 15.0
+  reaction_sigma_seconds: 30.0
 
 flow:
   # weight is OVERRIDDEN at load time (see derive.py). Value below = pre-derivation hand-tune.
