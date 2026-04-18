@@ -68,7 +68,42 @@ class Flow(_Base):
     weight: float = 0.0                                   # estimated flow share
     typical_hold_seconds: list[int] = Field(default_factory=lambda: [60, 600])
     default_conviction: float = 0.5
-    cooldown_seconds: int = 0                              # min gap between this tribe's votes
+    cooldown_seconds: int = 0                              # min gap between STRONG votes
+    strong_vote_conviction: float = 0.3                    # only convictions ≥ this trigger cooldown
+
+
+class Disposition(_Base):
+    """Idle posture. Every archetype has a stance at all times — even when
+    their signal is quiet. This captures it.
+
+      idle_bias ∈ [-1, +1]      — direction when nothing specific is happening
+      idle_conviction ∈ [0, 1]  — how strongly they hold that idle view (typically small)
+
+    Strategies can override this with data-dependent idle behavior (e.g. a
+    trend-follower's idle is the sign of the longer-term trend) — the spec
+    value is the default when no better information is available.
+    """
+    idle_bias: float = 0.0
+    idle_conviction: float = 0.08
+
+
+class Circadian(_Base):
+    """Time-of-day participation. Humans sleep; bots don't. Different
+    timezones wake up at different UTC hours, so each tribe's share of the
+    order flow isn't constant over a 24h window.
+
+      presence_by_hour_utc[h] ∈ [0, 1]  — fraction of full weight the tribe
+        contributes when UTC hour == h. Runtime multiplies `flow.weight`
+        by this factor per-tick.
+
+    Default is 24×1.0 (always-on), matching bot/24-7 archetypes. Retail
+    tribes should drop to 0.2–0.4 during their home-region sleep hours.
+    The `timezone_label` is documentation only — it's not parsed.
+    """
+    timezone_label: str = "global"                      # APAC | EU | US | global | 24/7
+    presence_by_hour_utc: list[float] = Field(
+        default_factory=lambda: [1.0] * 24
+    )
 
 
 class TribeSpec(_Base):
@@ -82,3 +117,5 @@ class TribeSpec(_Base):
     attention: Attention = Field(default_factory=Attention)
     personality: Personality = Field(default_factory=Personality)
     flow: Flow = Field(default_factory=Flow)
+    disposition: Disposition = Field(default_factory=Disposition)
+    circadian: Circadian = Field(default_factory=Circadian)

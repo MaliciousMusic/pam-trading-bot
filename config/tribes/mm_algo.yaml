@@ -55,3 +55,16 @@ flow:
   typical_hold_seconds: [5, 300]
   default_conviction: 0.35
   cooldown_seconds: 0
+
+disposition:
+  # Delta-neutral by mandate. Truly has no directional opinion at rest.
+  idle_bias: 0.0
+  idle_conviction: 0.03
+
+circadian:
+  # Colo'd algos don't sleep. Fully on 24/7.
+  timezone_label: "24/7"
+  presence_by_hour_utc:
+    [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+     1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+     1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]

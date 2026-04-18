@@ -38,6 +38,7 @@ def _tribe_meta(tribes):
             "capital_band_usd": t.spec.demographics.capital_band_usd,
             "hardware_tier": t.spec.hardware.tier,
             "strategy_family": t.spec.strategy.family,
+            "timezone_label": t.spec.circadian.timezone_label,
         }
         for t in tribes
     ]

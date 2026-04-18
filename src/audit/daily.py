@@ -7,6 +7,11 @@ seconds forward and check whether price moved in the voted direction.
 Tribe metrics:
   - hit_rate       (% of directional votes that aligned with forward price)
   - participation  (% of ticks where this tribe did NOT abstain)
+  - engaged_rate   (% of ticks where conviction ≥ ENGAGED_CONVICTION —
+                    the metric that actually matters under the always-
+                    leaning v2 contract, since nearly every tick is
+                    "directional" now; a tribe whispering at 0.08 all day
+                    is effectively silent.)
   - alignment      (weighted by conviction)
 
 System metrics from execution records:
@@ -25,13 +30,20 @@ from loguru import logger
 from ..execution.ledger import LEDGER_DIR
 
 
+# Conviction ≥ this counts as a real take, not a whisper. Matches the
+# default Flow.strong_vote_conviction in tribes/spec.py.
+ENGAGED_CONVICTION = 0.3
+
+
 @dataclass(slots=True)
 class TribeScore:
     tribe_id: str
     total_votes: int = 0
     abstain_votes: int = 0
     directional_votes: int = 0
+    engaged_votes: int = 0          # directional AND conviction ≥ ENGAGED_CONVICTION
     hits: int = 0
+    engaged_hits: int = 0
     conviction_sum: float = 0.0
     hit_conviction_sum: float = 0.0
 
@@ -40,8 +52,16 @@ class TribeScore:
         return 0.0 if self.total_votes == 0 else self.directional_votes / self.total_votes
 
     @property
+    def engaged_rate(self) -> float:
+        return 0.0 if self.total_votes == 0 else self.engaged_votes / self.total_votes
+
+    @property
     def hit_rate(self) -> float:
         return 0.0 if self.directional_votes == 0 else self.hits / self.directional_votes
+
+    @property
+    def engaged_hit_rate(self) -> float:
+        return 0.0 if self.engaged_votes == 0 else self.engaged_hits / self.engaged_votes
 
     @property
     def conviction_weighted_hit_rate(self) -> float:
@@ -121,11 +141,17 @@ def audit_day(day: str, horizon_seconds: int = 60) -> DailyReport:
                 score.abstain_votes += 1
                 continue
             score.directional_votes += 1
-            score.conviction_sum += v.get("conviction", 0.0)
+            conv = float(v.get("conviction", 0.0))
+            score.conviction_sum += conv
+            engaged = conv >= ENGAGED_CONVICTION
+            if engaged:
+                score.engaged_votes += 1
             hit = (actual_move > 0 and side == "buy") or (actual_move < 0 and side == "sell")
             if hit:
                 score.hits += 1
-                score.hit_conviction_sum += v.get("conviction", 0.0)
+                score.hit_conviction_sum += conv
+                if engaged:
+                    score.engaged_hits += 1
 
     report.start_equity = first_equity or 0.0
     report.end_equity = last_equity or 0.0
@@ -146,8 +172,8 @@ def print_report(r: DailyReport) -> None:
     rows = sorted(r.tribes.values(), key=lambda s: -s.conviction_weighted_hit_rate)
     for s in rows:
         logger.info(
-            "  {:<32} part={:.1%}  dir_votes={:<5} hit_rate={:.1%}  conv_hit={:.1%}",
-            s.tribe_id, s.participation, s.directional_votes,
-            s.hit_rate, s.conviction_weighted_hit_rate,
+            "  {:<32} eng={:.1%}  eng_votes={:<5} eng_hr={:.1%}  conv_hit={:.1%}",
+            s.tribe_id, s.engaged_rate, s.engaged_votes,
+            s.engaged_hit_rate, s.conviction_weighted_hit_rate,
         )
     logger.info("=" * 72)

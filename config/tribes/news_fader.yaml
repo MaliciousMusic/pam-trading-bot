@@ -57,3 +57,18 @@ flow:
   typical_hold_seconds: [120, 1200]
   default_conviction: 0.7
   cooldown_seconds: 60
+
+disposition:
+  # Waiting for a headline. Neutral at rest; strategy layer will bias from
+  # FGI when social/news feeds have signal.
+  idle_bias: 0.0
+  idle_conviction: 0.05
+
+circadian:
+  # News-desk pros in NA/EU — peak during US/EU daytime when the bulk of
+  # English-speaking financial news breaks.
+  timezone_label: "EU+US (pro)"
+  presence_by_hour_utc:
+    [0.40, 0.35, 0.35, 0.40, 0.45, 0.55, 0.65, 0.80,
+     0.90, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00,
+     0.95, 0.85, 0.75, 0.65, 0.55, 0.50, 0.45, 0.40]

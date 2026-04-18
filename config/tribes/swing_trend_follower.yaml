@@ -50,3 +50,18 @@ flow:
   typical_hold_seconds: [3600, 259200]
   default_conviction: 0.7
   cooldown_seconds: 300
+
+disposition:
+  # Strategy overrides this with the live long-trend sign when price data
+  # is present; the spec default is flat for cold-start / no-data cases.
+  idle_bias: 0.0
+  idle_conviction: 0.05
+
+circadian:
+  # Positions held through sleep — their stops and limits are resting on
+  # the book. Light dampening in thin hours but never near zero.
+  timezone_label: "global"
+  presence_by_hour_utc:
+    [0.70, 0.65, 0.65, 0.70, 0.75, 0.80, 0.90, 0.95,
+     1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00,
+     1.00, 0.95, 0.90, 0.85, 0.80, 0.75, 0.75, 0.70]
