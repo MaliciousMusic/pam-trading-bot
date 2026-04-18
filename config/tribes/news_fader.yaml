@@ -2,10 +2,10 @@ id: news_fader
 name: News Fader
 description: >-
   Fast-response pros who fade the initial overreaction to high-severity
-  headlines. Currently unwired — `news_reactor` strategy abstains until
-  a news source ingester is added. The tribe is already modeled so that
-  when we switch on the news feed, its voice starts contributing
-  without any architectural change.
+  headlines. Live-wired: regulation/macro items get followed (regime
+  signal), crypto-press/influencer items get faded (overreaction). RSS
+  feed set lives in src/ingress/rss_feeds.py:CURATED_FEEDS (SEC, Fed,
+  CFTC, Coindesk/Cointelegraph/etc, Substack, Nitter mirrors).
 
 demographics:
   capital_band_usd: [50000, 1000000]
@@ -78,3 +78,37 @@ circadian:
     [0.40, 0.35, 0.35, 0.40, 0.45, 0.55, 0.65, 0.80,
      0.90, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00,
      0.95, 0.85, 0.75, 0.65, 0.55, 0.50, 0.45, 0.40]
+
+# News-fader lens — the tribe's whole identity. Three aliased news_pulse
+# instances capture the critical split: regulation/macro is followed (a
+# Fed cut is real), headline noise is faded (overreactions mean-revert),
+# influencer chatter is faded (those posts are almost always too late).
+indicators:
+  news_pulse:regulation:
+    window_s: 3600
+    tag: regulation
+    reference: 0.5
+    action: follow
+    weight: 1.0
+  news_pulse:macro:
+    window_s: 3600
+    tag: macro
+    reference: 0.5
+    action: follow
+    weight: 0.8
+  news_pulse:news:
+    window_s: 1800
+    tag: news                    # coindesk/cointelegraph/decrypt — fade
+    reference: 0.6
+    action: fade
+    weight: 0.8
+  news_pulse:influencer:
+    window_s: 1800
+    tag: influencer
+    reference: 0.6
+    action: fade
+    weight: 0.6
+  fgi_bias:
+    action: fade
+    weight: 0.4
+indicator_weight: 0.65           # news-tribe → indicators dominate the vote

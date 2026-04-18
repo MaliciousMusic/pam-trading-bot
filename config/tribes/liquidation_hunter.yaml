@@ -73,3 +73,24 @@ circadian:
     [0.50, 0.45, 0.45, 0.50, 0.55, 0.65, 0.75, 0.85,
      0.95, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00,
      0.95, 0.85, 0.75, 0.65, 0.60, 0.55, 0.55, 0.50]
+
+# Liq hunter lens: liq tape is primary. Funding extremes flag crowded
+# positioning (ready to be flushed). High-vol regime is preferred — they
+# don't care about quiet markets.
+indicators:
+  liq_imbalance:
+    window_s: 60
+    reference_usd: 500000
+    action: follow            # ride the cascade direction (short into long-flushes)
+    weight: 1.0
+  funding_extreme:
+    extreme: 0.0005
+    action: fade              # positive funding → long-side crowded → short the flush
+    weight: 0.7
+  volatility_regime:
+    window_s: 300
+    low_bps: 20
+    high_bps: 120
+    prefer: high              # cascades happen in vol, not calm
+    weight: 0.5
+indicator_weight: 0.5

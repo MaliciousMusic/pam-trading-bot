@@ -21,6 +21,7 @@ from src.execution.paper import PaperExecutor
 from src.ingress.binance_ws import BinancePerpsWS
 from src.ingress.fgi import FGIPoller
 from src.ingress.reddit_rss import RedditRSSPoller
+from src.ingress.rss_feeds import CURATED_FEEDS, RSSFeedPoller
 from src.projector.chess import ChessProjector
 from src.tribes.loader import load_all
 from src.tribes.market_state import MarketState
@@ -117,6 +118,16 @@ async def main() -> None:
     if sources_cfg.get("reddit_public", {}).get("enabled"):
         subs = sources_cfg["reddit_public"].get("subs")
         coros.append(RedditRSSPoller(bus, subs=subs).run())
+    # Curated free OSINT feeds — regulation (SEC/Fed/CFTC), crypto news,
+    # influencer substacks + Nitter. Each feed is polled politely; dead
+    # feeds log a warning and the poller continues with the rest.
+    rss_cfg = sources_cfg.get("rss_news", {})
+    if rss_cfg.get("enabled"):
+        coros.append(RSSFeedPoller(
+            bus, CURATED_FEEDS,
+            poll_seconds=int(rss_cfg.get("poll_seconds", 180)),
+            retry_seconds=int(rss_cfg.get("retry_seconds", 120)),
+        ).run())
 
     # Daily audit scheduler — fires once at 00:00 UTC; generates hypotheses
     # (atomic single-param mutations) and writes child variants. The parent

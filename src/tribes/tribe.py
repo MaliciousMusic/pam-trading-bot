@@ -10,6 +10,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 from ..core.types import Event, Side, Vote
+from .indicators import evaluate as evaluate_indicators
 from .market_state import MarketState
 from .spec import TribeSpec
 from .strategies import get as get_strategy
@@ -48,6 +49,40 @@ class Tribe:
         """
         return None
 
+    def indicator_blend(self, state: MarketState) -> tuple[float, dict[str, float]]:
+        """Evaluate this tribe's declared indicator lens. Returns
+        (signed_signal in [-1,+1], per-indicator breakdown for logging)."""
+        return evaluate_indicators(state, self.spec.indicators)
+
+    def _blend_with_indicators(self, state: MarketState, v: Vote) -> Vote:
+        """Mix the indicator-lens signal into the strategy's vote.
+
+          final_signed = (1-w)·strat_signed + w·blend
+          w            = spec.indicator_weight ∈ [0,1]
+
+        Agreement amplifies conviction (both vectors point same way);
+        disagreement shrinks it (honest reflection of internal conflict).
+        Side flips to follow the blended sign so the tribe never votes
+        against its own indicator reading just because the strat flipped
+        first on noise. When net combined is ≈0, the vote abstains — the
+        archetype has no read."""
+        if not self.spec.indicators or self.spec.indicator_weight <= 0:
+            return v
+        if v.side is Side.ABSTAIN:
+            return v
+        blend, _ = self.indicator_blend(state)
+        if blend == 0.0:
+            return v
+        w = max(0.0, min(1.0, float(self.spec.indicator_weight)))
+        strat_signed = v.conviction if v.side is Side.BUY else -v.conviction
+        combined = max(-1.0, min(1.0, (1.0 - w) * strat_signed + w * blend))
+        if abs(combined) < 1e-6:
+            return replace(v, side=Side.ABSTAIN, conviction=0.0,
+                           reason=v.reason + " | indicators cancel strat")
+        side = Side.BUY if combined > 0 else Side.SELL
+        return replace(v, side=side, conviction=abs(combined),
+                       reason=v.reason + f" | ind={blend:+.2f}")
+
     def vote(self, ts: datetime, state: MarketState) -> Vote:
         if self._cooldown_until and ts < self._cooldown_until:
             # Resting from a strong take, but still present — idle lean only.
@@ -55,15 +90,30 @@ class Tribe:
         else:
             strat = get_strategy(self.spec.strategy.family)
             v = strat(self, ts, state)
+            # Co-sign with declarative indicator lens. The strategy produced
+            # its core signed conviction; the tribe's indicator block is its
+            # "view of the tape" — windows, thresholds, follow/fade actions
+            # tuned to this archetype. Blending them means the final vote
+            # reflects BOTH the programmatic strat and the indicator reading.
+            v = self._blend_with_indicators(state, v)
             cd = self.spec.flow.cooldown_seconds
             trigger = float(getattr(self.spec.flow, "strong_vote_conviction", 0.3))
             if v.side is not Side.ABSTAIN and v.conviction >= trigger and cd > 0:
                 self._cooldown_until = ts + timedelta(seconds=cd)
-        # Scale weight by circadian presence — they're still voting, just
-        # with less clout when their cohort is asleep.
+        # Population-model corrections, applied to every vote:
+        #   1) Circadian presence: the cohort that's asleep contributes less.
+        #   2) Activation rate: only a fraction of the population is actually
+        #      expressing a directional view this tick (0.5% for app newbies,
+        #      100% for colo MMs). This scales CONVICTION, not weight — a
+        #      newbie tribe with 0.5% activation means "most newbies aren't
+        #      trading right now", so their aggregate force is dampened. We
+        #      keep conviction in (0,1] instead of collapsing to idle so the
+        #      few who ARE active still move the signal proportionally.
         eff = self.effective_weight(ts)
-        if eff != v.weight:
-            v = replace(v, weight=eff)
+        act = max(0.0, min(1.0, float(getattr(self.spec.flow, "activation_rate", 1.0))))
+        new_conv = v.conviction * act
+        if eff != v.weight or new_conv != v.conviction:
+            v = replace(v, weight=eff, conviction=max(0.0, min(1.0, new_conv)))
         return v
 
     def _idle_lean(self, reason: str) -> Vote:

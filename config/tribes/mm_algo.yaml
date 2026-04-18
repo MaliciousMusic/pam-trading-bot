@@ -73,3 +73,24 @@ circadian:
     [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
      1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
      1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+
+# MM lens: inventory skew (fade flow), volatility (widen/pull in vol spikes),
+# and z-score mean reversion. No news — they don't read headlines.
+indicators:
+  taker_imbalance:
+    window_s: 30
+    reference_usd: 1500000
+    action: fade            # skew quotes against flow → mild counter-lean
+    weight: 1.0
+  price_zscore:
+    window_s: 600
+    extreme: 2.0
+    action: fade
+    weight: 0.6
+  volatility_regime:
+    window_s: 300
+    low_bps: 8
+    high_bps: 50
+    prefer: low             # low-vol = tight quotes = happy MM
+    weight: 0.5
+indicator_weight: 0.35     # MM math carries the vote; indicators tune it

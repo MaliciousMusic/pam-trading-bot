@@ -194,34 +194,44 @@ def breakout_trader(tribe: "Tribe", ts: datetime, state: MarketState) -> Vote:
 
 @register("trend_follower")
 def trend_follower(tribe: "Tribe", ts: datetime, state: MarketState) -> Vote:
-    """Slow swing capital. Strong signal → persistent multi-tick move.
+    """Slow swing capital. Trades the persistent move, not the tick.
+
+    Regulation regime override: a fresh SEC/Fed/CFTC item materially shifts
+    the setup — even if price hasn't moved yet, swing traders DO reposition
+    after a regulatory headline (2021 China ban, 2024 ETF approval). We
+    blend `regulation_pulse` into the signal so the tribe anticipates the
+    next leg rather than waiting for price to confirm.
+
     Idle: sign of the longer-term drift, with weak conviction."""
     p = tribe.spec.strategy.params
     win = float(p.get("trend_window_seconds", 300))
-    long_win = float(p.get("long_trend_window_seconds", 1800))   # 30min for idle
+    long_win = float(p.get("long_trend_window_seconds", 1800))
     min_bps = float(p.get("min_persistent_move_bps", 80))
     funding_guard = float(p.get("funding_guard", 0.001))
+    reg_weight = float(p.get("regulation_weight", 0.5))
 
     move = state.price_change_bps(win)
     f = state.last_funding_rate
+    reg = state.regulation_pulse(3600.0)
 
     if abs(move) >= min_bps:
-        # Funding guard still applies — respect the "don't chase crowded trade" rule.
         if (move > 0 and f > funding_guard) or (move < 0 and f < -funding_guard):
             long_move = state.price_change_bps(long_win)
-            signed = (long_move / (min_bps * 4.0)) * 0.4
-            return _lean(tribe, signed,
-                         reason=f"funding blocks trend continuation (f={f:.5f})",
+            signed = (long_move / (min_bps * 4.0)) * 0.4 + reg * reg_weight * 0.3
+            return _lean(tribe, max(-1.0, min(1.0, signed)),
+                         reason=f"funding blocks trend, reg={reg:+.2f} f={f:.5f}",
                          horizon_seconds=int(p.get("hold_seconds", 3600)))
-        signed = move / (min_bps * 2.5)
-        return _lean(tribe, signed, reason=f"trend {move:.0f}bps f={f:.5f}",
+        signed = move / (min_bps * 2.5) + reg * reg_weight * 0.2
+        return _lean(tribe, max(-1.0, min(1.0, signed)),
+                     reason=f"trend {move:.0f}bps reg={reg:+.2f} f={f:.5f}",
                      horizon_seconds=int(p.get("hold_seconds", 3600)))
 
-    # Idle: follow the longer-window drift weakly.
+    # Idle: longer-window drift + regulation pulse (even without acute price
+    # movement, a fresh regulatory signal is enough to take a position).
     long_move = state.price_change_bps(long_win)
-    signed = (long_move / (min_bps * 3.0)) * 0.3
-    return _lean(tribe, signed,
-                 reason=f"no acute trend; long-drift {long_move:+.0f}bps",
+    signed = (long_move / (min_bps * 3.0)) * 0.3 + reg * reg_weight * 0.4
+    return _lean(tribe, max(-1.0, min(1.0, signed)),
+                 reason=f"quiet; drift={long_move:+.0f}bps reg={reg:+.2f}",
                  horizon_seconds=int(p.get("hold_seconds", 3600)))
 
 
@@ -328,69 +338,111 @@ def grid_bot(tribe: "Tribe", ts: datetime, state: MarketState) -> Vote:
 
 @register("copy_trader")
 def copy_trader(tribe: "Tribe", ts: datetime, state: MarketState) -> Vote:
-    """Retail auto-bots mirroring 'lead traders' (Binance copy trading,
-    Telegram signal groups, YouTube influencers). Signals arrive through
-    social pulse, THEN get confirmed by a price nudge in the same direction
-    — so their entries lag the move by seconds to minutes.
+    """Retail auto-bots mirroring 'lead traders'. Influencer feeds
+    (substack/Twitter via Nitter) are the PRIMARY trigger — that's the
+    literal mechanism copy-traders follow. Reddit social pulse is the
+    secondary ambient herd signal. Price confirmation must align.
 
     Idle: herd lean in the direction of the broader short-window drift —
     copy-traders are inherently trend-chasers, even with no signal."""
     p = tribe.spec.strategy.params
+    inf_win = float(p.get("influencer_window_s", 1800))
+    inf_trigger = float(p.get("influencer_trigger", 0.4))
     sw = float(p.get("social_window_s", 600))
     pw = float(p.get("confirm_window_s", 120))
     min_vol = int(p.get("min_social_volume", 2))
     trigger = float(p.get("min_social_score", 1.2))
 
-    soc = state.social_score(sw)
-    vol = state.social_volume(sw)
     confirm = state.price_change_bps(pw)
-
     if state.last_price is None:
         return _offline(tribe, "no price yet")
 
-    # Signal + confirmation in the same direction → chase.
+    # Influencer-led: substack/Twitter post + same-direction price nudge.
+    inf = state.influencer_pulse(inf_win)
+    inf_n = state.news_volume(inf_win, tag="influencer")
+    if inf_n >= 1 and abs(inf) >= inf_trigger and (inf * confirm) >= 0:
+        signed = inf / (inf_trigger * 1.8)
+        return _lean(tribe, signed,
+                     reason=f"copy influencer {inf:+.2f} (n={inf_n}) conf={confirm:+.0f}bps",
+                     horizon_seconds=int(p.get("hold_seconds", 900)), cap=0.85)
+
+    # Reddit herd + price confirmation.
+    soc = state.social_score(sw)
+    vol = state.social_volume(sw)
     if vol >= min_vol and abs(soc) >= trigger and (soc * confirm) > 0:
         signed = (soc / (trigger * 2.0))
         return _lean(tribe, signed, reason=f"copy signal {soc:+.1f} conf={confirm:+.0f}bps",
                      horizon_seconds=int(p.get("hold_seconds", 900)), cap=0.75)
 
-    # Idle: always herding — lean with the short-window drift weakly.
-    signed = (confirm / max(float(p.get("herd_drift_bps", 40)), 1.0)) * 0.35
-    return _lean(tribe, signed, reason=f"herd drift {confirm:+.0f}bps",
+    # Idle: herd lean in the direction of short-window drift, with a gentle
+    # pull from residual influencer sentiment (even flat drift, people copy
+    # the loudest voice they saw this morning).
+    drift_signal = (confirm / max(float(p.get("herd_drift_bps", 40)), 1.0)) * 0.35
+    signed = max(-1.0, min(1.0, drift_signal + inf * 0.25))
+    return _lean(tribe, signed,
+                 reason=f"herd drift {confirm:+.0f}bps inf={inf:+.2f}",
                  horizon_seconds=int(p.get("hold_seconds", 900)))
 
 
 @register("news_reactor")
 def news_reactor(tribe: "Tribe", ts: datetime, state: MarketState) -> Vote:
-    """Fades sentiment overreactions. Social pulse is primary; FGI is fallback.
-    Idle (no strong social + mild FGI): weak fade of current FGI bias."""
+    """Fades sentiment overreactions. Input priority (high → low):
+
+      1. Regulation/macro news — SEC/Fed/CFTC items, severity-weighted. These
+         don't get faded; they get FOLLOWED (a real Fed rate cut is not noise).
+      2. Headline/influencer news — crypto press + Twitter/Substack talkers.
+         This IS typically overreaction; fade when the crowd yells.
+      3. Reddit social pulse — slower, noisier. Fade at extremes.
+      4. FGI fallback — daily sentiment regime, weakly faded.
+
+    Idle (channels quiet): weak fade of whatever residual sentiment exists."""
     p = tribe.spec.strategy.params
-    win = float(p.get("social_window_s", 900))
+    news_win = float(p.get("news_window_s", 1800))
+    headline_trigger = float(p.get("headline_trigger", 0.6))
+    regulation_trigger = float(p.get("regulation_trigger", 0.5))
+    soc_win = float(p.get("social_window_s", 900))
     min_vol = int(p.get("min_social_volume", 3))
-    extreme = float(p.get("extreme_social_score", 2.5))
+    extreme_soc = float(p.get("extreme_social_score", 2.5))
     fgi_extreme = float(p.get("fgi_extreme", 0.5))
 
-    soc = state.social_score(win)
-    vol = state.social_volume(win)
+    reg = state.regulation_pulse(news_win)
+    if abs(reg) >= regulation_trigger:
+        # Regulation moves regime — follow, don't fade. Magnitude is small
+        # because severity-weighted scores rarely exceed ~1.0 per item.
+        signed = max(-1.0, min(1.0, reg * 1.5))
+        return _lean(tribe, signed, reason=f"regulation pulse {reg:+.2f}",
+                     horizon_seconds=int(p.get("hold_seconds", 900)))
+
+    news_any = state.news_score(news_win)
+    news_n = state.news_volume(news_win)
+    if news_n >= 2 and abs(news_any) >= headline_trigger:
+        # Headline overreaction — fade with capped conviction.
+        signed = -news_any / (headline_trigger * 2.0)
+        return _lean(tribe, signed,
+                     reason=f"fade headlines {news_any:+.2f} (n={news_n})",
+                     horizon_seconds=int(p.get("hold_seconds", 600)), cap=0.8)
+
+    soc = state.social_score(soc_win)
+    vol = state.social_volume(soc_win)
     fgi = state.fgi_bias()
 
-    # No FGI data yet AND no reddit pulse: input channel is offline.
-    if vol == 0 and state.fgi_value is None:
+    if vol == 0 and news_n == 0 and state.fgi_value is None:
         return _offline(tribe, "no sentiment data yet")
 
-    if vol >= min_vol and abs(soc) >= extreme:
-        signed = -soc / (extreme * 2.0)
+    if vol >= min_vol and abs(soc) >= extreme_soc:
+        signed = -soc / (extreme_soc * 2.0)
         return _lean(tribe, signed, reason=f"fade social {soc:+.1f} (n={vol})",
                      horizon_seconds=int(p.get("hold_seconds", 300)))
 
     if abs(fgi) >= fgi_extreme:
-        signed = -fgi          # full fade at extreme
+        signed = -fgi
         return _lean(tribe, signed,
                      reason=f"fade FGI {state.fgi_value} ({state.fgi_classification})",
                      horizon_seconds=int(p.get("hold_seconds", 600)), cap=0.7)
 
-    # Idle: weak fade of current FGI bias (there's always some crowd positioning).
-    signed = -fgi * 0.3
+    # Idle: weak fade of aggregated news + FGI sentiment.
+    residual = (news_any * 0.3) + (fgi * 0.3)
+    signed = -residual
     return _lean(tribe, signed,
-                 reason=f"sentiment quiet (fgi={state.fgi_value}, soc={soc:+.1f})",
+                 reason=f"sentiment quiet (news={news_any:+.2f} fgi={state.fgi_value})",
                  horizon_seconds=int(p.get("hold_seconds", 600)))

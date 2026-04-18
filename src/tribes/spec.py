@@ -130,3 +130,17 @@ class TribeSpec(_Base):
     flow: Flow = Field(default_factory=Flow)
     disposition: Disposition = Field(default_factory=Disposition)
     circadian: Circadian = Field(default_factory=Circadian)
+    # Declarative indicator lens. Each entry is
+    #   <indicator_name>: {<params>, weight: <float>}
+    # with params matching the indicator's signature in
+    # src/tribes/indicators.py (window_s, extreme, action, …). The strategy
+    # reads the blended signal via Tribe.indicator_blend(state) and is free
+    # to combine it with its core logic at any weight it chooses. This
+    # block is the place to capture the archetype's "view of the tape" in
+    # range-of-use form — what windows it watches, what thresholds trigger
+    # an opinion, whether it fades or follows. Leave empty to skip the blend.
+    indicators: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    # How hard the indicator-blend pushes the strategy's vote, [0,1]. 0 =
+    # indicators are decorative (voter still calls strat logic). 1 = blend
+    # fully co-signs the strat's signed signal.
+    indicator_weight: float = 0.5

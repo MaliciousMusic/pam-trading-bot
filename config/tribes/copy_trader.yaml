@@ -81,3 +81,25 @@ circadian:
     [0.6, 0.55, 0.55, 0.6, 0.65, 0.7, 0.75, 0.80,
      0.85, 0.90, 0.95, 1.00, 1.00, 1.00, 1.00, 1.00,
      0.95, 0.90, 0.85, 0.80, 0.75, 0.70, 0.65, 0.60]
+
+# Copy-trader lens: influencer pulse is the loudest signal by far (Elon/
+# Saylor/CZ posts kick retail bots into action). Social pulse is second.
+# Price momentum confirms the direction; they never front-run.
+indicators:
+  news_pulse:influencer:
+    window_s: 1800
+    tag: influencer
+    reference: 0.6
+    action: follow
+    weight: 1.0
+  social_pulse:
+    window_s: 900
+    reference: 2.0
+    action: follow              # copy the crowd direction, don't fade it
+    weight: 0.7
+  price_momentum:
+    window_s: 120
+    ref_bps: 12                 # confirm-window — they wait for the nudge
+    action: follow
+    weight: 0.5
+indicator_weight: 0.5

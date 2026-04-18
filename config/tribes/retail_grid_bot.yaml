@@ -78,3 +78,24 @@ circadian:
     [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
      1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
      1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+
+# Grid bot lens: every move is a fade opportunity (that's the whole game).
+# Prefers low-vol regimes — grids bleed in trends. No news, no funding.
+indicators:
+  price_momentum:
+    window_s: 120
+    ref_bps: 15
+    action: fade              # every tick up is a sell; every tick down is a buy
+    weight: 1.0
+  price_zscore:
+    window_s: 600
+    extreme: 1.5              # not extreme — grids fire at small z-scores
+    action: fade
+    weight: 0.7
+  volatility_regime:
+    window_s: 600
+    low_bps: 10
+    high_bps: 50
+    prefer: low               # calm markets = grid paradise
+    weight: 0.3
+indicator_weight: 0.5

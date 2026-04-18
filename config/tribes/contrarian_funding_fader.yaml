@@ -66,3 +66,18 @@ circadian:
     [0.90, 0.90, 0.90, 0.90, 0.90, 0.90, 0.90, 0.90,
      0.90, 0.90, 0.90, 0.90, 0.90, 0.90, 0.90, 0.90,
      0.90, 0.90, 0.90, 0.90, 0.90, 0.90, 0.90, 0.90]
+
+# Contrarian funding-fader lens: funding is everything. Price z-score acts
+# as a confirmer — they especially want to fade when price ALSO looks
+# stretched in the same direction as funding skew.
+indicators:
+  funding_extreme:
+    extreme: 0.0005
+    action: fade
+    weight: 1.0
+  price_zscore:
+    window_s: 1800
+    extreme: 2.0
+    action: fade              # price extreme + funding extreme = textbook setup
+    weight: 0.6
+indicator_weight: 0.6         # the strat IS the indicator; heavy weight is honest

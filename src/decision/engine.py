@@ -65,7 +65,11 @@ class DecisionEngine:
         price = state.last_price or 0.0
         emove = forecast.expected_move_bps
         conf = forecast.confidence
-        unc = forecast.steps[-1].uncertainty if forecast.steps else 1.0
+        # Near-term uncertainty — the last step saturates near 1.0 over a
+        # 60-step projection because per-step uncertainty compounds, which
+        # would permanently block trades. The gate is about "are tribes in
+        # disagreement RIGHT NOW?", so step[0] is the right signal.
+        unc = forecast.steps[0].uncertainty if forecast.steps else 1.0
 
         # Fee-aware move floor. No trade opens unless the forecast clears
         # the round-trip cost with margin — even a correct forecast below

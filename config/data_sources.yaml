@@ -38,3 +38,15 @@ sources:
     enabled: true              # alternative.me FGI — free, daily-updated
     kind: rest_poll
     poll_seconds: 3600
+
+  # Curated free RSS/Atom feeds — regulation (SEC/Fed/CFTC), crypto press
+  # (Coindesk/Cointelegraph/…), mainstream business, and influencer substacks
+  # + Nitter Twitter mirrors. Feed list lives in src/ingress/rss_feeds.py:CURATED_FEEDS.
+  # Each feed hit is polite: 20s timeout, 2s gap between feeds, 180s between
+  # sweeps. No auth, no keys, respect robots.txt. Nitter mirrors are fragile;
+  # a dead feed logs a warning and the poller continues.
+  rss_news:
+    enabled: true
+    kind: rest_poll
+    poll_seconds: 180
+    retry_seconds: 120
