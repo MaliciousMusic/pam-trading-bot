@@ -6,8 +6,17 @@ At each virtual step:
      functions, so we bypass the live Tribe.vote() cooldown machinery).
   3. Votes are aggregated; the step's net_pressure implies a price move
      via a simple linear kernel (bps_per_unit_pressure).
-  4. Confidence multiplicatively decays with depth.
-  5. The shadow state's price is mutated for the next step.
+  4. The shadow state's price is mutated for the next step.
+
+Expected move = depth-weighted sum of per-step bps (decay kernel damps
+later steps). Confidence = signal_quality × directional_consistency,
+both in [0,1]:
+  - signal_quality: depth-weighted mean of (1 - step.uncertainty) — high
+    when tribes agree and are engaged along the projected path.
+  - directional_consistency: |net drift| / total activity — high when
+    the path drifts decisively one way, low when steps whipsaw.
+This replaces the prior pure-geometric decay (0.9^steps ≈ 0.12 regardless
+of signal), so confidence actually moves with the forecast's quality.
 
 What this projector intentionally does NOT simulate yet:
   - Cascade-triggered liquidations on projected price moves.
@@ -48,9 +57,8 @@ class ChessProjector:
         sim = state.snapshot()
         start_ts = sim.last_update or datetime.now(timezone.utc)
         ts = start_ts
-        step_aggs = []
-        cumulative_bps = 0.0
-        confidence = 1.0
+        step_aggs: list = []
+        step_bps_list: list[float] = []
         for _ in range(self.steps):
             ts = ts + timedelta(seconds=self.tick_seconds)
             sim.advance_clock(ts)
@@ -64,20 +72,30 @@ class ChessProjector:
             agg = aggregate_votes(votes, ts)
             step_aggs.append(agg)
             step_bps = agg.net_pressure * self.bps_per_unit_pressure
-            cumulative_bps += step_bps * confidence
-            confidence *= self.confidence_decay
+            step_bps_list.append(step_bps)
             if sim.last_price is not None and sim.last_price > 0:
                 sim.last_price = sim.last_price * (1 + step_bps / 10_000.0)
                 sim.prices.add(ts, sim.last_price)
-        final_conf = confidence
+
+        kernel = [self.confidence_decay ** i for i in range(len(step_bps_list))]
+        k_sum = sum(kernel) or 1.0
+        expected_move_bps = sum(b * w for b, w in zip(step_bps_list, kernel))
+
+        signal_quality = sum(
+            (1.0 - s.uncertainty) * w for s, w in zip(step_aggs, kernel)
+        ) / k_sum
+        abs_activity = sum(abs(b) for b in step_bps_list)
+        directional = abs(expected_move_bps) / abs_activity if abs_activity > 0 else 0.0
+        final_conf = max(0.0, min(1.0, signal_quality * directional))
+
         logger.debug(
-            "projector: {} steps, cumulative {:+.1f}bps, final conf {:.3f}",
-            self.steps, cumulative_bps, final_conf,
+            "projector: {} steps, move {:+.1f}bps, signal={:.2f} dir={:.2f} conf={:.2f}",
+            self.steps, expected_move_bps, signal_quality, directional, final_conf,
         )
         return Forecast(
             ts=start_ts,
             steps=step_aggs,
-            expected_move_bps=cumulative_bps,
+            expected_move_bps=expected_move_bps,
             confidence=final_conf,
             horizon_seconds=self.steps * self.tick_seconds,
         )
