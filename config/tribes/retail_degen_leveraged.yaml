@@ -51,7 +51,13 @@ personality:
   herding: 0.8
 
 flow:
+  # weight is OVERRIDDEN at load time (see derive.py). Value below = pre-derivation hand-tune.
   weight: 0.18
+  # Binance perps has ~30M accessible retail users; <3% run >20x leverage
+  # (Binance public risk disclosures + Kaiko retail-flow reports). Of the
+  # ~400k active degens, roughly 15% have an order in flight during any
+  # given 15s tick during active hours.
+  activation_rate: 0.15
   typical_hold_seconds: [60, 600]
   default_conviction: 0.7
   cooldown_seconds: 30

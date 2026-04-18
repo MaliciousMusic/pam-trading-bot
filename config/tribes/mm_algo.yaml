@@ -51,7 +51,12 @@ personality:
   herding: 0.0
 
 flow:
+  # weight is OVERRIDDEN at load time by derive.py (count × geo_mid(capital) × activation_rate, normalized).
+  # The value here is documentation — last hand-tuned figure pre-derivation.
   weight: 0.30
+  # Colo'd MMs have live quotes on every tick of every symbol. Activation = 1.0.
+  # Directional lean is small (low default_conviction) but presence is total.
+  activation_rate: 1.0
   typical_hold_seconds: [5, 300]
   default_conviction: 0.35
   cooldown_seconds: 0

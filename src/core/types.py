@@ -75,21 +75,34 @@ class Forecast:
 
 @dataclass(slots=True)
 class Position:
-    """Open position tracked by the executor. `side=None` means flat."""
-    side: Side | None
-    size_usd: float = 0.0
-    entry_price: float = 0.0
-    entry_ts: datetime | None = None
-    horizon_seconds: int = 0
+    """One open position inside the portfolio. Every open trade has its own
+    entry price, size, TP/SL, and lifecycle — the executor auto-closes when
+    mark-price hits either bracket or the horizon backstop fires."""
+    id: str                        # short tag "tXXXX" assigned at open
+    side: Side                     # BUY (long) or SELL (short), never ABSTAIN
+    size_usd: float
+    entry_price: float
+    entry_ts: datetime
+    tp_price: float                # take-profit mark (direction-correct)
+    sl_price: float                # stop-loss mark (direction-correct)
+    horizon_seconds: int
+    # Audit metadata — what the forecast said at entry
+    expected_move_bps: float = 0.0
+    confidence: float = 0.0
 
     @property
     def is_flat(self) -> bool:
-        return self.side is None
+        # Kept for backwards-compat with callers that still reason about a
+        # single logical position; an entry in the portfolio is never flat.
+        return False
 
 
 @dataclass(slots=True)
 class TradeIntent:
-    """Decision-layer output handed to the executor."""
+    """Decision-layer output handed to the executor. In the portfolio model
+    the decision engine only emits entry intents; closes happen inside the
+    executor when TP/SL/horizon triggers. Legacy `close` action is kept for
+    callers that still need a manual unwind path."""
     ts: datetime
     action: str                  # "open_long" | "open_short" | "close" | "hold"
     size_usd: float
@@ -97,3 +110,7 @@ class TradeIntent:
     reason: str
     expected_move_bps: float
     confidence: float
+    # Pre-computed brackets for the new position (ignored for close/hold).
+    tp_price: float = 0.0
+    sl_price: float = 0.0
+    horizon_seconds: int = 0

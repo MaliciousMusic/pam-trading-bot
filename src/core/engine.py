@@ -59,6 +59,18 @@ class TradingEngine:
         self.broadcaster = broadcaster
         self._tick_count = 0
         self._starting_equity: float = executor.equity_usd
+        # Prediction anchors. Each is (label, step_index) where step_index is
+        # 1-based position into the projector's per-step forecast (step=1 →
+        # +tick_seconds into the future). Used by the UI to stamp a colored
+        # dot on the price chart at every tick — gives an auditable trail of
+        # what the council expected vs what happened.
+        self._anchor_specs = [
+            ("15s",  1),
+            ("1m",   max(1, 60  // max(tick_seconds, 1))),
+            ("5m",   max(1, 300 // max(tick_seconds, 1))),
+            ("10m",  max(1, 600 // max(tick_seconds, 1))),
+            ("15m",  max(1, 900 // max(tick_seconds, 1))),
+        ]
 
     async def run(self) -> None:
         tasks = [
@@ -105,27 +117,72 @@ class TradingEngine:
             self._tick_count += 1
             await self._on_tick()
 
+    def _compute_predictions(self, forecast) -> list[dict]:
+        """Project the current mark forward using the forecast's per-step
+        pressures and return one record per anchor horizon. Matches the UI's
+        own overlay math so the audit trail and the live chart agree."""
+        mark = self.state.last_price
+        if mark is None or mark <= 0 or not forecast.steps:
+            return []
+        bps_per_unit = float(getattr(self.projector, "bps_per_unit_pressure", 0.0))
+        out: list[dict] = []
+        cum_bps = 0.0
+        price = mark
+        cumulative_by_step: list[float] = []
+        for s in forecast.steps:
+            cum_bps += float(s.net_pressure) * bps_per_unit
+            cumulative_by_step.append(cum_bps)
+        for label, step_idx in self._anchor_specs:
+            if step_idx < 1 or step_idx > len(cumulative_by_step):
+                continue
+            bps_at = cumulative_by_step[step_idx - 1]
+            predicted = price * (1.0 + bps_at / 10_000.0)
+            out.append({
+                "label": label,
+                "horizon_steps": step_idx,
+                "horizon_seconds": step_idx * self.tick_seconds,
+                "predicted_price": predicted,
+                "expected_move_bps": bps_at,
+            })
+        return out
+
     async def _on_tick(self) -> None:
         ts = Event.now_utc()
         if self.state.last_price is None:
             logger.info("[tick {:>4}] waiting for market data...", self._tick_count)
             return
 
+        # 1) Mark-to-market: close any open position that just hit TP/SL
+        #    or aged past its horizon backstop. Must run BEFORE the decision
+        #    so equity/notional caps reflect this tick's reality.
+        self.executor.mark_to_market(ts, self.state.last_price)
+
         votes = [t.vote(ts, self.state) for t in self.tribes]
         agg = aggregate_votes(votes, ts)
         forecast = self.projector.project(self.state)
-        intent = self.decision.decide(ts, forecast, self.executor.position, self.state,
-                                      equity_usd=self.executor.equity_usd)
-        pos = self.executor.position
+        intent = self.decision.decide(
+            ts, forecast, self.state, equity_usd=self.executor.equity_usd,
+        )
+        open_n = len(self.executor.positions)
+        net_pos = sum(
+            (1 if p.side.value == "buy" else -1) * p.size_usd
+            for p in self.executor.positions
+        )
         logger.info(
             "[tick {:>4}] px={:.2f} net={:+.3f} unc={:.2f} emove={:+.1f}bps conf={:.2f} "
-            "pos={} eq=${:.2f} | {} — {}",
+            "open={} net_exp=${:+.0f} eq=${:.2f} | {} — {}",
             self._tick_count, self.state.last_price, agg.net_pressure, agg.uncertainty,
             forecast.expected_move_bps, forecast.confidence,
-            "FLAT" if pos.is_flat else pos.side.value.upper(),
-            self.executor.equity_usd,
+            open_n, net_pos, self.executor.equity_usd,
             intent.action, intent.reason,
         )
+
+        # Prediction anchors — pin the projector's price expectation at a
+        # handful of horizons. The UI turns each into a colored dot at
+        # (tick + horizon_steps) on the chart, so the audit scheduler can
+        # later replay: where did we think price would be in 5 min? where
+        # did it actually go?
+        predictions = self._compute_predictions(forecast)
 
         # Tick record for daily audit
         self.ledger.write({
@@ -133,6 +190,7 @@ class TradingEngine:
             "funding_rate": self.state.last_funding_rate,
             "net_pressure": agg.net_pressure, "uncertainty": agg.uncertainty,
             "expected_move_bps": forecast.expected_move_bps, "confidence": forecast.confidence,
+            "predictions": predictions,
             "votes": [
                 {"tribe_id": v.tribe_id, "side": v.side.value,
                  "conviction": v.conviction, "weight": v.weight, "reason": v.reason}
@@ -153,7 +211,7 @@ class TradingEngine:
                         getattr(self.executor, "trades_completed", 0))
 
         if self.broadcaster is not None:
-            pos = self.executor.position
+            positions = self.executor.positions
             await self.broadcaster.publish({
                 "type": "tick",
                 "tick": self._tick_count,
@@ -164,6 +222,7 @@ class TradingEngine:
                 "uncertainty": agg.uncertainty,
                 "expected_move_bps": forecast.expected_move_bps,
                 "confidence": forecast.confidence,
+                "predictions": predictions,
                 "forecast_steps": [
                     {"net_pressure": s.net_pressure, "uncertainty": s.uncertainty}
                     for s in forecast.steps
@@ -173,11 +232,23 @@ class TradingEngine:
                      "conviction": v.conviction, "weight": v.weight, "reason": v.reason}
                     for v in votes
                 ],
-                "position": None if pos.is_flat else {
-                    "side": pos.side.value,
-                    "size_usd": pos.size_usd,
-                    "entry_price": pos.entry_price,
-                },
+                # Portfolio snapshot — every open trade with its brackets, so
+                # the UI can draw a list and per-trade distance-to-TP/SL.
+                "positions": [
+                    {
+                        "id": p.id,
+                        "side": p.side.value,
+                        "size_usd": p.size_usd,
+                        "entry_price": p.entry_price,
+                        "entry_ts": p.entry_ts.astimezone(timezone.utc).isoformat(),
+                        "tp_price": p.tp_price,
+                        "sl_price": p.sl_price,
+                        "expected_move_bps": p.expected_move_bps,
+                        "confidence": p.confidence,
+                    }
+                    for p in positions
+                ],
+                "total_notional_usd": self.executor.total_notional_usd,
                 "equity_usd": self.executor.equity_usd,
                 "starting_equity_usd": self._starting_equity,
                 "trades": getattr(self.executor, "trades_completed", 0),

@@ -123,6 +123,13 @@
     color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px}
   .box .k .v{font-family:var(--mono);color:var(--fg);letter-spacing:0}
   canvas{display:block;width:100%;height:56px}
+  /* Price box gets much more room now that it carries the prediction trail;
+     equity stays small because it only needs the rough curve. */
+  .price-box canvas{height:240px}
+  .pred-legend{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px;
+    font-family:var(--mono);font-size:9.5px;color:var(--muted);letter-spacing:.05em}
+  .pred-legend span{display:inline-flex;align-items:center;gap:4px}
+  .pred-legend i{width:7px;height:7px;border-radius:50%;display:inline-block}
   .pos{border-left:3px solid var(--neutral)}
   .pos.long{border-left-color:var(--buy)}
   .pos.short{border-left-color:var(--sell)}
@@ -131,16 +138,37 @@
   .pos.short .side{color:var(--sell)}
   .pos.flat .side{color:var(--muted)}
   .pos .meta{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:4px}
+  /* Portfolio list: compact per-trade rows with direction-tinted edge */
+  .ports{max-height:240px;overflow-y:auto;margin-top:6px;display:flex;flex-direction:column;gap:4px}
+  .ports::-webkit-scrollbar{width:6px}
+  .ports::-webkit-scrollbar-thumb{background:#263149;border-radius:3px}
+  .port-row{display:grid;grid-template-columns:38px 44px 1fr auto;gap:6px;align-items:center;
+    font-family:var(--mono);font-size:11px;padding:3px 6px;border-left:2px solid var(--neutral);
+    background:#0c1322;border-radius:3px}
+  .port-row.long{border-left-color:var(--buy)}
+  .port-row.short{border-left-color:var(--sell)}
+  .port-row .pid{color:var(--muted)}
+  .port-row .psd{font-weight:700}
+  .port-row.long .psd{color:var(--buy)}
+  .port-row.short .psd{color:var(--sell)}
+  .port-row .pmt{color:#b8c5d6}
+  .port-row .pbr{color:var(--muted);font-size:10px}
+  .port-empty{font-family:var(--mono);font-size:11px;color:var(--muted);text-align:center;
+    padding:12px 0;font-style:italic}
 
-  /* feed */
-  footer{height:110px;background:var(--bg2);border-top:1px solid var(--border);
-    padding:10px 20px;overflow:hidden}
+  /* feed — compact now that the price chart owns most of the vertical budget */
+  footer{height:64px;background:var(--bg2);border-top:1px solid var(--border);
+    padding:8px 20px;overflow:hidden}
   .feed-ttl{font-size:10px;color:var(--muted);letter-spacing:.15em;
     text-transform:uppercase;margin-bottom:6px}
   .feed{font-family:var(--mono);font-size:11px;line-height:1.5}
   .f-liquidation{color:var(--sell)}
   .f-funding{color:var(--accent)}
   .f-trade{color:var(--muted)}
+  .f-social_pulse{color:#c084fc}
+  .f-social_pulse.bear{color:#f87171}
+  .f-social_pulse.bull{color:#4ade80}
+  .f-sentiment{color:var(--accent)}
 
   .legend{display:flex;gap:12px;font-family:var(--mono);font-size:9.5px;
     color:var(--muted);letter-spacing:.05em}
@@ -219,18 +247,25 @@
       <div class="m"><div class="k">Unc</div><div class="v" id="m-unc">—</div><div class="floor" id="m-unc-ceil"></div></div>
     </div>
     <div class="proj">
-      <div class="proj-ttl">Chess Projection · 20 × 15s</div>
+      <div class="proj-ttl" id="proj-ttl">Chess Projection · 60 × 15s</div>
       <div class="proj-bars" id="p-bars"></div>
-      <div class="proj-lbl"><span>+15s</span><span>+150s</span><span>+300s</span></div>
+      <div class="proj-lbl"><span>+15s</span><span>+5m</span><span>+10m</span><span>+15m</span></div>
     </div>
-    <div class="box pos flat" id="pos-box">
-      <div class="k"><span>Position</span><span class="v" id="pos-pct">—</span></div>
-      <div class="side" id="pos-side">FLAT</div>
-      <div class="meta" id="pos-meta"></div>
+    <div class="box" id="pos-box">
+      <div class="k"><span>Portfolio</span><span class="v" id="pos-summary">0 open</span></div>
+      <div class="meta" id="pos-meta">total notional: $0</div>
+      <div class="ports" id="ports"></div>
     </div>
-    <div class="box">
+    <div class="box price-box">
       <div class="k"><span>Price</span><span class="v" id="price-d">—</span></div>
       <canvas id="price-c"></canvas>
+      <div class="pred-legend">
+        <span><i style="background:#22d3ee"></i>+15s</span>
+        <span><i style="background:#60a5fa"></i>+1m</span>
+        <span><i style="background:#c084fc"></i>+5m</span>
+        <span><i style="background:#fb923c"></i>+10m</span>
+        <span><i style="background:#fde047"></i>+15m</span>
+      </div>
     </div>
     <div class="box">
       <div class="k"><span>Equity</span><span class="v" id="eq-d">—</span></div>
@@ -264,9 +299,25 @@
 
   const tribeMeta={};             // id → {name, weight, pos:{x,y}, el}
   const voteHistory={};           // id → ring of last N sides
-  const priceHist=[],eqHist=[];const MAX=240;let p0=null,e0=null;
+  // priceHist: rolling window of historic marks. Sized for ~15h at 15s cadence
+  // so the whole session fits on one chart once you've run long enough.
+  // eqHist stays smaller since it only needs the rough equity curve.
+  const priceHist=[],eqHist=[];const MAX=3600,EQ_MAX=720;let p0=null,e0=null;
   let CFG={min_confidence:0.15,min_expected_move_bps:8,max_uncertainty:0.9,
-           size_min_pct:0.5,size_max_pct:4.0,sizing_curve:'linear'};
+           size_min_pct:0.5,size_max_pct:4.0,sizing_curve:'linear',
+           bps_per_unit_pressure:8.0,projector_steps:60,tick_seconds:15};
+  let lastForecastSteps=[];    // retained so price chart can draw the projection overlay
+
+  // Prediction trail — each entry pins an expected_price for a specific future
+  // tick at a specific horizon, tagged with a color. Accumulates across ticks
+  // so the chart shows what the council predicted at every step vs what
+  // actually happened. Keyed by (emission_tick, horizon_label).
+  const TRAIL_COLORS={
+    '15s':'#22d3ee', '1m':'#60a5fa', '5m':'#c084fc',
+    '10m':'#fb923c', '15m':'#fde047',
+  };
+  const predictionTrail=[];    // {tick, horizon_steps, label, predicted_price, color}
+  let currentTick=0;
 
   function tribePos(i,n){
     const a=(i/n)*2*Math.PI - Math.PI/2;
@@ -486,26 +537,62 @@
     // council flow animation
     spawnFlows(t.votes, np);
 
+    lastForecastSteps=t.forecast_steps||[];
+    currentTick=t.tick;
     if(p0==null)p0=t.price;priceHist.push(t.price);if(priceHist.length>MAX)priceHist.shift();
     const pd=((t.price-p0)/p0)*100;
     $('price-d').textContent=(pd>=0?'+':'')+pd.toFixed(2)+'%';
-    draw('price-c',priceHist,pd>=0?'#4ade80':'#f87171');
 
-    if(e0==null)e0=t.equity_usd;eqHist.push(t.equity_usd);if(eqHist.length>MAX)eqHist.shift();
+    // Stamp a dot at every anchor horizon for THIS tick, preserving prior ones
+    // so the chart builds up a dot-trail we can audit after the fact.
+    for(const pr of (t.predictions||[])){
+      predictionTrail.push({
+        tick:t.tick, horizon_steps:pr.horizon_steps, label:pr.label,
+        predicted_price:pr.predicted_price,
+        color:TRAIL_COLORS[pr.label]||'#fbbf24',
+      });
+    }
+    // Drop trail entries whose target tick has aged out of the visible window.
+    const earliestTick=t.tick - priceHist.length + 1;
+    while(predictionTrail.length && predictionTrail[0].tick + predictionTrail[0].horizon_steps < earliestTick){
+      predictionTrail.shift();
+    }
+
+    drawPriceWithProjection('price-c',priceHist,lastForecastSteps,t.price,pd>=0?'#4ade80':'#f87171',predictionTrail,t.tick);
+
+    if(e0==null)e0=t.equity_usd;eqHist.push(t.equity_usd);if(eqHist.length>EQ_MAX)eqHist.shift();
     const ed=((t.equity_usd-e0)/e0)*100;
     $('eq-d').textContent=(ed>=0?'+':'')+ed.toFixed(2)+'%';
     draw('eq-c',eqHist,ed>=0?'#4ade80':'#f87171');
 
-    const box=$('pos-box');box.classList.remove('long','short','flat');
-    if(!t.position){
-      box.classList.add('flat');$('pos-side').textContent='FLAT';$('pos-meta').textContent='';
-      $('pos-pct').textContent='—';
-    }else{
-      const long=t.position.side==='buy';box.classList.add(long?'long':'short');
-      $('pos-side').textContent=long?'LONG':'SHORT';
-      const pct=t.equity_usd>0?(t.position.size_usd/t.equity_usd)*100:0;
-      $('pos-meta').textContent=`$${fmt(t.position.size_usd)} @ ${fmt(t.position.entry_price)}`;
-      $('pos-pct').textContent=pct.toFixed(2)+'%';
+    renderPortfolio(t.positions||[], t.total_notional_usd||0, t.equity_usd, t.price);
+  }
+
+  // Portfolio list — one row per open trade with its TP/SL brackets and the
+  // distance (in bps) from the current mark to each side. Green-edged rows
+  // are longs, red shorts. Empty state prints "no open trades".
+  function renderPortfolio(ps, totalNotional, equity, mark){
+    const root=$('ports'); root.innerHTML='';
+    const n=ps.length;
+    $('pos-summary').textContent = n===0 ? '0 open'
+      : `${n} open · ${(totalNotional/Math.max(equity,1)*100).toFixed(0)}% of equity`;
+    $('pos-meta').textContent = `total notional: $${fmt(totalNotional)}`;
+    if(n===0){
+      const e=document.createElement('div'); e.className='port-empty';
+      e.textContent='no open trades'; root.appendChild(e); return;
+    }
+    // Render newest first so new entries are visible at the top.
+    for(const p of [...ps].reverse()){
+      const row=document.createElement('div');
+      row.className='port-row '+(p.side==='buy'?'long':'short');
+      const dTP = mark>0 ? ((p.tp_price - mark) / mark * 10000) : 0;
+      const dSL = mark>0 ? ((p.sl_price - mark) / mark * 10000) : 0;
+      row.innerHTML =
+        `<span class="pid">${p.id}</span>`+
+        `<span class="psd">${p.side==='buy'?'LONG':'SHORT'}</span>`+
+        `<span class="pmt">$${fmt(p.size_usd)} @ ${fmt(p.entry_price)}</span>`+
+        `<span class="pbr">TP ${dTP>=0?'+':''}${dTP.toFixed(0)} / SL ${dSL>=0?'+':''}${dSL.toFixed(0)} bps</span>`;
+      root.appendChild(row);
     }
   }
 
@@ -540,6 +627,75 @@
     ctx.stroke();
   }
 
+  // Price canvas with forward projection overlay. Historic prices occupy
+  // the left (hist.length/(hist.length+proj.length)) fraction of canvas;
+  // projected prices extend in yellow on the right. Projected price at
+  // step i = currentPrice * (1 + cumulative_bps[i]/10000) where
+  // cumulative_bps[i] = sum(net_pressure[0..i]) * bps_per_unit_pressure.
+  function drawPriceWithProjection(id,hist,steps,currentPrice,histColor,trail,tickNow){
+    const c=$(id);const dpr=window.devicePixelRatio||1;
+    const w=c.clientWidth,h=c.clientHeight;
+    c.width=w*dpr;c.height=h*dpr;
+    const ctx=c.getContext('2d');ctx.scale(dpr,dpr);ctx.clearRect(0,0,w,h);
+    if(hist.length<2)return;
+
+    const proj=[];let cumBps=0;
+    for(const s of steps){cumBps+=(s.net_pressure||0)*CFG.bps_per_unit_pressure;
+      proj.push(currentPrice*(1+cumBps/10000));}
+
+    // Extend range to cover dot trail (future dots can sit above/below the
+    // price line and we want them visible in-frame).
+    const all=proj.length?hist.concat(proj):hist.slice();
+    if(trail&&trail.length){for(const e of trail) all.push(e.predicted_price);}
+    const lo=Math.min(...all),hi=Math.max(...all);const r=hi-lo||1;
+    const total=Math.max(1, hist.length+proj.length-1);
+    const xAt=i=>(i/total)*w;
+    const yAt=v=>h-((v-lo)/r)*(h-6)-3;
+
+    // historic
+    ctx.strokeStyle=histColor;ctx.lineWidth=1.5;ctx.beginPath();
+    hist.forEach((v,i)=>{const x=xAt(i),y=yAt(v);
+      if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);});
+    ctx.stroke();
+
+    // Separator + projection (only when we have forward steps).
+    if(proj.length){
+      const nowX=xAt(hist.length-1);
+      ctx.strokeStyle='rgba(148,163,184,.25)';ctx.lineWidth=1;
+      ctx.setLineDash([2,3]);ctx.beginPath();
+      ctx.moveTo(nowX,2);ctx.lineTo(nowX,h-2);ctx.stroke();ctx.setLineDash([]);
+
+      ctx.strokeStyle='rgba(251,191,36,0.55)';ctx.lineWidth=1.5;ctx.beginPath();
+      ctx.moveTo(nowX,yAt(hist[hist.length-1]));
+      proj.forEach((v,i)=>{ctx.lineTo(xAt(hist.length+i),yAt(v));});
+      ctx.stroke();
+    }
+
+    // Prediction dot trail: each entry was emitted at tick=E for horizon k,
+    // targeting tick E+k. Map that target tick to an x position in the
+    // combined historic+projected timeline.
+    if(trail&&trail.length){
+      const earliestTick=tickNow - hist.length + 1;
+      for(const e of trail){
+        const targetTick=e.tick + e.horizon_steps;
+        let combined_i;
+        if(targetTick<=tickNow){
+          if(targetTick<earliestTick) continue;   // off-screen to the left
+          combined_i = hist.length - 1 - (tickNow - targetTick);
+        }else{
+          const projIdx = targetTick - tickNow - 1;
+          if(projIdx>=proj.length) continue;      // off-screen to the right
+          combined_i = hist.length + projIdx;
+        }
+        const x=xAt(combined_i), y=yAt(e.predicted_price);
+        ctx.fillStyle=e.color;
+        ctx.globalAlpha=targetTick>tickNow?0.95:0.7;
+        ctx.beginPath();ctx.arc(x,y,2.2,0,Math.PI*2);ctx.fill();
+      }
+      ctx.globalAlpha=1;
+    }
+  }
+
   function onEvent(ev){
     const feed=$('feed');const line=document.createElement('div');
     line.className='f-'+ev.kind;
@@ -555,10 +711,18 @@
       txt=`[${time}] ${s}  $${fmt(n,0)} @ ${fmt(ev.payload.price)}`;
     }else if(ev.kind==='funding'){
       txt=`[${time}] FUNDING ${(ev.payload.funding_rate*100).toFixed(4)}%  mark ${fmt(ev.payload.mark_price)}`;
+    }else if(ev.kind==='social_pulse'){
+      const sc=ev.payload.score||0;
+      const arrow=sc>0?'▲':'▼';
+      line.classList.add(sc>0?'bull':'bear');
+      txt=`[${time}] r/${ev.payload.subreddit} ${arrow}${sc.toFixed(2)}  ${(ev.payload.title||'').slice(0,80)}`;
+    }else if(ev.kind==='sentiment'){
+      const v=ev.payload.value;
+      txt=`[${time}] FGI ${v}/100  ${ev.payload.classification||''}`;
     }else return;
     line.textContent=txt;
     feed.insertBefore(line,feed.firstChild);
-    while(feed.children.length>6)feed.removeChild(feed.lastChild);
+    while(feed.children.length>3)feed.removeChild(feed.lastChild);
   }
 
   let ws=null;

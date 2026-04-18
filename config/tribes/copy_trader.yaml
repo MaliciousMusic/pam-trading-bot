@@ -56,7 +56,13 @@ personality:
   herding: 0.95
 
 flow:
+  # weight is OVERRIDDEN at load time (see derive.py). Value below = pre-derivation hand-tune.
   weight: 0.08
+  # Only fires when the lead trader / signal group actually places a trade,
+  # which is a rare event per 15s tick. ~3% of the cohort replicates an
+  # order during any given tick (Binance Copy Trading public stats: typical
+  # leader trades ~5-20x/day across all followers).
+  activation_rate: 0.03
   typical_hold_seconds: [300, 7200]
   default_conviction: 0.6
   cooldown_seconds: 90

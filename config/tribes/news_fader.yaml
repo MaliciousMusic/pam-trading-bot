@@ -53,7 +53,13 @@ personality:
   herding: 0.25
 
 flow:
+  # weight is OVERRIDDEN at load time (see derive.py). Value below = pre-derivation hand-tune.
   weight: 0.05
+  # News-driven pros silent on most ticks — trade only on headline bursts.
+  # ~6% of the cohort is in an active fade position during any given tick
+  # (most of the time there's no high-severity headline within the hold
+  # window). Supports stronger punch during bursts than activation suggests.
+  activation_rate: 0.06
   typical_hold_seconds: [120, 1200]
   default_conviction: 0.7
   cooldown_seconds: 60

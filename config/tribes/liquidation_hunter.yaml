@@ -47,7 +47,13 @@ personality:
   herding: 0.3
 
 flow:
+  # weight is OVERRIDDEN at load time (see derive.py). Value below = pre-derivation hand-tune.
   weight: 0.08
+  # Specialist bots scan OI + liq tape continuously. They only act when a
+  # cascade threshold fires, but the scan cadence is sub-second, so within
+  # any 15s tick ~12% have an active position-scaling order. Coinglass pro
+  # data + academic work on liq-cascade bots supports this range.
+  activation_rate: 0.12
   typical_hold_seconds: [120, 1800]
   default_conviction: 0.75
   cooldown_seconds: 60
