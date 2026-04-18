@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PAM Council</title>
+<style>
+  :root {
+    --bg:#0b0f19; --bg2:#111827; --bg3:#1f2937;
+    --fg:#e5e7eb; --muted:#94a3b8; --border:#1f2937;
+    --accent:#fbbf24; --buy:#4ade80; --sell:#f87171; --neutral:#64748b;
+    --mono:'SF Mono','Consolas','Menlo',monospace;
+    --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);
+    height:100vh;display:flex;flex-direction:column;font-size:13px;overflow:hidden}
+  header{display:flex;align-items:center;gap:28px;padding:12px 20px;
+    border-bottom:1px solid var(--border);background:var(--bg2)}
+  .brand{font-weight:700;letter-spacing:.2em;color:var(--accent);font-size:13px}
+  .hdr-item{display:flex;flex-direction:column;gap:2px}
+  .hdr-item .k{font-size:10px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase}
+  .hdr-item .v{font-family:var(--mono);font-size:15px}
+  .spacer{flex:1}
+  #conn{padding:3px 10px;border-radius:3px;font-size:10px;background:var(--bg3);
+    letter-spacing:.1em;text-transform:uppercase}
+  #conn.live{background:var(--buy);color:var(--bg)}
+  #conn.dead{background:var(--sell);color:var(--bg)}
+
+  main{flex:1;display:grid;grid-template-columns:380px 1fr 340px;
+    gap:1px;background:var(--border);overflow:hidden}
+  main>section{background:var(--bg);padding:14px;overflow:auto}
+  .title{font-size:10px;color:var(--muted);text-transform:uppercase;
+    letter-spacing:.15em;margin:0 0 12px 0;font-weight:600}
+
+  /* TRIBE CARDS */
+  .card{background:var(--bg2);border:1px solid var(--border);
+    border-left:3px solid var(--neutral);padding:9px 11px;margin-bottom:8px;
+    border-radius:3px;transition:border-left-color .3s}
+  .card.buy{border-left-color:var(--buy)}
+  .card.sell{border-left-color:var(--sell)}
+  .card .r1{display:flex;align-items:center;gap:8px}
+  .card .icon{font-size:16px}
+  .card .name{flex:1;font-weight:600;font-size:12px}
+  .card .w{font-family:var(--mono);font-size:10px;color:var(--muted)}
+  .card .r2{display:flex;align-items:center;gap:8px;margin-top:5px}
+  .card .side{font-family:var(--mono);font-size:10px;width:52px;
+    text-transform:uppercase;letter-spacing:.05em}
+  .card.buy .side{color:var(--buy)}
+  .card.sell .side{color:var(--sell)}
+  .card.abstain .side{color:var(--muted)}
+  .bar{flex:1;height:4px;background:var(--bg3);border-radius:2px;overflow:hidden}
+  .bar>i{display:block;height:100%;background:var(--neutral);transition:width .25s}
+  .card.buy .bar>i{background:var(--buy)}
+  .card.sell .bar>i{background:var(--sell)}
+  .card .why{font-size:10px;color:var(--muted);margin-top:5px;
+    font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+  /* CENTER */
+  .center{display:flex;flex-direction:column;gap:14px}
+  .gauge{position:relative;height:90px;background:var(--bg2);border-radius:4px;
+    display:flex;align-items:center;justify-content:center}
+  .gauge-lbl{position:absolute;top:10px;left:14px;font-size:10px;color:var(--muted);
+    letter-spacing:.15em;text-transform:uppercase}
+  .gauge-val{position:absolute;top:10px;right:14px;font-family:var(--mono);font-size:15px}
+  .track{position:relative;width:92%;height:22px;border-radius:11px;
+    background:linear-gradient(to right,
+      rgba(248,113,113,.35) 0%,rgba(100,116,139,.2) 50%,rgba(74,222,128,.35) 100%)}
+  .marker{position:absolute;top:-5px;width:4px;height:32px;border-radius:2px;
+    background:var(--fg);left:50%;transition:left .3s cubic-bezier(.2,.7,.2,1);
+    box-shadow:0 0 10px rgba(255,255,255,.6)}
+
+  .metrics{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+  .m{background:var(--bg2);padding:12px;border-radius:4px;text-align:center}
+  .m .k{font-size:10px;color:var(--muted);letter-spacing:.1em;
+    text-transform:uppercase;margin-bottom:5px}
+  .m .v{font-family:var(--mono);font-size:22px;font-weight:600}
+
+  .proj{background:var(--bg2);border-radius:4px;padding:14px}
+  .proj-ttl{font-size:10px;color:var(--muted);letter-spacing:.15em;
+    text-transform:uppercase;margin-bottom:10px}
+  .proj-bars{display:flex;align-items:center;gap:2px;height:96px;
+    border-top:1px dashed var(--border);border-bottom:1px dashed var(--border);
+    position:relative}
+  .proj-bars::before{content:"";position:absolute;top:50%;left:0;right:0;
+    height:1px;background:var(--border)}
+  .pb{flex:1;position:relative;height:100%}
+  .pb>i{position:absolute;left:15%;width:70%;border-radius:2px;
+    transition:height .25s,top .25s,bottom .25s,background .25s}
+  .proj-lbl{display:flex;justify-content:space-between;font-size:10px;
+    color:var(--muted);margin-top:6px;font-family:var(--mono)}
+
+  /* RIGHT */
+  .right{display:flex;flex-direction:column;gap:14px}
+  .box{background:var(--bg2);border-radius:4px;padding:12px}
+  .box .k{display:flex;justify-content:space-between;font-size:10px;
+    color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px}
+  .box .k .v{font-family:var(--mono);color:var(--fg);letter-spacing:0}
+  canvas{display:block;width:100%;height:72px}
+  .pos{border-left:3px solid var(--neutral)}
+  .pos.long{border-left-color:var(--buy)}
+  .pos.short{border-left-color:var(--sell)}
+  .pos .k{margin-bottom:4px}
+  .pos .side{font-family:var(--mono);font-size:20px;font-weight:700;letter-spacing:.05em}
+  .pos.long .side{color:var(--buy)}
+  .pos.short .side{color:var(--sell)}
+  .pos.flat .side{color:var(--muted)}
+  .pos .meta{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:5px}
+
+  /* FEED */
+  footer{height:130px;background:var(--bg2);border-top:1px solid var(--border);
+    padding:10px 20px;overflow:hidden}
+  .feed-ttl{font-size:10px;color:var(--muted);letter-spacing:.15em;
+    text-transform:uppercase;margin-bottom:6px}
+  .feed{font-family:var(--mono);font-size:11px;line-height:1.5}
+  .f-liquidation{color:var(--sell)}
+  .f-funding{color:var(--accent)}
+  .f-trade{color:var(--muted)}
+</style>
+</head>
+<body>
+<header>
+  <span class="brand">⟁ PAM COUNCIL</span>
+  <div class="hdr-item"><span class="k">BTC-PERP</span><span class="v" id="h-price">—</span></div>
+  <div class="hdr-item"><span class="k">Equity</span><span class="v" id="h-equity">—</span></div>
+  <div class="hdr-item"><span class="k">Trades W/T</span><span class="v" id="h-trades">—</span></div>
+  <div class="hdr-item"><span class="k">Tick</span><span class="v" id="h-tick">—</span></div>
+  <span class="spacer"></span>
+  <span id="conn">connecting</span>
+</header>
+
+<main>
+  <section>
+    <h2 class="title">Tribes · weighted vote</h2>
+    <div id="cards"></div>
+  </section>
+
+  <section class="center">
+    <div class="gauge">
+      <span class="gauge-lbl">Net Pressure</span>
+      <span class="gauge-val" id="g-val">+0.000</span>
+      <div class="track"><div class="marker" id="g-mark"></div></div>
+    </div>
+    <div class="metrics">
+      <div class="m"><div class="k">Expected Move</div><div class="v" id="m-emove">—</div></div>
+      <div class="m"><div class="k">Confidence</div><div class="v" id="m-conf">—</div></div>
+      <div class="m"><div class="k">Uncertainty</div><div class="v" id="m-unc">—</div></div>
+    </div>
+    <div class="proj">
+      <div class="proj-ttl">Chess Projection · 5min horizon (20 × 15s)</div>
+      <div class="proj-bars" id="p-bars"></div>
+      <div class="proj-lbl">
+        <span>+15s</span><span>+75s</span><span>+150s</span><span>+225s</span><span>+300s</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="right">
+    <div class="box">
+      <div class="k"><span>Price</span><span class="v" id="price-d">—</span></div>
+      <canvas id="price-c"></canvas>
+    </div>
+    <div class="box">
+      <div class="k"><span>Equity</span><span class="v" id="eq-d">—</span></div>
+      <canvas id="eq-c"></canvas>
+    </div>
+    <div class="box pos flat" id="pos-box">
+      <div class="k"><span>Position</span></div>
+      <div class="side" id="pos-side">FLAT</div>
+      <div class="meta" id="pos-meta"></div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="feed-ttl">Event Feed</div>
+  <div class="feed" id="feed"></div>
+</footer>
+
+<script>
+(()=>{
+  const ICONS={retail_app_newbie:'📱',retail_degen_leveraged:'🎰',ta_day_trader:'📊',
+    swing_trend_follower:'🧭',mm_algo:'⚙️',liquidation_hunter:'🎯',
+    contrarian_funding_fader:'⚖️',news_fader:'📰'};
+  const $=id=>document.getElementById(id);
+  const fmt=(n,d=2)=>n==null?'—':n.toLocaleString(undefined,{minimumFractionDigits:d,maximumFractionDigits:d});
+  const bps=n=>n==null?'—':(n>=0?'+':'')+n.toFixed(1)+'bps';
+  const px=n=>'$'+fmt(n,2);
+
+  const priceHist=[],eqHist=[];const MAX=240;let p0=null,e0=null;
+
+  async function loadTribes(){
+    const r=await fetch('/api/tribes');const ts=await r.json();
+    ts.sort((a,b)=>b.weight-a.weight);
+    const root=$('cards');root.innerHTML='';
+    for(const t of ts){
+      const el=document.createElement('div');el.className='card abstain';el.id='tc-'+t.id;
+      el.innerHTML=`
+        <div class="r1">
+          <span class="icon">${ICONS[t.id]||'◆'}</span>
+          <span class="name">${t.name}</span>
+          <span class="w">w ${t.weight.toFixed(2)}</span>
+        </div>
+        <div class="r2">
+          <span class="side">ABSTAIN</span>
+          <div class="bar"><i style="width:0%"></i></div>
+        </div>
+        <div class="why">—</div>`;
+      root.appendChild(el);
+    }
+  }
+
+  function onTick(t){
+    $('h-price').textContent=px(t.price);
+    $('h-equity').textContent=px(t.equity_usd);
+    $('h-trades').textContent=`${t.wins}/${t.trades}`;
+    $('h-tick').textContent=t.tick;
+
+    const pct=((t.net_pressure+1)/2)*100;
+    $('g-mark').style.left=pct+'%';
+    $('g-val').textContent=(t.net_pressure>=0?'+':'')+t.net_pressure.toFixed(3);
+
+    const emv=$('m-emove');emv.textContent=bps(t.expected_move_bps);
+    emv.style.color=t.expected_move_bps>0?'var(--buy)':t.expected_move_bps<0?'var(--sell)':'var(--fg)';
+    $('m-conf').textContent=t.confidence.toFixed(2);
+    $('m-unc').textContent=t.uncertainty.toFixed(2);
+
+    renderProjection(t.forecast_steps||[]);
+
+    for(const v of t.votes){
+      const c=$('tc-'+v.tribe_id);if(!c)continue;
+      c.classList.remove('buy','sell','abstain');c.classList.add(v.side);
+      c.querySelector('.side').textContent=v.side.toUpperCase();
+      c.querySelector('.bar>i').style.width=(v.conviction*100)+'%';
+      c.querySelector('.why').textContent=v.reason||'—';
+    }
+
+    if(p0==null)p0=t.price;priceHist.push(t.price);if(priceHist.length>MAX)priceHist.shift();
+    const pd=((t.price-p0)/p0)*100;
+    $('price-d').textContent=(pd>=0?'+':'')+pd.toFixed(2)+'%';
+    draw('price-c',priceHist,pd>=0?'#4ade80':'#f87171');
+
+    if(e0==null)e0=t.equity_usd;eqHist.push(t.equity_usd);if(eqHist.length>MAX)eqHist.shift();
+    const ed=((t.equity_usd-e0)/e0)*100;
+    $('eq-d').textContent=(ed>=0?'+':'')+ed.toFixed(2)+'%';
+    draw('eq-c',eqHist,ed>=0?'#4ade80':'#f87171');
+
+    const box=$('pos-box');box.classList.remove('long','short','flat');
+    if(!t.position){
+      box.classList.add('flat');$('pos-side').textContent='FLAT';$('pos-meta').textContent='';
+    }else{
+      const long=t.position.side==='buy';box.classList.add(long?'long':'short');
+      $('pos-side').textContent=long?'LONG':'SHORT';
+      $('pos-meta').textContent=`$${fmt(t.position.size_usd)} @ ${fmt(t.position.entry_price)}`;
+    }
+  }
+
+  function renderProjection(steps){
+    const root=$('p-bars');root.innerHTML='';
+    const mx=Math.max(.05,...steps.map(s=>Math.abs(s.net_pressure||0)));
+    for(const s of steps){
+      const p=s.net_pressure||0;
+      const bar=document.createElement('div');bar.className='pb';
+      const h=Math.abs(p)/mx*48;
+      const fill=document.createElement('i');
+      fill.style.background=p>0?'var(--buy)':p<0?'var(--sell)':'var(--neutral)';
+      if(p>=0){fill.style.bottom='50%';fill.style.height=h+'%'}
+      else{fill.style.top='50%';fill.style.height=h+'%'}
+      bar.appendChild(fill);root.appendChild(bar);
+    }
+  }
+
+  function draw(id,data,color){
+    const c=$(id);const dpr=window.devicePixelRatio||1;
+    const w=c.clientWidth,h=c.clientHeight;
+    c.width=w*dpr;c.height=h*dpr;
+    const ctx=c.getContext('2d');ctx.scale(dpr,dpr);ctx.clearRect(0,0,w,h);
+    if(data.length<2)return;
+    const lo=Math.min(...data),hi=Math.max(...data);const r=hi-lo||1;
+    ctx.strokeStyle=color;ctx.lineWidth=1.5;ctx.beginPath();
+    data.forEach((v,i)=>{
+      const x=(i/(data.length-1))*w;
+      const y=h-((v-lo)/r)*(h-6)-3;
+      if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);
+    });
+    ctx.stroke();
+  }
+
+  function onEvent(ev){
+    const feed=$('feed');const line=document.createElement('div');
+    line.className='f-'+ev.kind;
+    const time=new Date(ev.ts).toLocaleTimeString();
+    let txt='';
+    if(ev.kind==='liquidation'){
+      const n=ev.payload.notional_usd||0;
+      const s=ev.tags.includes('liq_long')?'LONG':'SHORT';
+      txt=`[${time}] LIQ ${s} $${fmt(n,0)} @ ${fmt(ev.payload.price)}`;
+    }else if(ev.kind==='trade'){
+      const n=ev.payload.notional_usd||0;
+      const s=ev.payload.is_sell_aggressor?'SELL':'BUY';
+      txt=`[${time}] ${s}  $${fmt(n,0)} @ ${fmt(ev.payload.price)}`;
+    }else if(ev.kind==='funding'){
+      txt=`[${time}] FUNDING ${(ev.payload.funding_rate*100).toFixed(4)}%  mark ${fmt(ev.payload.mark_price)}`;
+    }else return;
+    line.textContent=txt;
+    feed.insertBefore(line,feed.firstChild);
+    while(feed.children.length>8)feed.removeChild(feed.lastChild);
+  }
+
+  let ws=null;
+  function connect(){
+    const proto=location.protocol==='https:'?'wss:':'ws:';
+    ws=new WebSocket(`${proto}//${location.host}/ws`);
+    ws.onopen=()=>{const c=$('conn');c.textContent='live';c.className='live'};
+    ws.onmessage=e=>{const m=JSON.parse(e.data);
+      if(m.type==='tick')onTick(m);else if(m.type==='event')onEvent(m)};
+    ws.onclose=()=>{const c=$('conn');c.textContent='disconnected';c.className='dead';
+      setTimeout(connect,2000)};
+    ws.onerror=()=>ws.close();
+  }
+
+  loadTribes().then(connect);
+})();
+</script>
+</body>
+</html>

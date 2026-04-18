@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "pam-council-dashboard",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "scripts.run_bot_ui"],
+      "port": 8765
+    }
+  ]
+}

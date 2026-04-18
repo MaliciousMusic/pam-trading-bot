@@ -1,0 +1,52 @@
+id: swing_trend_follower
+name: Swing Trend Follower
+description: >-
+  Multi-day positional trader. Doesn't care about noise — only acts on persistent
+  regime shifts. Most 15s ticks they abstain. When they do act, size is larger
+  and holds are long. Funding-aware: won't pile into continuation when the
+  crowded side is already paying heavy funding against the move.
+
+demographics:
+  capital_band_usd: [10000, 500000]
+  count_estimate: 30000
+  experience_years: [3, 20]
+  jurisdiction: [NA, EU, APAC]
+
+hardware:
+  tier: workstation
+  typical_latency_ms: 300
+  uptime: continuous
+
+software:
+  platforms: [binance_pro, kraken_pro, coinbase_advanced, deribit]
+  tools: [tradingview_premium, bookmap_basic, spreadsheet_risk]
+  charting: advanced
+  order_types_used: [limit, iceberg, stop_limit]
+  data_feeds: [ohlcv_daily, ohlcv_4h, funding, oi_time_series, macro]
+
+strategy:
+  family: trend_follower
+  params:
+    trend_window_seconds: 300
+    min_persistent_move_bps: 90
+    funding_guard: 0.0008
+    hold_seconds: 3600
+
+attention:
+  kinds: [trade, funding, news]
+  tags: [mark_price, funding, macro]
+  ignored_tags: [liq_long, liq_short]
+  min_severity: 0.5
+
+personality:
+  risk_tolerance: 0.5
+  fomo: 0.15
+  panic: 0.2
+  patience: 0.85
+  herding: 0.2
+
+flow:
+  weight: 0.05
+  typical_hold_seconds: [3600, 259200]
+  default_conviction: 0.7
+  cooldown_seconds: 300

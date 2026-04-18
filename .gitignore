@@ -16,6 +16,9 @@ logs/
 .vscode/
 *.swp
 
+# Claude Code local session state
+.claude/settings.local.json
+
 # OS
 .DS_Store
 Thumbs.db

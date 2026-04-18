@@ -1,0 +1,36 @@
+mode: paper                   # paper | live
+exchange: binance_perps
+symbol: BTCUSDT
+base_capital_usd: 5000        # used when mode=live; paper sizes off this too
+
+clock:
+  tick_seconds: 15            # voting cadence
+  projector_steps: 20         # chess forward sim depth (5 min horizon at 15s/step)
+
+risk:
+  max_concurrent_positions: 1
+  per_trade_risk_pct: 1.0     # % of equity at risk per trade
+  min_hold_seconds: 30
+  max_hold_seconds: 600
+
+decision:
+  min_expected_move_bps: 15   # must beat fees + slippage by a margin
+  min_confidence: 0.25
+  max_uncertainty: 0.85
+  reversal_factor: 1.2        # how strongly forecast must flip to kill a position
+
+projector:
+  bps_per_unit_pressure: 8.0  # linear kernel: net_pressure=1.0 → 8bps per step
+  confidence_decay: 0.9       # multiplicative per step
+
+execution:
+  fee_rate_bps: 5.0
+  slippage_bps: 2.0
+
+ui:
+  host: 127.0.0.1
+  port: 8765
+
+logging:
+  level: INFO
+  dir: logs

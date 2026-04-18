@@ -1,0 +1,57 @@
+id: retail_degen_leveraged
+name: Retail Degen (Leveraged Perps)
+description: >-
+  Active retail running 10x–50x perps on Binance/Bybit/BitMEX. Piles onto whatever
+  is ripping, doubles down into moves, gets liquidated often. Short attention,
+  short holds, responds to print flow and especially to liquidation cascades.
+
+demographics:
+  capital_band_usd: [100, 5000]
+  count_estimate: 400000
+  experience_years: [0.5, 4]
+  jurisdiction: [APAC, CIS, LATAM, EU]
+
+hardware:
+  tier: laptop
+  typical_latency_ms: 500
+  uptime: intermittent
+  specs:
+    screens: 1-2
+    connectivity: home_broadband
+
+software:
+  platforms: [binance_pro, bybit, bitmex, blofin]
+  tools: [tradingview_free, telegram_signal_groups]
+  charting: basic
+  order_types_used: [market, limit, stop_market]
+  data_feeds: [price_ticker, liquidation_feed, telegram_groups]
+
+strategy:
+  family: momentum_chaser
+  params:
+    flow_window_seconds: 60
+    min_net_flow_usd: 250000
+    liq_amplifier: 1.8
+    hold_seconds: 120
+  style_notes: >-
+    Chases short-window taker flow. Liquidation prints amplify signal strongly —
+    a long-liq cascade pulls them strongly into shorts ("the flush").
+
+attention:
+  kinds: [trade, liquidation]
+  tags: [taker_buy, taker_sell, liq_long, liq_short]
+  ignored_tags: [funding]
+  min_severity: 0.2
+
+personality:
+  risk_tolerance: 0.95
+  fomo: 0.8
+  panic: 0.6
+  patience: 0.15
+  herding: 0.8
+
+flow:
+  weight: 0.18
+  typical_hold_seconds: [60, 600]
+  default_conviction: 0.7
+  cooldown_seconds: 30
