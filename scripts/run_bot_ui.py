@@ -90,6 +90,9 @@ async def main() -> None:
         "size_min_pct": float(cfg["sizing"]["min_pct_equity"]),
         "size_max_pct": float(cfg["sizing"]["max_pct_equity"]),
         "sizing_curve": str(cfg["sizing"]["curve"]),
+        "bps_per_unit_pressure": float(cfg["projector"]["bps_per_unit_pressure"]),
+        "projector_steps": int(cfg["clock"]["projector_steps"]),
+        "tick_seconds": int(cfg["clock"]["tick_seconds"]),
     }
     app = create_app(broadcaster, _tribe_meta(tribes), ui_cfg)
 

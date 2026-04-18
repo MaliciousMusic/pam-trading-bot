@@ -141,6 +141,10 @@
   .f-liquidation{color:var(--sell)}
   .f-funding{color:var(--accent)}
   .f-trade{color:var(--muted)}
+  .f-social_pulse{color:#c084fc}
+  .f-social_pulse.bear{color:#f87171}
+  .f-social_pulse.bull{color:#4ade80}
+  .f-sentiment{color:var(--accent)}
 
   .legend{display:flex;gap:12px;font-family:var(--mono);font-size:9.5px;
     color:var(--muted);letter-spacing:.05em}
@@ -266,7 +270,9 @@
   const voteHistory={};           // id → ring of last N sides
   const priceHist=[],eqHist=[];const MAX=240;let p0=null,e0=null;
   let CFG={min_confidence:0.15,min_expected_move_bps:8,max_uncertainty:0.9,
-           size_min_pct:0.5,size_max_pct:4.0,sizing_curve:'linear'};
+           size_min_pct:0.5,size_max_pct:4.0,sizing_curve:'linear',
+           bps_per_unit_pressure:8.0,projector_steps:20,tick_seconds:15};
+  let lastForecastSteps=[];    // retained so price chart can draw the projection overlay
 
   function tribePos(i,n){
     const a=(i/n)*2*Math.PI - Math.PI/2;
@@ -486,10 +492,11 @@
     // council flow animation
     spawnFlows(t.votes, np);
 
+    lastForecastSteps=t.forecast_steps||[];
     if(p0==null)p0=t.price;priceHist.push(t.price);if(priceHist.length>MAX)priceHist.shift();
     const pd=((t.price-p0)/p0)*100;
     $('price-d').textContent=(pd>=0?'+':'')+pd.toFixed(2)+'%';
-    draw('price-c',priceHist,pd>=0?'#4ade80':'#f87171');
+    drawPriceWithProjection('price-c',priceHist,lastForecastSteps,t.price,pd>=0?'#4ade80':'#f87171');
 
     if(e0==null)e0=t.equity_usd;eqHist.push(t.equity_usd);if(eqHist.length>MAX)eqHist.shift();
     const ed=((t.equity_usd-e0)/e0)*100;
@@ -540,6 +547,49 @@
     ctx.stroke();
   }
 
+  // Price canvas with forward projection overlay. Historic prices occupy
+  // the left (hist.length/(hist.length+proj.length)) fraction of canvas;
+  // projected prices extend in yellow on the right. Projected price at
+  // step i = currentPrice * (1 + cumulative_bps[i]/10000) where
+  // cumulative_bps[i] = sum(net_pressure[0..i]) * bps_per_unit_pressure.
+  function drawPriceWithProjection(id,hist,steps,currentPrice,histColor){
+    const c=$(id);const dpr=window.devicePixelRatio||1;
+    const w=c.clientWidth,h=c.clientHeight;
+    c.width=w*dpr;c.height=h*dpr;
+    const ctx=c.getContext('2d');ctx.scale(dpr,dpr);ctx.clearRect(0,0,w,h);
+    if(hist.length<2)return;
+
+    const proj=[];let cumBps=0;
+    for(const s of steps){cumBps+=(s.net_pressure||0)*CFG.bps_per_unit_pressure;
+      proj.push(currentPrice*(1+cumBps/10000));}
+
+    const all=proj.length?hist.concat(proj):hist;
+    const lo=Math.min(...all),hi=Math.max(...all);const r=hi-lo||1;
+    const total=hist.length+proj.length-1;
+    const xAt=i=>(i/total)*w;
+    const yAt=v=>h-((v-lo)/r)*(h-6)-3;
+
+    // historic
+    ctx.strokeStyle=histColor;ctx.lineWidth=1.5;ctx.beginPath();
+    hist.forEach((v,i)=>{const x=xAt(i),y=yAt(v);
+      if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);});
+    ctx.stroke();
+
+    if(!proj.length)return;
+
+    // vertical separator at "now"
+    const nowX=xAt(hist.length-1);
+    ctx.strokeStyle='rgba(148,163,184,.25)';ctx.lineWidth=1;
+    ctx.setLineDash([2,3]);ctx.beginPath();
+    ctx.moveTo(nowX,2);ctx.lineTo(nowX,h-2);ctx.stroke();ctx.setLineDash([]);
+
+    // projection in accent yellow, continuing from the last historic point
+    ctx.strokeStyle='#fbbf24';ctx.lineWidth=1.5;ctx.beginPath();
+    ctx.moveTo(nowX,yAt(hist[hist.length-1]));
+    proj.forEach((v,i)=>{ctx.lineTo(xAt(hist.length+i),yAt(v));});
+    ctx.stroke();
+  }
+
   function onEvent(ev){
     const feed=$('feed');const line=document.createElement('div');
     line.className='f-'+ev.kind;
@@ -555,6 +605,14 @@
       txt=`[${time}] ${s}  $${fmt(n,0)} @ ${fmt(ev.payload.price)}`;
     }else if(ev.kind==='funding'){
       txt=`[${time}] FUNDING ${(ev.payload.funding_rate*100).toFixed(4)}%  mark ${fmt(ev.payload.mark_price)}`;
+    }else if(ev.kind==='social_pulse'){
+      const sc=ev.payload.score||0;
+      const arrow=sc>0?'▲':'▼';
+      line.classList.add(sc>0?'bull':'bear');
+      txt=`[${time}] r/${ev.payload.subreddit} ${arrow}${sc.toFixed(2)}  ${(ev.payload.title||'').slice(0,80)}`;
+    }else if(ev.kind==='sentiment'){
+      const v=ev.payload.value;
+      txt=`[${time}] FGI ${v}/100  ${ev.payload.classification||''}`;
     }else return;
     line.textContent=txt;
     feed.insertBefore(line,feed.firstChild);

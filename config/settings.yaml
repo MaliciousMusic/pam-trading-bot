@@ -13,8 +13,8 @@ risk:
   max_hold_seconds: 600
 
 decision:
-  min_expected_move_bps: 8    # must beat fees + slippage by a margin
-  min_confidence: 0.15        # floor to even consider a trade — below this we always hold
+  min_expected_move_bps: 4    # lowered from 8; realistic market rarely projects >8bps cumulative
+  min_confidence: 0.08        # lowered from 0.15; signal_quality × directional rarely hits that
   max_uncertainty: 0.90
   reversal_factor: 1.2        # how strongly forecast must flip to kill a position
 
