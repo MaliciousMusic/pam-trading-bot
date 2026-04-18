@@ -20,15 +20,19 @@ from ..tribes.market_state import MarketState
 class DecisionEngine:
     def __init__(self, settings: dict) -> None:
         d = settings.get("decision", {})
-        self.min_expected_move_bps = float(d.get("min_expected_move_bps", 15.0))
-        self.min_confidence = float(d.get("min_confidence", 0.25))
-        self.max_uncertainty = float(d.get("max_uncertainty", 0.85))
+        self.min_expected_move_bps = float(d.get("min_expected_move_bps", 8.0))
+        self.min_confidence = float(d.get("min_confidence", 0.15))
+        self.max_uncertainty = float(d.get("max_uncertainty", 0.90))
         self.reversal_factor = float(d.get("reversal_factor", 1.2))
 
         r = settings.get("risk", {})
-        self.per_trade_risk_pct = float(r.get("per_trade_risk_pct", 1.0))
         self.min_hold_seconds = int(r.get("min_hold_seconds", 30))
         self.max_hold_seconds = int(r.get("max_hold_seconds", 600))
+
+        s = settings.get("sizing", {})
+        self.size_min_pct = float(s.get("min_pct_equity", 0.5))
+        self.size_max_pct = float(s.get("max_pct_equity", 4.0))
+        self.size_curve = str(s.get("curve", "linear")).lower()
 
     def decide(
         self,
@@ -70,16 +74,33 @@ class DecisionEngine:
         if abs(emove) < self.min_expected_move_bps:
             return self._hold(ts, price, emove, conf, f"emove {emove:+.1f}bps below threshold")
 
-        size_usd = max(0.0, equity_usd * self.per_trade_risk_pct / 100.0 * 100.0)
-        # (risk_pct is % of equity; we treat it as notional for the paper exec.
-        # A proper stop-based sizing will replace this once we add stops.)
+        pct = self._size_pct(conf)
+        size_usd = equity_usd * pct / 100.0
         horizon = min(self.max_hold_seconds, max(self.min_hold_seconds, forecast.horizon_seconds))
         action = "open_long" if emove > 0 else "open_short"
         return TradeIntent(
             ts=ts, action=action, size_usd=size_usd, price_ref=price,
-            reason=f"emove {emove:+.1f}bps conf={conf:.2f} unc={unc:.2f} horizon={horizon}s",
+            reason=(f"emove {emove:+.1f}bps conf={conf:.2f} unc={unc:.2f} "
+                    f"size={pct:.2f}%({self.size_curve}) horizon={horizon}s"),
             expected_move_bps=emove, confidence=conf,
         )
+
+    def _size_pct(self, conf: float) -> float:
+        """Map forecast confidence → % of equity injected into the trade.
+        At conf = min_confidence, use `min_pct_equity`. At conf = 1.0, use
+        `max_pct_equity`. `linear` is proportional; `quadratic` weights big
+        confidence much more than small — together the two curves let us
+        ask empirically whether high-conf edges are a linear or convex
+        phenomenon. Clamped at the bracket ends."""
+        lo = self.min_confidence
+        if conf <= lo:
+            return self.size_min_pct
+        if conf >= 1.0:
+            return self.size_max_pct
+        t = (conf - lo) / max(1.0 - lo, 1e-9)
+        if self.size_curve == "quadratic":
+            t = t * t
+        return self.size_min_pct + (self.size_max_pct - self.size_min_pct) * t
 
     # -- helpers ---------------------------------------------------------
 
