@@ -1,0 +1,55 @@
+id: news_fader
+name: News Fader
+description: >-
+  Fast-response pros who fade the initial overreaction to high-severity
+  headlines. Currently unwired — `news_reactor` strategy abstains until
+  a news source ingester is added. The tribe is already modeled so that
+  when we switch on the news feed, its voice starts contributing
+  without any architectural change.
+
+demographics:
+  capital_band_usd: [50000, 1000000]
+  count_estimate: 2000
+  experience_years: [3, 15]
+  jurisdiction: [NA, EU, APAC]
+
+hardware:
+  tier: workstation
+  typical_latency_ms: 150
+  uptime: continuous
+  specs:
+    screens: 2-4
+    connectivity: fiber
+
+software:
+  platforms: [binance_pro, bybit, deribit]
+  tools: [news_wire_api, tree_of_alpha_equivalent, custom_event_sniper]
+  charting: advanced
+  order_types_used: [market, ioc_limit]
+  data_feeds: [cryptopanic, news_api, tree_of_alpha, exchange_announcements]
+
+strategy:
+  family: news_reactor
+  params:
+    hold_seconds: 300
+  style_notes: >-
+    Placeholder behavior — will activate when `kind=news` events start flowing.
+
+attention:
+  kinds: [news]
+  tags: [headline, macro, regulatory, hack, exchange_announcement]
+  ignored_tags: [orderbook_tick]
+  min_severity: 0.6
+
+personality:
+  risk_tolerance: 0.65
+  fomo: 0.2
+  panic: 0.2
+  patience: 0.5
+  herding: 0.25
+
+flow:
+  weight: 0.05
+  typical_hold_seconds: [120, 1200]
+  default_conviction: 0.7
+  cooldown_seconds: 60

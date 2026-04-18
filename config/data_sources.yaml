@@ -1,0 +1,34 @@
+# Registry of data sources. Each source emits normalized Events onto the bus.
+# `enabled: true` = wired now. `enabled: false` = planned, not yet implemented.
+
+sources:
+  binance_perps_ws:
+    enabled: true
+    kind: websocket
+    endpoint: wss://fstream.binance.com/stream
+    streams:
+      - btcusdt@aggTrade       # aggregated trades (taker flow)
+      - btcusdt@forceOrder     # liquidations
+      - btcusdt@markPrice@1s   # mark price + funding rate (1s cadence)
+
+  binance_perps_depth:
+    enabled: false             # will add once ingest/tribe plumbing is stable
+    kind: websocket
+    endpoint: wss://fstream.binance.com/stream
+    streams:
+      - btcusdt@depth20@100ms
+
+  coinglass_oi:
+    enabled: false             # open interest aggregated across venues (free tier)
+    kind: rest_poll
+    poll_seconds: 60
+
+  cryptopanic_news:
+    enabled: false             # free news feed
+    kind: rest_poll
+    poll_seconds: 30
+
+  reddit_public:
+    enabled: false             # r/Bitcoin, r/CryptoCurrency, r/BitcoinMarkets hot posts
+    kind: rest_poll
+    poll_seconds: 60

@@ -1,0 +1,53 @@
+id: ta_day_trader
+name: TA Day Trader
+description: >-
+  Screen-trader with TradingView premium + Binance pro or Bybit. Mid-size capital,
+  disciplined setups — waits for range breaks, retests, volume confirmation.
+  Not glued to every tick; reacts when a clean setup prints.
+
+demographics:
+  capital_band_usd: [2000, 50000]
+  count_estimate: 120000
+  experience_years: [1, 8]
+  jurisdiction: [global]
+
+hardware:
+  tier: workstation
+  typical_latency_ms: 200
+  uptime: continuous
+  specs:
+    screens: 2-4
+    connectivity: fiber
+
+software:
+  platforms: [binance_pro, bybit, okx]
+  tools: [tradingview_premium, tradingview_alerts, tradelocker]
+  charting: advanced
+  order_types_used: [limit, stop_limit, oco]
+  data_feeds: [ohlcv, orderbook, funding, oi_snapshot]
+
+strategy:
+  family: breakout_trader
+  params:
+    range_window_seconds: 300        # 5-min range
+    break_buffer_bps: 6
+    hold_seconds: 240
+
+attention:
+  kinds: [trade, funding]
+  tags: [price, taker_buy, taker_sell, mark_price]
+  ignored_tags: [liq_long, liq_short]
+  min_severity: 0.2
+
+personality:
+  risk_tolerance: 0.55
+  fomo: 0.35
+  panic: 0.3
+  patience: 0.65
+  herding: 0.35
+
+flow:
+  weight: 0.12
+  typical_hold_seconds: [300, 3600]
+  default_conviction: 0.65
+  cooldown_seconds: 60

@@ -1,0 +1,49 @@
+id: contrarian_funding_fader
+name: Contrarian Funding Fader
+description: >-
+  Capital that patiently fades extreme perps funding. When longs are paying
+  heavy funding (crowded-long tax), they short; when shorts are paying,
+  they long. Long holds, slow cadence — a structural tribe, not a scalper.
+
+demographics:
+  capital_band_usd: [5000, 250000]
+  count_estimate: 15000
+  experience_years: [2, 12]
+  jurisdiction: [NA, EU, APAC]
+
+hardware:
+  tier: laptop
+  typical_latency_ms: 400
+  uptime: continuous
+
+software:
+  platforms: [binance_pro, bybit, okx]
+  tools: [custom_py_scanner, coinglass_free, funding_arb_sheet]
+  charting: basic
+  order_types_used: [limit, post_only_limit]
+  data_feeds: [funding, mark_price, oi]
+
+strategy:
+  family: funding_fader
+  params:
+    extreme_funding_rate: 0.0005
+    hold_seconds: 3600
+
+attention:
+  kinds: [funding]
+  tags: [funding, mark_price]
+  ignored_tags: [trade, liq_long, liq_short]
+  min_severity: 0.0
+
+personality:
+  risk_tolerance: 0.5
+  fomo: 0.1
+  panic: 0.15
+  patience: 0.9
+  herding: 0.15
+
+flow:
+  weight: 0.04
+  typical_hold_seconds: [1800, 28800]
+  default_conviction: 0.6
+  cooldown_seconds: 600

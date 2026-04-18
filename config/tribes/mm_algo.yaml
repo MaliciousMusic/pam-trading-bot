@@ -1,0 +1,57 @@
+id: mm_algo
+name: Algorithmic Market Maker
+description: >-
+  Co-located or cloud-near-matching-engine algos running passive liquidity.
+  On balanced two-way flow they're net-neutral (abstain). On MILD imbalance
+  they lean against it slightly as inventory management. On HEAVY one-sided
+  flow they PULL quotes (abstain) rather than catch knives — toxicity defense.
+
+demographics:
+  capital_band_usd: [1000000, 500000000]
+  count_estimate: 80
+  experience_years: [3, 30]
+  jurisdiction: [NA, EU, APAC, offshore]
+
+hardware:
+  tier: colo
+  typical_latency_ms: 1
+  uptime: continuous
+  specs:
+    placement: exchange_colo_or_peered
+    nics: kernel_bypass
+
+software:
+  platforms: [custom_c++_oms, custom_python_strategy, hummingbot_pro]
+  tools: [fix_dropcopy, l2_orderbook_recorder, inventory_ledger]
+  charting: custom
+  order_types_used: [post_only_limit, iceberg, cancel_replace]
+  data_feeds: [orderbook_full, trades, funding, oi, cross_venue_prices]
+
+strategy:
+  family: mean_reverter_mm
+  params:
+    flow_window_seconds: 30
+    max_imbalance_usd: 1500000
+    hold_seconds: 60
+  style_notes: >-
+    Inventory-driven. Asymmetric attention: will happily quote balanced books
+    and stay silent (abstain) when flow is too one-sided.
+
+attention:
+  kinds: [trade, orderbook_tick, funding]
+  tags: [taker_buy, taker_sell, mark_price]
+  ignored_tags: [news, social]
+  min_severity: 0.0
+
+personality:
+  risk_tolerance: 0.3
+  fomo: 0.0
+  panic: 0.0
+  patience: 0.5
+  herding: 0.0
+
+flow:
+  weight: 0.30
+  typical_hold_seconds: [5, 300]
+  default_conviction: 0.35
+  cooldown_seconds: 0

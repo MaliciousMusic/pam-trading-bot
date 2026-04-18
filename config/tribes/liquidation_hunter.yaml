@@ -1,0 +1,53 @@
+id: liquidation_hunter
+name: Liquidation Hunter
+description: >-
+  Pros watching open-interest buildup + funding skews + the liquidation tape,
+  positioning FOR cascade continuation. When big longs start getting flushed
+  they stay short into the flush, not against it.
+
+demographics:
+  capital_band_usd: [50000, 2000000]
+  count_estimate: 5000
+  experience_years: [2, 15]
+  jurisdiction: [NA, EU, APAC]
+
+hardware:
+  tier: workstation
+  typical_latency_ms: 80
+  uptime: continuous
+  specs:
+    screens: 3-6
+    connectivity: fiber
+
+software:
+  platforms: [binance_pro, bybit, okx, deribit]
+  tools: [coinglass_pro, tensorcharts, hyblock, custom_liq_scanner]
+  charting: advanced
+  order_types_used: [limit, stop_market, trailing_stop]
+  data_feeds: [liquidation_feed, oi_time_series, funding, orderbook_imbalance]
+
+strategy:
+  family: liquidation_hunter
+  params:
+    liq_window_seconds: 60
+    min_liq_usd: 750000
+    hold_seconds: 180
+
+attention:
+  kinds: [liquidation, funding, trade]
+  tags: [liq_long, liq_short, funding]
+  ignored_tags: [news, social]
+  min_severity: 0.3
+
+personality:
+  risk_tolerance: 0.65
+  fomo: 0.2
+  panic: 0.15
+  patience: 0.55
+  herding: 0.3
+
+flow:
+  weight: 0.08
+  typical_hold_seconds: [120, 1800]
+  default_conviction: 0.75
+  cooldown_seconds: 60
