@@ -24,8 +24,11 @@ class Executor(ABC):
 
     @abstractmethod
     def mark_to_market(self, ts: datetime, price: float) -> None:
-        """Auto-close any position whose TP, SL, or horizon backstop triggered
-        at or before the given mark. Called once per tick before decision."""
+        """Close positions whose max_hold backstop fired. Called once per tick."""
+
+    def evaluate_exits(self, ts: datetime, price: float, forecast) -> None:
+        """Close positions that no longer align with the council's live forecast.
+        Called each tick BEFORE mark_to_market. Default is a no-op."""
 
     @abstractmethod
     def execute(self, intent: TradeIntent, state: MarketState) -> None: ...

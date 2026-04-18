@@ -28,42 +28,31 @@ risk:
   max_hold_seconds: 600         # hard backstop if TP/SL never hit
 
 decision:
-  min_expected_move_bps: 4    # lowered from 8; realistic market rarely projects >8bps cumulative
-  # Conf = signal_quality (agreement-weighted) × directional. With participation
-  # no longer collapsing signal_quality, real agreement regularly hits 0.4-0.8,
-  # so the floor rises to a meaningful "forecast must be non-trivial" bar.
-  min_confidence: 0.25
-  # Uncertainty now = 1 - agreement (pure disagreement among voting tribes).
-  # 0.70 means "tolerate up to 30% disagreement on the CURRENT tick". Tighter
-  # than old 0.90 because 0.90 was mostly measuring low participation, not real
-  # disagreement.
-  max_uncertainty: 0.70
-  reversal_factor: 1.2        # how strongly forecast must flip to kill a position
-  # Fee-aware entry gate: the forecast expected_move must clear the
-  # ROUND-TRIP cost (entry+exit fees+slippage) with some margin, else
-  # the trade is a guaranteed loser even if the forecast is right.
-  # Round-trip cost = 2 × (fee_rate_bps + slippage_bps). With defaults that
-  # is 14 bps; we require expected_move > 14 + 2 bps margin.
-  fee_safety_margin_bps: 2.0
-  # Stop-loss: each position's SL is at `sl_ratio × expected_move_bps` against
-  # us, floored by `sl_min_bps` to avoid micro-stops on noise. TP is at the
-  # forecasted expected_move. With sl_ratio=0.7 that yields R:R ≈ 1.4:1.
-  sl_ratio: 0.7
-  sl_min_bps: 20.0
+  # Council-driven entry AND exit. Every non-flat projection opens a trade;
+  # each open position is re-evaluated every tick and closed the moment the
+  # council flips against it (emove sign reverses beyond the dead zone).
+  # No TP/SL brackets — the forecast IS the exit signal.
+  #
+  # Dead zone: how far the flipped emove must exceed 0 before closing.
+  # Prevents whipsaw when the forecast oscillates near zero.
+  exit_dead_zone_bps: 0.5
 
-# Confidence-bracketed position sizing. At conf = min_confidence we inject
-# `min_pct_equity`; at conf = 1.0 we inject `max_pct_equity`. This lets us
-# (a) take far more trades by dropping the hard conf gate toward a soft
-# size-weighted one, and (b) measure whether higher-conf trades actually
-# produce better P&L and whether that relationship is linear or exponential.
+# Confidence-weighted position sizing. At conf = 0 we inject `min_pct_equity`;
+# at conf = 1.0 we inject `max_pct_equity`. Every non-flat council projection
+# opens a trade; the council's own conf folds in agreement — noisy regimes
+# already get small positions without a hard gate.
 #
 # Curves:
-#   linear     — size grows in proportion to (conf - min_conf)
-#   quadratic  — size grows with the square; low-conf entries stay very small
+#   linear     — size grows in proportion to conf
+#   quadratic  — size grows with conf²; low-conf entries stay very small
 sizing:
   min_pct_equity: 1.0
   max_pct_equity: 6.0
   curve: linear
+  # Note: conf=0 trades get `min_pct_equity`; conf=1 gets `max_pct_equity`.
+  # There is no minimum-confidence gate — the council's own disagreement
+  # already folds into conf (agreement-weighted signal_quality), so
+  # low-conf = already-small trade.
 
 projector:
   bps_per_unit_pressure: 8.0  # linear kernel: net_pressure=1.0 → 8bps per step

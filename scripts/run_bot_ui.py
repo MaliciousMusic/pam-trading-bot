@@ -69,6 +69,7 @@ async def main() -> None:
         max_concurrent_positions=int(cfg["risk"]["max_concurrent_positions"]),
         max_total_notional_pct=float(cfg["risk"]["max_total_notional_pct"]),
         max_hold_seconds=int(cfg["risk"]["max_hold_seconds"]),
+        exit_dead_zone_bps=float(cfg["decision"].get("exit_dead_zone_bps", 0.5)),
         ledger=ledger,
     )
     projector = ChessProjector(
@@ -105,17 +106,13 @@ async def main() -> None:
 
     client = BinancePerpsWS(bus, streams=ds["streams"])
     ui_cfg = {
-        "min_confidence": float(cfg["decision"]["min_confidence"]),
-        "min_expected_move_bps": float(cfg["decision"]["min_expected_move_bps"]),
-        "max_uncertainty": float(cfg["decision"]["max_uncertainty"]),
         "size_min_pct": float(cfg["sizing"]["min_pct_equity"]),
         "size_max_pct": float(cfg["sizing"]["max_pct_equity"]),
         "sizing_curve": str(cfg["sizing"]["curve"]),
         "leverage": float(cfg.get("leverage", 1.0)),
         "max_concurrent_positions": int(cfg["risk"]["max_concurrent_positions"]),
         "max_total_notional_pct": float(cfg["risk"]["max_total_notional_pct"]),
-        "sl_ratio": float(cfg["decision"].get("sl_ratio", 0.7)),
-        "sl_min_bps": float(cfg["decision"].get("sl_min_bps", 20.0)),
+        "exit_dead_zone_bps": float(cfg["decision"].get("exit_dead_zone_bps", 0.5)),
         "bps_per_unit_pressure": float(cfg["projector"]["bps_per_unit_pressure"]),
         "projector_steps": int(cfg["clock"]["projector_steps"]),
         "tick_seconds": int(cfg["clock"]["tick_seconds"]),

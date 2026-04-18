@@ -159,11 +159,8 @@ class TradingEngine:
             logger.info("[tick {:>4}] waiting for market data...", self._tick_count)
             return
 
-        # 1) Mark-to-market: close any open position that just hit TP/SL
-        #    or aged past its horizon backstop. Must run BEFORE the decision
-        #    so equity/notional caps reflect this tick's reality.
-        self.executor.mark_to_market(ts, self.state.last_price)
-
+        # 1) Collect votes + forecast first — exits are council-driven so
+        #    we need the forecast before deciding what to close.
         raw_votes = [t.vote(ts, self.state) for t in self.tribes]
         # Skill overlay: scale each tribe's conviction by its measured
         # skill multiplier before aggregation. Multiplier is 1.0 when the
@@ -186,6 +183,15 @@ class TradingEngine:
             votes = raw_votes
         agg = aggregate_votes(votes, ts)
         forecast = self.projector.project(self.state)
+
+        # 2) Council-driven exits: close positions whose direction no longer
+        #    matches the current forecast. Must happen BEFORE the entry
+        #    decision so equity/notional caps reflect this tick's reality.
+        self.executor.evaluate_exits(ts, self.state.last_price, forecast)
+
+        # 3) Max-hold backstop (time-based hard cap, independent of forecast).
+        self.executor.mark_to_market(ts, self.state.last_price)
+
         intent = self.decision.decide(
             ts, forecast, self.state, equity_usd=self.executor.equity_usd,
         )

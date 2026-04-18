@@ -2,277 +2,336 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PAM Council</title>
 <style>
   :root {
-    --bg:#0b0f19; --bg2:#111827; --bg3:#1f2937;
-    --fg:#e5e7eb; --muted:#94a3b8; --border:#1f2937;
-    --accent:#fbbf24; --buy:#4ade80; --sell:#f87171; --neutral:#64748b;
+    --bg:#080808; --bg2:#101010; --bg3:#191919;
+    --fg:#e0e0e0; --muted:#4a4a4a; --dim:#2a2a2a;
+    --border:#161616;
+    --accent:#c8a84b;
+    --buy:#4dbb6e; --sell:#d94f4f; --neutral:#303030;
     --mono:'SF Mono','Consolas','Menlo',monospace;
     --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
   }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);
-    height:100vh;display:flex;flex-direction:column;font-size:13px;overflow:hidden}
-  header{display:flex;align-items:center;gap:28px;padding:12px 20px;
-    border-bottom:1px solid var(--border);background:var(--bg2);z-index:2}
-  .brand{font-weight:700;letter-spacing:.2em;color:var(--accent);font-size:13px}
-  .hdr-item{display:flex;flex-direction:column;gap:2px}
-  .hdr-item .k{font-size:10px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase}
-  .hdr-item .v{font-family:var(--mono);font-size:15px}
+    height:100vh;display:flex;flex-direction:column;font-size:12px;overflow:hidden}
+
+  /* ── HEADER ─────────────────────────── */
+  header{display:flex;align-items:center;gap:16px;padding:7px 16px;
+    border-bottom:1px solid var(--border);background:var(--bg2);
+    flex-shrink:0;z-index:2;overflow:hidden;min-width:0}
+  .brand{font-weight:600;letter-spacing:.25em;color:var(--muted);font-size:10px;flex-shrink:0}
+  .hdr-item{display:flex;flex-direction:column;gap:1px;flex-shrink:1;min-width:0}
+  .hdr-item .k{font-size:8.5px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;white-space:nowrap}
+  .hdr-item .v{font-family:var(--mono);font-size:14px;font-weight:600;white-space:nowrap}
   .spacer{flex:1}
-  #conn{padding:3px 10px;border-radius:3px;font-size:10px;background:var(--bg3);
-    letter-spacing:.1em;text-transform:uppercase}
-  #conn.live{background:var(--buy);color:var(--bg)}
-  #conn.dead{background:var(--sell);color:var(--bg)}
+  #btn-export{background:none;border:1px solid var(--border);color:var(--muted);
+    font-size:8.5px;letter-spacing:.1em;padding:3px 8px;border-radius:2px;cursor:pointer;
+    font-family:var(--mono)}
+  #btn-export:hover{border-color:var(--fg);color:var(--fg)}
+  #conn{padding:2px 8px;border-radius:2px;font-size:8.5px;
+    background:var(--bg3);letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+  #conn.live{background:var(--buy);color:#000}
+  #conn.dead{background:var(--sell);color:#000}
+  .curve-badge{font-family:var(--mono);font-size:9.5px;padding:1px 6px;
+    border-radius:2px;background:var(--bg3);color:var(--accent);letter-spacing:.07em}
 
-  main{flex:1;display:grid;grid-template-columns:1fr 340px;
+  /* ── MAIN 3-COLUMN GRID ─────────────── */
+  main{flex:1;display:grid;
+    grid-template-columns:minmax(160px,216px) 1fr minmax(200px,268px);
+    grid-template-rows:1fr;
     gap:1px;background:var(--border);overflow:hidden;min-height:0}
-  main>section{background:var(--bg);min-height:0}
 
-  /* ── STAGE ─────────────────────────────────────────── */
-  .stage{position:relative;overflow:hidden;
-    background:
-      radial-gradient(ellipse 60% 50% at 50% 40%, rgba(251,191,36,.04) 0%, transparent 60%),
-      radial-gradient(ellipse at center, #0f1524 0%, #0b0f19 70%)}
+  /* ── LEFT — Council (passive, compact) ─ */
+  .left-panel{display:flex;flex-direction:column;background:var(--bg);min-height:0}
+  .stage{flex:1;position:relative;overflow:hidden;min-height:0}
   .stage svg{width:100%;height:100%;display:block}
-  .stage-label{position:absolute;top:14px;left:18px;font-size:10px;
+  .stage-label{position:absolute;top:9px;left:11px;font-size:8.5px;
     color:var(--muted);letter-spacing:.2em;text-transform:uppercase;font-weight:600;z-index:1}
-  .stage-sub{position:absolute;top:30px;left:18px;font-size:10px;
-    color:#475569;letter-spacing:.05em;font-family:var(--mono);z-index:1}
-  .stage-out{position:absolute;top:14px;right:18px;font-size:10px;
-    color:var(--muted);letter-spacing:.2em;text-transform:uppercase;font-weight:600;
-    text-align:right;z-index:1}
-  .stage-out .v{display:block;font-family:var(--mono);font-size:22px;
-    letter-spacing:0;text-transform:none;color:var(--fg);font-weight:600;margin-top:4px}
+  .stage-sub{position:absolute;top:22px;left:11px;font-size:8.5px;
+    color:var(--dim);letter-spacing:.03em;font-family:var(--mono);z-index:1}
+  .stage-out{position:absolute;top:9px;right:11px;font-size:8px;
+    color:var(--muted);letter-spacing:.1em;text-transform:uppercase;
+    font-weight:600;text-align:right;z-index:1}
+  .stage-out .v{display:block;font-family:var(--mono);font-size:14px;
+    color:var(--fg);font-weight:600;letter-spacing:0;text-transform:none;margin-top:2px}
+  .stage-legend{position:absolute;bottom:7px;left:11px;z-index:1;
+    display:flex;gap:7px;font-family:var(--mono);font-size:7.5px;
+    color:var(--muted);letter-spacing:.04em}
+  .stage-legend span{display:inline-flex;align-items:center;gap:3px}
+  .stage-legend i{width:5px;height:5px;border-radius:50%}
+  .lb{background:var(--buy)}.ls{background:var(--sell)}.la{background:var(--neutral)}
 
-  /* tribe node */
-  .tribe .body{fill:#0f172a;stroke:#334155;stroke-width:1.5;
-    transition:stroke .35s, fill .35s}
-  .tribe.buy .body{stroke:var(--buy);fill:#0c1f18}
-  .tribe.sell .body{stroke:var(--sell);fill:#1f0f12}
-  .tribe .pie-bg{fill:none;stroke:rgba(100,116,139,.12);stroke-width:5}
-  .tribe .pie-seg{fill:none;stroke-width:5;transition:stroke-dasharray .4s,stroke-dashoffset .4s}
-  .tribe .emoji{font-size:22px;text-anchor:middle;dominant-baseline:central;
+  /* tribe nodes — scaled for compact column */
+  .tribe .body{fill:#090909;stroke:#252525;stroke-width:1.5;transition:stroke .35s,fill .35s}
+  .tribe.buy .body{stroke:var(--buy);fill:#090f0b}
+  .tribe.sell .body{stroke:var(--sell);fill:#0f0909}
+  .tribe .pie-bg{fill:none;stroke:rgba(80,80,80,.12);stroke-width:4}
+  .tribe .pie-seg{fill:none;stroke-width:4;transition:stroke-dasharray .4s,stroke-dashoffset .4s}
+  .tribe .emoji{font-size:15px;text-anchor:middle;dominant-baseline:central;
     user-select:none;pointer-events:none}
   .tribe{transition:opacity .5s}
-  .tribe .name{font-size:8.5px;fill:var(--muted);text-anchor:middle;
-    letter-spacing:.1em;text-transform:uppercase;font-family:var(--mono);font-weight:600}
-  .tribe .weight{font-size:7.5px;fill:#475569;text-anchor:middle;font-family:var(--mono)}
-  .tribe .tz{font-size:6.5px;fill:#475569;text-anchor:middle;font-family:var(--mono);
-    letter-spacing:.1em;text-transform:uppercase;opacity:.7}
-  .tribe.sleepy .tz{fill:#64748b;opacity:.9}
+  .tribe .name{font-size:7px;fill:var(--muted);text-anchor:middle;
+    letter-spacing:.08em;text-transform:uppercase;font-family:var(--mono)}
+  .tribe .weight{font-size:6px;fill:var(--dim);text-anchor:middle;font-family:var(--mono)}
+  .tribe .tz{font-size:5.5px;fill:var(--dim);text-anchor:middle;font-family:var(--mono);
+    letter-spacing:.07em;text-transform:uppercase;opacity:.6}
+  .tribe.sleepy .tz{fill:#3a3a3a;opacity:.8}
   .tribe.sleepy .body{stroke-dasharray:2 3}
-  .tribe.bot .body{stroke-dasharray:none}
-  .tribe.bot .name{fill:#7dd3fc}         /* subtle cyan to mark bots vs humans */
-  .tribe .conv-ring{fill:none;stroke-width:2.5;opacity:0;transition:opacity .3s}
-  .tribe.buy .conv-ring,.tribe.sell .conv-ring{opacity:.8}
+  .tribe.bot .name{fill:#6a9ab8}
+  .tribe .conv-ring{fill:none;stroke-width:2;opacity:0;transition:opacity .3s}
+  .tribe.buy .conv-ring,.tribe.sell .conv-ring{opacity:.65}
   .tribe.buy .conv-ring{stroke:var(--buy)}
   .tribe.sell .conv-ring{stroke:var(--sell)}
+  .hub-outer{fill:none;stroke:rgba(80,80,80,.06);stroke-width:1;stroke-dasharray:2 4}
+  .hub-inner{fill:none;stroke:rgba(80,80,80,.1);stroke-width:1}
+  .hub-axis{stroke:rgba(80,80,80,.04);stroke-width:1;stroke-dasharray:1 6}
+  .output-beam{stroke:rgba(200,168,75,.45);stroke-width:1.5;opacity:0}
 
-  .hub-outer{fill:none;stroke:rgba(148,163,184,.08);stroke-width:1;stroke-dasharray:2 4}
-  .hub-inner{fill:none;stroke:rgba(148,163,184,.15);stroke-width:1}
-  .hub-axis{stroke:rgba(148,163,184,.05);stroke-width:1;stroke-dasharray:1 6}
-  .output-beam{stroke:url(#beamGrad);stroke-width:2;opacity:0}
-
-  /* ── SIDEBAR ────────────────────────────────────────── */
-  .sidebar{padding:14px;overflow:auto;display:flex;flex-direction:column;gap:12px}
-  .title{font-size:10px;color:var(--muted);text-transform:uppercase;
-    letter-spacing:.15em;margin:0 0 8px 0;font-weight:600}
-
-  .gauge{position:relative;height:80px;background:var(--bg2);border-radius:4px;
-    display:flex;align-items:center;justify-content:center}
-  .gauge-lbl{position:absolute;top:10px;left:14px;font-size:10px;color:var(--muted);
-    letter-spacing:.15em;text-transform:uppercase}
-  .gauge-val{position:absolute;top:10px;right:14px;font-family:var(--mono);font-size:14px}
-  .track{position:relative;width:88%;height:20px;border-radius:10px;
+  /* Council info strip */
+  .council-meta{flex-shrink:0;border-top:1px solid var(--border);
+    padding:7px 8px;display:flex;flex-direction:column;gap:5px;background:var(--bg2)}
+  .gauge{position:relative;height:38px;display:flex;align-items:center;justify-content:center}
+  .gauge-lbl{position:absolute;top:3px;left:4px;font-size:7.5px;
+    color:var(--muted);letter-spacing:.1em;text-transform:uppercase}
+  .gauge-val{position:absolute;top:3px;right:4px;font-family:var(--mono);font-size:10px}
+  .track{position:relative;width:92%;height:12px;border-radius:6px;margin-top:8px;
     background:linear-gradient(to right,
-      rgba(248,113,113,.35) 0%,rgba(100,116,139,.2) 50%,rgba(74,222,128,.35) 100%)}
-  .marker{position:absolute;top:-5px;width:4px;height:30px;border-radius:2px;
-    background:var(--fg);left:50%;transition:left .3s cubic-bezier(.2,.7,.2,1);
-    box-shadow:0 0 10px rgba(255,255,255,.6)}
+      rgba(217,79,79,.25) 0%,rgba(40,40,40,.2) 50%,rgba(77,187,110,.25) 100%)}
+  .marker{position:absolute;top:-4px;width:3px;height:20px;border-radius:2px;
+    background:var(--fg);left:50%;
+    transition:left .3s cubic-bezier(.2,.7,.2,1);
+    box-shadow:0 0 5px rgba(255,255,255,.45)}
+  .metrics{display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px}
+  .m{background:var(--bg3);padding:5px 4px;border-radius:2px;text-align:center}
+  .m .k{font-size:7.5px;color:var(--muted);letter-spacing:.07em;
+    text-transform:uppercase;margin-bottom:2px}
+  .m .v{font-family:var(--mono);font-size:12px;font-weight:600;transition:color .3s}
+  .m .floor{font-size:7px;color:var(--dim);margin-top:1px;font-family:var(--mono)}
 
-  .metrics{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
-  .m{background:var(--bg2);padding:10px;border-radius:4px;text-align:center}
-  .m .k{font-size:9px;color:var(--muted);letter-spacing:.1em;
-    text-transform:uppercase;margin-bottom:4px}
-  .m .v{font-family:var(--mono);font-size:16px;font-weight:600;transition:color .3s}
-  .m .v.armed{color:var(--buy)}
-  .m .v.below{color:var(--sell)}
-  .m .floor{font-size:8.5px;color:var(--muted);letter-spacing:.05em;margin-top:2px;font-family:var(--mono)}
+  /* ── CENTER — Charts ─────────────────── */
+  .charts-panel{display:flex;flex-direction:column;
+    gap:1px;background:var(--border);min-height:0;overflow:hidden}
+  .charts-panel>*{background:var(--bg)}
+  .chart-box{display:flex;flex-direction:column;padding:10px 14px;min-height:0;overflow:hidden}
+  .chart-box.price{flex:1}
+  .chart-box.equity{flex-shrink:0;height:88px}
+  .chart-hdr{display:flex;justify-content:space-between;align-items:baseline;
+    margin-bottom:6px;flex-shrink:0}
+  .chart-hdr .k{font-size:8.5px;color:var(--muted);letter-spacing:.12em;
+    text-transform:uppercase;font-weight:600}
+  .chart-hdr .v{font-family:var(--mono);font-size:11px}
+  canvas{display:block;width:100%}
+  /* price canvas fills its wrapper via absolute positioning so flex height works */
+  .canvas-wrap{flex:1;min-height:0;position:relative;overflow:hidden}
+  .canvas-wrap canvas{position:absolute;top:0;left:0;width:100%;height:100%}
+  .chart-box.equity canvas{height:36px;flex:none}
+  .pred-legend{display:flex;flex-wrap:wrap;gap:8px;margin-top:5px;flex-shrink:0;
+    font-family:var(--mono);font-size:8.5px;color:var(--muted);letter-spacing:.03em}
+  .pred-legend span{display:inline-flex;align-items:center;gap:3px;
+    cursor:pointer;user-select:none;padding:1px 4px;border-radius:2px;
+    border:1px solid transparent;transition:border-color .15s,opacity .15s}
+  .pred-legend span:hover{border-color:var(--border)}
+  .pred-legend span.off{opacity:.35}
+  .pred-legend span.off i{background:#2a2a2a !important}
+  .pred-legend i{width:6px;height:6px;border-radius:50%;display:inline-block}
+  .pred-legend b{font-weight:400;margin-left:2px;font-size:8px;color:#3a3a3a}
+  .pred-legend .sep{width:1px;background:var(--border);margin:0 2px;cursor:default}
+  .pred-legend .sep:hover{border-color:transparent}
+  .pred-legend .tgl{color:var(--muted)}
+  .pred-legend .tgl.off{opacity:.35}
+  .pred-hint{margin-top:3px;font-family:var(--mono);font-size:7.5px;color:var(--dim)}
 
-  .curve-badge{font-family:var(--mono);font-size:10px;padding:2px 8px;border-radius:3px;
-    background:var(--bg3);color:var(--accent);letter-spacing:.1em;text-transform:uppercase}
-
-  .proj{background:var(--bg2);border-radius:4px;padding:12px}
-  .proj-ttl{font-size:10px;color:var(--muted);letter-spacing:.15em;
-    text-transform:uppercase;margin-bottom:8px}
-  .proj-bars{display:flex;align-items:center;gap:2px;height:70px;
-    border-top:1px dashed var(--border);border-bottom:1px dashed var(--border);
-    position:relative}
+  /* ── RIGHT SIDEBAR ───────────────────── */
+  .sidebar{padding:9px;overflow:auto;display:flex;flex-direction:column;gap:7px;background:var(--bg)}
+  .box{background:var(--bg2);border-radius:3px;padding:9px}
+  .box-hdr{display:flex;justify-content:space-between;align-items:baseline;
+    font-size:8.5px;color:var(--muted);letter-spacing:.12em;
+    text-transform:uppercase;margin-bottom:6px}
+  .box-hdr .v{font-family:var(--mono);color:var(--fg);letter-spacing:0;font-size:10px}
+  .proj-bars{display:flex;align-items:center;gap:1px;height:56px;
+    border-top:1px solid var(--border);border-bottom:1px solid var(--border);position:relative}
   .proj-bars::before{content:"";position:absolute;top:50%;left:0;right:0;
     height:1px;background:var(--border)}
   .pb{flex:1;position:relative;height:100%}
-  .pb>i{position:absolute;left:15%;width:70%;border-radius:2px;
+  .pb>i{position:absolute;left:15%;width:70%;border-radius:1px;
     transition:height .25s,top .25s,bottom .25s,background .25s}
-  .proj-lbl{display:flex;justify-content:space-between;font-size:9px;
-    color:var(--muted);margin-top:5px;font-family:var(--mono)}
-
-  .box{background:var(--bg2);border-radius:4px;padding:11px}
-  .box .k{display:flex;justify-content:space-between;font-size:10px;
-    color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px}
-  .box .k .v{font-family:var(--mono);color:var(--fg);letter-spacing:0}
-  canvas{display:block;width:100%;height:56px}
-  /* Price box gets much more room now that it carries the prediction trail;
-     equity stays small because it only needs the rough curve. */
-  .price-box canvas{height:240px}
-  .pred-legend{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px;
-    font-family:var(--mono);font-size:9.5px;color:var(--muted);letter-spacing:.05em}
-  .pred-legend span{display:inline-flex;align-items:center;gap:4px}
-  .pred-legend i{width:7px;height:7px;border-radius:50%;display:inline-block}
-  .pred-legend b{font-weight:500;margin-left:3px;font-size:9px;color:#64748b}
-  .pred-hint{margin-top:4px;font-family:var(--mono);font-size:8.5px;
-    color:#475569;letter-spacing:.03em}
-  .pos{border-left:3px solid var(--neutral)}
-  .pos.long{border-left-color:var(--buy)}
-  .pos.short{border-left-color:var(--sell)}
-  .pos .side{font-family:var(--mono);font-size:18px;font-weight:700;letter-spacing:.05em}
-  .pos.long .side{color:var(--buy)}
-  .pos.short .side{color:var(--sell)}
-  .pos.flat .side{color:var(--muted)}
-  .pos .meta{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:4px}
-  /* Portfolio list: compact per-trade rows with direction-tinted edge */
-  .ports{max-height:240px;overflow-y:auto;margin-top:6px;display:flex;flex-direction:column;gap:4px}
-  .ports::-webkit-scrollbar{width:6px}
-  .ports::-webkit-scrollbar-thumb{background:#263149;border-radius:3px}
-  .port-row{display:grid;grid-template-columns:38px 44px 1fr auto;gap:6px;align-items:center;
-    font-family:var(--mono);font-size:11px;padding:3px 6px;border-left:2px solid var(--neutral);
-    background:#0c1322;border-radius:3px}
+  .proj-lbl{display:flex;justify-content:space-between;font-size:7.5px;
+    color:var(--muted);margin-top:4px;font-family:var(--mono)}
+  .pos-meta{font-family:var(--mono);font-size:8.5px;color:var(--muted);margin-bottom:4px}
+  .ports{max-height:280px;overflow-y:auto;display:flex;flex-direction:column;gap:3px}
+  .ports::-webkit-scrollbar{width:4px}
+  .ports::-webkit-scrollbar-thumb{background:var(--bg3);border-radius:2px}
+  .port-row{display:grid;grid-template-columns:30px 40px 1fr auto;gap:5px;
+    align-items:center;font-family:var(--mono);font-size:9.5px;
+    padding:3px 5px;border-left:2px solid var(--neutral);
+    background:var(--bg);border-radius:2px}
   .port-row.long{border-left-color:var(--buy)}
   .port-row.short{border-left-color:var(--sell)}
   .port-row .pid{color:var(--muted)}
   .port-row .psd{font-weight:700}
   .port-row.long .psd{color:var(--buy)}
   .port-row.short .psd{color:var(--sell)}
-  .port-row .pmt{color:#b8c5d6}
-  .port-row .pbr{color:var(--muted);font-size:10px}
-  .port-empty{font-family:var(--mono);font-size:11px;color:var(--muted);text-align:center;
-    padding:12px 0;font-style:italic}
+  .port-row .pmt{color:#888}
+  .port-row .pbr{color:var(--muted);font-size:8.5px}
+  .port-empty{font-family:var(--mono);font-size:9.5px;color:var(--muted);
+    text-align:center;padding:10px 0;font-style:italic}
 
-  /* feed — compact now that the price chart owns most of the vertical budget */
-  footer{height:64px;background:var(--bg2);border-top:1px solid var(--border);
-    padding:8px 20px;overflow:hidden}
-  .feed-ttl{font-size:10px;color:var(--muted);letter-spacing:.15em;
-    text-transform:uppercase;margin-bottom:6px}
-  .feed{font-family:var(--mono);font-size:11px;line-height:1.5}
+  /* ── FOOTER ──────────────────────────── */
+  footer{flex-shrink:0;height:48px;background:var(--bg2);
+    border-top:1px solid var(--border);padding:6px 16px;overflow:hidden}
+  .feed-ttl{font-size:7.5px;color:var(--muted);letter-spacing:.15em;
+    text-transform:uppercase;margin-bottom:4px}
+  .feed{font-family:var(--mono);font-size:10px;line-height:1.5}
   .f-liquidation{color:var(--sell)}
   .f-funding{color:var(--accent)}
   .f-trade{color:var(--muted)}
-  .f-social_pulse{color:#c084fc}
-  .f-social_pulse.bear{color:#f87171}
-  .f-social_pulse.bull{color:#4ade80}
+  .f-social_pulse{color:#8a6faa}
+  .f-social_pulse.bear{color:var(--sell)}
+  .f-social_pulse.bull{color:var(--buy)}
   .f-sentiment{color:var(--accent)}
 
-  .legend{display:flex;gap:12px;font-family:var(--mono);font-size:9.5px;
-    color:var(--muted);letter-spacing:.05em}
-  .legend span{display:inline-flex;align-items:center;gap:5px}
-  .legend i{width:8px;height:8px;border-radius:50%}
-  .legend .lb{background:var(--buy)} .legend .ls{background:var(--sell)} .legend .la{background:var(--neutral)}
-
-  .stage-legend{position:absolute;bottom:14px;left:18px;z-index:1}
+  /* ── RESPONSIVE ─────────────────────── */
+  /* Tablet: tighten columns */
+  @media (max-width:1200px){
+    main{grid-template-columns:minmax(140px,190px) 1fr minmax(180px,240px)}
+    header{gap:10px;padding:6px 10px}
+    .hdr-item .v{font-size:12px}
+    .hdr-item .k{font-size:8px}
+  }
+  /* Narrow laptop: scroll the page so every panel stays reachable */
+  @media (max-width:1100px){
+    body{overflow:auto;height:auto;min-height:100vh}
+    header{flex-wrap:wrap;gap:6px 10px;padding:6px 10px}
+    main{grid-template-columns:minmax(170px,220px) 1fr;
+         grid-template-rows:auto auto;gap:1px;overflow:visible}
+    .left-panel{grid-column:1;grid-row:1 / span 2;min-height:560px}
+    .charts-panel{grid-column:2;grid-row:1;min-height:480px;overflow:visible}
+    .sidebar{grid-column:2;grid-row:2;flex-direction:row;flex-wrap:wrap;
+             overflow:visible;max-height:none;padding:8px;gap:8px}
+    .sidebar .box{flex:1 1 240px;min-width:240px}
+    .ports{max-height:200px}
+    .chart-box.price{min-height:320px}
+    footer{height:auto;min-height:44px}
+  }
+  /* Mobile: full stack — every section gets its own row */
+  @media (max-width:720px){
+    header{padding:6px}
+    .brand{width:100%}
+    main{grid-template-columns:1fr;grid-template-rows:auto auto auto}
+    .left-panel,.charts-panel,.sidebar{grid-column:1;grid-row:auto;min-height:0}
+    .left-panel{min-height:420px}
+    .stage{min-height:300px}
+    .charts-panel{min-height:440px}
+    .chart-box.price{min-height:280px}
+    .sidebar{flex-direction:column}
+    .sidebar .box{min-width:0;flex:1 1 auto}
+  }
 </style>
 </head>
 <body>
 <header>
-  <span class="brand">⟁ PAM COUNCIL</span>
+  <span class="brand">PAM COUNCIL</span>
   <div class="hdr-item"><span class="k">BTC-PERP</span><span class="v" id="h-price">—</span></div>
   <div class="hdr-item"><span class="k">Equity</span><span class="v" id="h-equity">—</span></div>
   <div class="hdr-item"><span class="k">Session P&amp;L</span><span class="v" id="h-fitness">—</span></div>
-  <div class="hdr-item"><span class="k">Trades W/T</span><span class="v" id="h-trades">—</span></div>
+  <div class="hdr-item"><span class="k">W / Trades</span><span class="v" id="h-trades">—</span></div>
   <div class="hdr-item"><span class="k">Tick</span><span class="v" id="h-tick">—</span></div>
   <div class="hdr-item"><span class="k">Sizing</span><span class="v curve-badge" id="h-curve">—</span></div>
   <span class="spacer"></span>
+  <button id="btn-export" onclick="exportReport()" title="Download session audit report">⬇ REPORT</button>
   <span id="conn">connecting</span>
 </header>
 
 <main>
-  <section class="stage">
-    <div class="stage-label">Council</div>
-    <div class="stage-sub" id="s-sub">awaiting first vote…</div>
-    <div class="stage-out">
-      Aggregate
-      <span class="v" id="s-agg">+0.000</span>
+  <!-- Left: Council (passive, compact) -->
+  <div class="left-panel">
+    <section class="stage">
+      <div class="stage-label">Council</div>
+      <div class="stage-sub" id="s-sub">awaiting first vote…</div>
+      <div class="stage-out">
+        Aggregate
+        <span class="v" id="s-agg">+0.000</span>
+      </div>
+      <div class="stage-legend">
+        <span><i class="lb"></i>BUY</span>
+        <span><i class="ls"></i>SELL</span>
+        <span><i class="la"></i>STAY</span>
+      </div>
+      <svg id="council" viewBox="-350 -350 700 700" preserveAspectRatio="xMidYMid meet">
+        <defs>
+          <radialGradient id="hubGlow" cx="0.5" cy="0.5" r="0.5">
+            <stop offset="0%" stop-color="rgba(200,168,75,0.08)"/>
+            <stop offset="100%" stop-color="rgba(200,168,75,0)"/>
+          </radialGradient>
+        </defs>
+        <circle class="hub-outer" cx="0" cy="0" r="240"/>
+        <circle class="hub-inner" cx="0" cy="0" r="60"/>
+        <line class="hub-axis" x1="0" y1="-330" x2="0" y2="330"/>
+        <line class="hub-axis" x1="-330" y1="0" x2="330" y2="0"/>
+        <circle cx="0" cy="0" r="60" fill="url(#hubGlow)"/>
+        <line class="output-beam" id="beam" x1="0" y1="0" x2="0" y2="-330"/>
+        <g id="tribes"></g>
+        <g id="flows"></g>
+        <g id="output"></g>
+      </svg>
+    </section>
+    <!-- Net pressure + metrics below the SVG -->
+    <div class="council-meta">
+      <div class="gauge">
+        <span class="gauge-lbl">Net Pressure</span>
+        <span class="gauge-val" id="g-val">+0.000</span>
+        <div class="track"><div class="marker" id="g-mark"></div></div>
+      </div>
+      <div class="metrics">
+        <div class="m"><div class="k">E-Move</div><div class="v" id="m-emove">—</div><div class="floor" id="m-emove-floor"></div></div>
+        <div class="m"><div class="k">Conf</div><div class="v" id="m-conf">—</div><div class="floor" id="m-conf-floor"></div></div>
+        <div class="m"><div class="k">Unc</div><div class="v" id="m-unc">—</div><div class="floor" id="m-unc-ceil"></div></div>
+      </div>
     </div>
-    <div class="stage-legend legend">
-      <span><i class="lb"></i>BUY</span>
-      <span><i class="ls"></i>SELL</span>
-      <span><i class="la"></i>STAY</span>
+  </div>
+
+  <!-- Center: Charts (dominant) -->
+  <div class="charts-panel">
+    <div class="chart-box price">
+      <div class="chart-hdr">
+        <span class="k">Price</span>
+        <span class="v" id="price-d">—</span>
+      </div>
+      <div class="canvas-wrap"><canvas id="price-c"></canvas></div>
+      <div class="pred-legend" id="pred-legend">
+        <span data-tgl="15s"><i style="background:#22d3ee"></i>+15s<b id="acc-15s"></b></span>
+        <span data-tgl="1m"><i style="background:#60a5fa"></i>+1m<b id="acc-1m"></b></span>
+        <span data-tgl="5m"><i style="background:#c084fc"></i>+5m<b id="acc-5m"></b></span>
+        <span data-tgl="10m"><i style="background:#fb923c"></i>+10m<b id="acc-10m"></b></span>
+        <span class="sep"></span>
+        <span data-tgl="proj" class="tgl">projection</span>
+        <span data-tgl="lines" class="tgl">écarts</span>
+      </div>
+      <div class="pred-hint">clic pour masquer · ● vert = direction correcte · ● rouge = inverse · trait = écart prédit/réel</div>
     </div>
+    <div class="chart-box equity">
+      <div class="chart-hdr">
+        <span class="k">Equity</span>
+        <span class="v" id="eq-d">—</span>
+      </div>
+      <canvas id="eq-c"></canvas>
+    </div>
+  </div>
 
-    <svg id="council" viewBox="-350 -350 700 700" preserveAspectRatio="xMidYMid meet">
-      <defs>
-        <radialGradient id="hubGlow" cx="0.5" cy="0.5" r="0.5">
-          <stop offset="0%" stop-color="rgba(251,191,36,0.25)"/>
-          <stop offset="100%" stop-color="rgba(251,191,36,0)"/>
-        </radialGradient>
-        <linearGradient id="beamGrad" x1="0" y1="1" x2="0" y2="0">
-          <stop offset="0%" stop-color="rgba(15,23,42,0)"/>
-          <stop offset="60%" stop-color="rgba(226,232,240,0.4)"/>
-          <stop offset="100%" stop-color="rgba(251,191,36,0.6)"/>
-        </linearGradient>
-      </defs>
-
-      <!-- guides -->
-      <circle class="hub-outer" cx="0" cy="0" r="240"/>
-      <circle class="hub-inner" cx="0" cy="0" r="60"/>
-      <line class="hub-axis" x1="0" y1="-330" x2="0" y2="330"/>
-      <line class="hub-axis" x1="-330" y1="0" x2="330" y2="0"/>
-      <circle cx="0" cy="0" r="60" fill="url(#hubGlow)"/>
-
-      <!-- output beam (rises when orb ascends) -->
-      <line class="output-beam" id="beam" x1="0" y1="0" x2="0" y2="-330"/>
-
-      <g id="tribes"></g>
-      <g id="flows"></g>
-      <g id="output"></g>
-    </svg>
-  </section>
-
+  <!-- Right: Projection + Portfolio -->
   <aside class="sidebar">
-    <div class="gauge">
-      <span class="gauge-lbl">Net Pressure</span>
-      <span class="gauge-val" id="g-val">+0.000</span>
-      <div class="track"><div class="marker" id="g-mark"></div></div>
-    </div>
-    <div class="metrics">
-      <div class="m"><div class="k">E-Move</div><div class="v" id="m-emove">—</div><div class="floor" id="m-emove-floor"></div></div>
-      <div class="m"><div class="k">Conf</div><div class="v" id="m-conf">—</div><div class="floor" id="m-conf-floor"></div></div>
-      <div class="m"><div class="k">Unc</div><div class="v" id="m-unc">—</div><div class="floor" id="m-unc-ceil"></div></div>
-    </div>
-    <div class="proj">
-      <div class="proj-ttl" id="proj-ttl">Chess Projection · 60 × 15s</div>
+    <div class="box">
+      <div class="box-hdr"><span id="proj-ttl">Projection</span></div>
       <div class="proj-bars" id="p-bars"></div>
       <div class="proj-lbl"><span>+15s</span><span>+5m</span><span>+10m</span><span>+15m</span></div>
     </div>
     <div class="box" id="pos-box">
-      <div class="k"><span>Portfolio</span><span class="v" id="pos-summary">0 open</span></div>
-      <div class="meta" id="pos-meta">total notional: $0</div>
+      <div class="box-hdr"><span>Portfolio</span><span class="v" id="pos-summary">0 open</span></div>
+      <div class="pos-meta" id="pos-meta">total notional: $0</div>
       <div class="ports" id="ports"></div>
-    </div>
-    <div class="box price-box">
-      <div class="k"><span>Price</span><span class="v" id="price-d">—</span></div>
-      <canvas id="price-c"></canvas>
-      <div class="pred-legend">
-        <span><i style="background:#22d3ee"></i>+15s<b id="acc-15s"></b></span>
-        <span><i style="background:#60a5fa"></i>+1m<b id="acc-1m"></b></span>
-        <span><i style="background:#c084fc"></i>+5m<b id="acc-5m"></b></span>
-        <span><i style="background:#fb923c"></i>+10m<b id="acc-10m"></b></span>
-      </div>
-      <div class="pred-hint">anneau vert = direction correcte · rouge = inverse · segment = écart prix prédit/réel</div>
-    </div>
-    <div class="box">
-      <div class="k"><span>Equity</span><span class="v" id="eq-d">—</span></div>
-      <canvas id="eq-c"></canvas>
     </div>
   </aside>
 </main>
@@ -295,36 +354,30 @@
   const bps=n=>n==null?'—':(n>=0?'+':'')+n.toFixed(1)+'bps';
   const px=n=>'$'+fmt(n,2);
 
-  const HISTORY_LEN=24;           // votes kept for each tribe's pie
+  const HISTORY_LEN=24;
   const RING_R=22, BODY_R=17;
   const C_PIE=2*Math.PI*RING_R;
   const ORBIT_R=238;
 
-  const tribeMeta={};             // id → {name, weight, pos:{x,y}, el}
-  const voteHistory={};           // id → ring of last N sides
-  // priceHist: rolling window of historic marks. Sized for ~15h at 15s cadence
-  // so the whole session fits on one chart once you've run long enough.
-  // eqHist stays smaller since it only needs the rough equity curve.
-  const priceHist=[],eqHist=[];const MAX=3600,EQ_MAX=720;let p0=null,e0=null;
-  let CFG={min_confidence:0.25,min_expected_move_bps:4,max_uncertainty:0.70,
-           size_min_pct:1.0,size_max_pct:6.0,sizing_curve:'linear',
+  const tribeMeta={};
+  const voteHistory={};
+  const priceHist=[],eqHist=[];
+  const MAX=3600,EQ_MAX=720;
+  let p0=null,e0=null;
+  let CFG={size_min_pct:1.0,size_max_pct:6.0,sizing_curve:'linear',
            bps_per_unit_pressure:8.0,projector_steps:200,tick_seconds:3};
-  let lastForecastSteps=[];    // retained so price chart can draw the projection overlay
-
-  // Prediction trail — each entry pins an expected_price for a specific future
-  // tick at a specific horizon, tagged with a color. Accumulates across ticks
-  // so the chart shows what the council predicted at every step vs what
-  // actually happened. Keyed by (emission_tick, horizon_label).
+  let lastForecastSteps=[];
   const TRAIL_COLORS={
-    '15s':'#22d3ee', '1m':'#60a5fa', '5m':'#c084fc',
-    '10m':'#fb923c', '15m':'#fde047',
+    '15s':'#22d3ee','1m':'#60a5fa','5m':'#c084fc',
+    '10m':'#fb923c','15m':'#fde047',
   };
-  const predictionTrail=[];    // {tick, horizon_steps, label, predicted_price, color}
+  const predictionTrail=[];
   let currentTick=0;
+  const VISIBLE={'15s':true,'1m':true,'5m':true,'10m':true,proj:true,lines:true};
 
   function tribePos(i,n){
     const a=(i/n)*2*Math.PI - Math.PI/2;
-    return { x: ORBIT_R*Math.cos(a), y: ORBIT_R*Math.sin(a) };
+    return { x:ORBIT_R*Math.cos(a), y:ORBIT_R*Math.sin(a) };
   }
   function shortName(s){ return (s||'').toUpperCase().slice(0,14); }
 
@@ -341,13 +394,11 @@
       g.setAttribute('transform',`translate(${pos.x.toFixed(2)},${pos.y.toFixed(2)})`);
       g.id='t-'+t.id;
 
-      // conviction halo
       const halo=document.createElementNS(SVG,'circle');
       halo.setAttribute('class','conv-ring');
       halo.setAttribute('r',RING_R+6);
       g.appendChild(halo);
 
-      // pie donut — 3 segments
       const bgc=document.createElementNS(SVG,'circle');
       bgc.setAttribute('class','pie-bg'); bgc.setAttribute('r',RING_R);
       g.appendChild(bgc);
@@ -358,11 +409,10 @@
         c.setAttribute('r',RING_R);
         c.setAttribute('transform','rotate(-90)');
         c.setAttribute('stroke-dasharray','0 '+C_PIE.toFixed(2));
-        c.setAttribute('stroke',{buy:'#4ade80',sell:'#f87171',abs:'#64748b'}[k]);
+        c.setAttribute('stroke',{buy:'#4dbb6e',sell:'#d94f4f',abs:'#383838'}[k]);
         g.appendChild(c);
       });
 
-      // body + emoji (character)
       const body=document.createElementNS(SVG,'circle');
       body.setAttribute('class','body'); body.setAttribute('r',BODY_R);
       g.appendChild(body);
@@ -372,9 +422,7 @@
       em.textContent=ICONS[t.id]||'◆';
       g.appendChild(em);
 
-      // label outside ring (pushed away from center)
-      const outward=Math.hypot(pos.x,pos.y)||1;
-      const labelY=RING_R+14;           // below the ring locally
+      const labelY=RING_R+14;
       const nm=document.createElementNS(SVG,'text');
       nm.setAttribute('class','name'); nm.setAttribute('y',labelY);
       nm.textContent=shortName(t.name);
@@ -383,14 +431,12 @@
       wt.setAttribute('class','weight'); wt.setAttribute('y',labelY+10);
       wt.textContent='w '+t.weight.toFixed(2);
       g.appendChild(wt);
-
       const tz=document.createElementNS(SVG,'text');
       tz.setAttribute('class','tz'); tz.setAttribute('y',labelY+19);
       tz.textContent=t.timezone_label||'';
       g.appendChild(tz);
 
       root.appendChild(g);
-
       tribeMeta[t.id]={name:t.name,weight:t.weight,pos,el:g,tz:t.timezone_label||'',isBot};
       voteHistory[t.id]=[];
     });
@@ -418,54 +464,49 @@
     let activeCount=0;
     votes.forEach(v=>{
       const meta=tribeMeta[v.tribe_id]; if(!meta)return;
-      if(v.side==='abstain') return;  // non-actors don't emit a dot
+      if(v.side==='abstain') return;
       activeCount++;
-      const col=v.side==='buy'?'#4ade80':'#f87171';
+      const col=v.side==='buy'?'#4dbb6e':'#d94f4f';
       const dot=document.createElementNS(SVG,'circle');
       dot.setAttribute('cx',0); dot.setAttribute('cy',0);
-      dot.setAttribute('r',(3.2 + v.conviction*3.8).toFixed(2));
+      dot.setAttribute('r',(2.8 + v.conviction*3.5).toFixed(2));
       dot.setAttribute('fill',col);
-      dot.setAttribute('opacity','0.95');
-      dot.style.filter=`drop-shadow(0 0 6px ${col})`;
+      dot.setAttribute('opacity','0.9');
       dot.style.transform=`translate(${meta.pos.x}px,${meta.pos.y}px)`;
       flows.appendChild(dot);
       const dur=480 + Math.random()*160;
       const a=dot.animate([
-        { transform:`translate(${meta.pos.x}px,${meta.pos.y}px)`, opacity:0.95 },
-        { transform:'translate(0px,0px)', opacity:0.6, offset:0.9 },
+        { transform:`translate(${meta.pos.x}px,${meta.pos.y}px)`, opacity:0.9 },
+        { transform:'translate(0px,0px)', opacity:0.55, offset:0.9 },
         { transform:'translate(0px,0px)', opacity:0 }
       ],{duration:dur, easing:'cubic-bezier(.4,.15,.25,1)', fill:'forwards'});
       a.onfinish=()=>dot.remove();
     });
-    if(activeCount===0) return;    // everyone abstained — no orb
+    if(activeCount===0) return;
     setTimeout(()=>emitOrb(netPressure), 520);
   }
 
   function emitOrb(netPressure){
     const out=$('output');
     const mag=Math.min(1, Math.abs(netPressure));
-    const r=7 + mag*11;
-
-    // ripple ring
+    const r=6 + mag*9;
     const ring=document.createElementNS(SVG,'circle');
     ring.setAttribute('cx',0); ring.setAttribute('cy',0);
     ring.setAttribute('r',r); ring.setAttribute('fill','none');
-    ring.setAttribute('stroke','#fbbf24'); ring.setAttribute('stroke-width','1.5');
-    ring.setAttribute('opacity','0.7');
+    ring.setAttribute('stroke','#c8a84b'); ring.setAttribute('stroke-width','1');
+    ring.setAttribute('opacity','0.6');
     out.appendChild(ring);
     ring.animate([
-      {transform:'scale(1)',opacity:0.7},
-      {transform:'scale(5.5)',opacity:0}
-    ],{duration:900, easing:'cubic-bezier(.1,.7,.3,1)', fill:'forwards'})
+      {transform:'scale(1)',opacity:0.6},
+      {transform:'scale(5)',opacity:0}
+    ],{duration:800, easing:'cubic-bezier(.1,.7,.3,1)', fill:'forwards'})
       .onfinish=()=>ring.remove();
 
-    // black orb: coalesces, ascends, gets "sent"
     const orb=document.createElementNS(SVG,'circle');
     orb.setAttribute('cx',0); orb.setAttribute('cy',0); orb.setAttribute('r',r);
-    orb.setAttribute('fill','#000');
-    orb.setAttribute('stroke','rgba(226,232,240,0.45)');
+    orb.setAttribute('fill','#050505');
+    orb.setAttribute('stroke','rgba(220,220,220,0.3)');
     orb.setAttribute('stroke-width','1');
-    orb.style.filter='drop-shadow(0 0 8px rgba(0,0,0,0.9)) drop-shadow(0 0 14px rgba(255,255,255,0.18))';
     orb.style.transform='translate(0px,0px) scale(0)';
     out.appendChild(orb);
     orb.animate([
@@ -473,14 +514,12 @@
       {transform:'translate(0px,0px) scale(1)',   opacity:1, offset:0.22},
       {transform:'translate(0px,-60px) scale(1.05)', opacity:1, offset:0.55},
       {transform:'translate(0px,-310px) scale(0.9)', opacity:0, offset:1}
-    ],{duration:1150, easing:'cubic-bezier(.3,.05,.25,1)', fill:'forwards'})
+    ],{duration:1100, easing:'cubic-bezier(.3,.05,.25,1)', fill:'forwards'})
       .onfinish=()=>orb.remove();
 
-    // output beam flashes
     const beam=$('beam');
-    beam.animate([
-      {opacity:0},{opacity:0.9,offset:0.4},{opacity:0}
-    ],{duration:900,easing:'ease-out'});
+    beam.animate([{opacity:0},{opacity:0.8,offset:0.4},{opacity:0}],
+      {duration:800,easing:'ease-out'});
   }
 
   function onTick(t){
@@ -504,72 +543,68 @@
     const pct=((np+1)/2)*100;
     $('g-mark').style.left=pct+'%';
     $('g-val').textContent=(np>=0?'+':'')+np.toFixed(3);
+    $('g-val').style.color=np>0.02?'var(--buy)':np<-0.02?'var(--sell)':'var(--fg)';
 
-    const emv=$('m-emove');emv.textContent=bps(t.expected_move_bps);
-    const emThresh=CFG.min_expected_move_bps||0;
-    emv.classList.toggle('armed', Math.abs(t.expected_move_bps)>=emThresh);
-    emv.classList.toggle('below', Math.abs(t.expected_move_bps)<emThresh);
+    // E-Move: colored by direction (informative, not gate)
+    const emv=$('m-emove');
+    emv.textContent=bps(t.expected_move_bps);
+    emv.style.color=t.expected_move_bps>0?'var(--buy)':t.expected_move_bps<0?'var(--sell)':'var(--fg)';
+    $('m-emove-floor').textContent='';
 
-    const cv=$('m-conf');cv.textContent=t.confidence.toFixed(2);
-    cv.classList.toggle('armed', t.confidence>=CFG.min_confidence);
-    cv.classList.toggle('below', t.confidence<CFG.min_confidence);
+    // Conf: neutral white, just the value
+    const cv=$('m-conf');
+    cv.textContent=t.confidence.toFixed(2);
+    cv.style.color='var(--fg)';
+    $('m-conf-floor').textContent='';
 
-    const uv=$('m-unc');uv.textContent=t.uncertainty.toFixed(2);
-    uv.classList.toggle('armed', t.uncertainty<=CFG.max_uncertainty);
-    uv.classList.toggle('below', t.uncertainty>CFG.max_uncertainty);
+    // Unc: warn if high (>0.6 = meaningful disagreement)
+    const uv=$('m-unc');
+    uv.textContent=t.uncertainty.toFixed(2);
+    uv.style.color=t.uncertainty>0.6?'var(--sell)':t.uncertainty<0.2?'var(--buy)':'var(--fg)';
+    $('m-unc-ceil').textContent='';
 
     renderProjection(t.forecast_steps||[]);
 
-    // per-tribe state + pie update + circadian dimming
     for(const v of t.votes){
       const meta=tribeMeta[v.tribe_id]; if(!meta)continue;
       meta.el.classList.remove('buy','sell','abstain');
       meta.el.classList.add(v.side);
       pushVote(v.tribe_id, v.side);
-      // conviction ring radius reflects conviction
       const halo=meta.el.querySelector('.conv-ring');
-      halo.setAttribute('r', (RING_R+4 + v.conviction*5).toFixed(2));
-      // circadian presence = effective weight / base weight ∈ [0,1].
-      // Dim sleepy tribes (down to 0.45) and mark with dashed outline.
+      halo.setAttribute('r', (RING_R+3 + v.conviction*4).toFixed(2));
       const base=meta.weight||1e-6;
       const presence=Math.max(0,Math.min(1, v.weight/base));
-      meta.el.style.opacity = (0.45 + 0.55*presence).toFixed(3);
+      meta.el.style.opacity=(0.45 + 0.55*presence).toFixed(3);
       meta.el.classList.toggle('sleepy', presence < 0.6);
     }
 
-    // council flow animation
     spawnFlows(t.votes, np);
 
     lastForecastSteps=t.forecast_steps||[];
     currentTick=t.tick;
-    if(p0==null)p0=t.price;priceHist.push(t.price);if(priceHist.length>MAX)priceHist.shift();
+    if(p0==null)p0=t.price;
+    priceHist.push(t.price);
+    if(priceHist.length>MAX)priceHist.shift();
     const pd=((t.price-p0)/p0)*100;
-    $('price-d').textContent=(pd>=0?'+':'')+pd.toFixed(2)+'%';
+    const pdEl=$('price-d');
+    pdEl.textContent=(pd>=0?'+':'')+pd.toFixed(2)+'%';
+    pdEl.style.color=pd>=0?'var(--buy)':'var(--sell)';
 
-    // Stamp a dot at every anchor horizon for THIS tick, preserving prior ones
-    // so the chart builds up a dot-trail we can audit after the fact.
-    // `base_price` is the live price at emission — needed later to score the
-    // prediction once the target tick matures (did the direction match? how
-    // far off was the predicted price from what actually happened?).
     for(const pr of (t.predictions||[])){
       predictionTrail.push({
         tick:t.tick, horizon_steps:pr.horizon_steps, label:pr.label,
-        predicted_price:pr.predicted_price,
-        base_price:t.price,
-        color:TRAIL_COLORS[pr.label]||'#fbbf24',
+        predicted_price:pr.predicted_price, base_price:t.price,
+        color:TRAIL_COLORS[pr.label]||'#c8a84b',
       });
     }
-    // Drop trail entries whose target tick has aged out of the visible window.
     const earliestTick=t.tick - priceHist.length + 1;
     while(predictionTrail.length && predictionTrail[0].tick + predictionTrail[0].horizon_steps < earliestTick){
       predictionTrail.shift();
     }
 
-    drawPriceWithProjection('price-c',priceHist,lastForecastSteps,t.price,pd>=0?'#4ade80':'#f87171',predictionTrail,t.tick);
+    drawPriceWithProjection('price-c',priceHist,lastForecastSteps,t.price,
+      pd>=0?'#4dbb6e':'#d94f4f',predictionTrail,t.tick);
 
-    // Live backscore: trailing-window hit-rate + MAE per anchor horizon,
-    // fed by ForecastAuditor on the server. Empty while the first anchors
-    // are still maturing (< 3 samples).
     const bs=t.backscore&&t.backscore.by_horizon||[];
     const bmap={};for(const row of bs){bmap[row.label]=row;}
     for(const lbl of ['15s','1m','5m','10m']){
@@ -581,38 +616,45 @@
       el.textContent=` ${hr}% · ${mae}bps · n=${row.n}`;
     }
 
-    if(e0==null)e0=t.equity_usd;eqHist.push(t.equity_usd);if(eqHist.length>EQ_MAX)eqHist.shift();
+    if(e0==null)e0=t.equity_usd;
+    eqHist.push(t.equity_usd);
+    if(eqHist.length>EQ_MAX)eqHist.shift();
     const ed=((t.equity_usd-e0)/e0)*100;
-    $('eq-d').textContent=(ed>=0?'+':'')+ed.toFixed(2)+'%';
-    draw('eq-c',eqHist,ed>=0?'#4ade80':'#f87171');
+    const edEl=$('eq-d');
+    edEl.textContent=(ed>=0?'+':'')+ed.toFixed(2)+'%';
+    edEl.style.color=ed>=0?'var(--buy)':'var(--sell)';
+    draw('eq-c',eqHist,ed>=0?'#4dbb6e':'#d94f4f');
 
-    renderPortfolio(t.positions||[], t.total_notional_usd||0, t.equity_usd, t.price);
+    renderPortfolio(t.positions||[], t.total_notional_usd||0, t.equity_usd, t.price, t.ts);
   }
 
-  // Portfolio list — one row per open trade with its TP/SL brackets and the
-  // distance (in bps) from the current mark to each side. Green-edged rows
-  // are longs, red shorts. Empty state prints "no open trades".
-  function renderPortfolio(ps, totalNotional, equity, mark){
+  function renderPortfolio(ps, totalNotional, equity, mark, tickTs){
     const root=$('ports'); root.innerHTML='';
     const n=ps.length;
     $('pos-summary').textContent = n===0 ? '0 open'
-      : `${n} open · ${(totalNotional/Math.max(equity,1)*100).toFixed(0)}% of equity`;
-    $('pos-meta').textContent = `total notional: $${fmt(totalNotional)}`;
+      : `${n} open · ${(totalNotional/Math.max(equity,1)*100).toFixed(0)}% eq`;
+    $('pos-meta').textContent=`notional: $${fmt(totalNotional)}`;
     if(n===0){
       const e=document.createElement('div'); e.className='port-empty';
       e.textContent='no open trades'; root.appendChild(e); return;
     }
-    // Render newest first so new entries are visible at the top.
+    const now = tickTs ? new Date(tickTs) : new Date();
     for(const p of [...ps].reverse()){
       const row=document.createElement('div');
       row.className='port-row '+(p.side==='buy'?'long':'short');
-      const dTP = mark>0 ? ((p.tp_price - mark) / mark * 10000) : 0;
-      const dSL = mark>0 ? ((p.sl_price - mark) / mark * 10000) : 0;
-      row.innerHTML =
+      // Unrealized PnL in bps from entry price
+      const upnl = mark > 0
+        ? (mark - p.entry_price) / p.entry_price * 10000 * (p.side === 'buy' ? 1 : -1)
+        : 0;
+      // Hold duration in seconds
+      const held = p.entry_ts ? Math.round((now - new Date(p.entry_ts)) / 1000) : 0;
+      const upnlStr = (upnl >= 0 ? '+' : '') + upnl.toFixed(1) + 'bps';
+      row.innerHTML=
         `<span class="pid">${p.id}</span>`+
         `<span class="psd">${p.side==='buy'?'LONG':'SHORT'}</span>`+
         `<span class="pmt">$${fmt(p.size_usd)} @ ${fmt(p.entry_price)}</span>`+
-        `<span class="pbr">TP ${dTP>=0?'+':''}${dTP.toFixed(0)} / SL ${dSL>=0?'+':''}${dSL.toFixed(0)} bps</span>`;
+        `<span class="pbr" style="color:${upnl>=0?'var(--buy)':'var(--sell)'}">`+
+        `${upnlStr} · ${held}s</span>`;
       root.appendChild(row);
     }
   }
@@ -634,7 +676,9 @@
 
   function draw(id,data,color){
     const c=$(id);const dpr=window.devicePixelRatio||1;
-    const w=c.clientWidth,h=c.clientHeight;
+    const rect=c.getBoundingClientRect();
+    const w=rect.width,h=rect.height;
+    if(!w||!h)return;
     c.width=w*dpr;c.height=h*dpr;
     const ctx=c.getContext('2d');ctx.scale(dpr,dpr);ctx.clearRect(0,0,w,h);
     if(data.length<2)return;
@@ -642,129 +686,120 @@
     ctx.strokeStyle=color;ctx.lineWidth=1.5;ctx.beginPath();
     data.forEach((v,i)=>{
       const x=(i/(data.length-1))*w;
-      const y=h-((v-lo)/r)*(h-6)-3;
+      const y=h-((v-lo)/r)*(h-4)-2;
       if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);
     });
     ctx.stroke();
   }
 
-  // Price canvas with forward projection overlay. Historic prices occupy
-  // the left (hist.length/(hist.length+proj.length)) fraction of canvas;
-  // projected prices extend in yellow on the right. Projected price at
-  // step i = currentPrice * (1 + cumulative_bps[i]/10000) where
-  // cumulative_bps[i] = sum(net_pressure[0..i]) * bps_per_unit_pressure.
   function drawPriceWithProjection(id,hist,steps,currentPrice,histColor,trail,tickNow){
     const c=$(id);const dpr=window.devicePixelRatio||1;
-    const w=c.clientWidth,h=c.clientHeight;
+    const rect=c.getBoundingClientRect();
+    const w=rect.width,h=rect.height;
+    if(!w||!h)return;
     c.width=w*dpr;c.height=h*dpr;
     const ctx=c.getContext('2d');ctx.scale(dpr,dpr);ctx.clearRect(0,0,w,h);
     if(hist.length<2)return;
 
-    const proj=[];let cumBps=0;
-    for(const s of steps){cumBps+=(s.net_pressure||0)*CFG.bps_per_unit_pressure;
-      proj.push(currentPrice*(1+cumBps/10000));}
+    const proj=VISIBLE.proj?[]:null;
+    let cumBps=0;
+    if(VISIBLE.proj){
+      for(const s of steps){
+        cumBps+=(s.net_pressure||0)*CFG.bps_per_unit_pressure;
+        proj.push(currentPrice*(1+cumBps/10000));
+      }
+    }
+    const projLen=proj?proj.length:0;
 
-    // Extend range to cover dot trail (future dots can sit above/below the
-    // price line and we want them visible in-frame).
-    const all=proj.length?hist.concat(proj):hist.slice();
-    if(trail&&trail.length){for(const e of trail) all.push(e.predicted_price);}
+    const all=projLen?hist.concat(proj):hist.slice();
+    if(trail&&trail.length){
+      for(const e of trail){ if(VISIBLE[e.label]) all.push(e.predicted_price); }
+    }
     const lo=Math.min(...all),hi=Math.max(...all);const r=hi-lo||1;
-    const total=Math.max(1, hist.length+proj.length-1);
+    const total=Math.max(1, hist.length+projLen-1);
     const xAt=i=>(i/total)*w;
     const yAt=v=>h-((v-lo)/r)*(h-6)-3;
 
-    // historic
-    ctx.strokeStyle=histColor;ctx.lineWidth=1.5;ctx.beginPath();
-    hist.forEach((v,i)=>{const x=xAt(i),y=yAt(v);
-      if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);});
-    ctx.stroke();
-
-    // Separator + projection (only when we have forward steps).
-    if(proj.length){
+    // projection (drawn first, behind everything)
+    if(projLen){
       const nowX=xAt(hist.length-1);
-      ctx.strokeStyle='rgba(148,163,184,.25)';ctx.lineWidth=1;
+      ctx.strokeStyle='rgba(80,80,80,.3)';ctx.lineWidth=1;
       ctx.setLineDash([2,3]);ctx.beginPath();
       ctx.moveTo(nowX,2);ctx.lineTo(nowX,h-2);ctx.stroke();ctx.setLineDash([]);
-
-      ctx.strokeStyle='rgba(251,191,36,0.55)';ctx.lineWidth=1.5;ctx.beginPath();
+      ctx.strokeStyle='rgba(200,168,75,0.45)';ctx.lineWidth=1.2;ctx.beginPath();
       ctx.moveTo(nowX,yAt(hist[hist.length-1]));
       proj.forEach((v,i)=>{ctx.lineTo(xAt(hist.length+i),yAt(v));});
       ctx.stroke();
     }
 
-    // Prediction dot trail: each entry was emitted at tick=E for horizon k,
-    // targeting tick E+k. Map that target tick to an x position in the
-    // combined historic+projected timeline.
-    //
-    // Once targetTick ≤ tickNow the prediction has MATURED and we can score
-    // it against priceHist[targetTick]. We overlay:
-    //   - a vertical segment from predicted price → actual price
-    //     (green if direction was right, red if wrong)
-    //   - a ring around the dot (same green/red) so the dot itself carries
-    //     its veracity at a glance
-    //   - running per-horizon stats (hit rate + mean bps error) go to the
-    //     legend at the bottom of the price panel
-    const accStats={'15s':{n:0,hit:0,err:0}, '1m':{n:0,hit:0,err:0},
-                    '5m':{n:0,hit:0,err:0}, '10m':{n:0,hit:0,err:0}};
+    // prediction dot trail (behind price line)
+    const accStats={'15s':{n:0,hit:0,err:0},'1m':{n:0,hit:0,err:0},
+                    '5m':{n:0,hit:0,err:0},'10m':{n:0,hit:0,err:0}};
     if(trail&&trail.length){
       const earliestTick=tickNow - hist.length + 1;
       for(const e of trail){
+        if(!VISIBLE[e.label]) continue;
         const targetTick=e.tick + e.horizon_steps;
         let combined_i, matured=false, actualPrice=null;
         if(targetTick<=tickNow){
-          if(targetTick<earliestTick) continue;   // off-screen to the left
-          combined_i = hist.length - 1 - (tickNow - targetTick);
-          actualPrice = hist[combined_i];
-          matured = true;
+          if(targetTick<earliestTick) continue;
+          combined_i=hist.length - 1 - (tickNow - targetTick);
+          actualPrice=hist[combined_i];
+          matured=true;
         }else{
-          const projIdx = targetTick - tickNow - 1;
-          if(projIdx>=proj.length) continue;      // off-screen to the right
-          combined_i = hist.length + projIdx;
+          if(!projLen) continue;
+          const projIdx=targetTick - tickNow - 1;
+          if(projIdx>=projLen) continue;
+          combined_i=hist.length + projIdx;
         }
         const x=xAt(combined_i), yPred=yAt(e.predicted_price);
-
         if(matured && actualPrice!=null && e.base_price){
           const predMove=e.predicted_price - e.base_price;
           const actualMove=actualPrice - e.base_price;
-          // Both near zero ⇒ "flat" prediction, flat reality → treat as neutral hit.
-          const correct = (predMove===0 && actualMove===0) ||
-                          (predMove*actualMove)>0;
+          const correct=(predMove===0&&actualMove===0)||(predMove*actualMove)>0;
           const errorBps=Math.abs(e.predicted_price - actualPrice)/e.base_price*10000;
           const s=accStats[e.label];
-          if(s){ s.n++; if(correct) s.hit++; s.err += errorBps; }
-
-          const yAct=yAt(actualPrice);
-          ctx.strokeStyle=correct?'rgba(74,222,128,.6)':'rgba(248,113,113,.6)';
-          ctx.lineWidth=1;
-          ctx.beginPath();ctx.moveTo(x,yPred);ctx.lineTo(x,yAct);ctx.stroke();
-          // original dot, faded
+          if(s){s.n++;if(correct)s.hit++;s.err+=errorBps;}
+          if(VISIBLE.lines){
+            const yAct=yAt(actualPrice);
+            ctx.strokeStyle=correct?'rgba(77,187,110,.35)':'rgba(217,79,79,.35)';
+            ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(x,yPred);ctx.lineTo(x,yAct);ctx.stroke();
+          }
+          ctx.globalAlpha=0.35;ctx.fillStyle=e.color;
+          ctx.beginPath();ctx.arc(x,yPred,1.8,0,Math.PI*2);ctx.fill();
           ctx.globalAlpha=0.55;
-          ctx.fillStyle=e.color;
-          ctx.beginPath();ctx.arc(x,yPred,2.2,0,Math.PI*2);ctx.fill();
-          // correctness ring
-          ctx.globalAlpha=0.85;
-          ctx.strokeStyle=correct?'#4ade80':'#f87171';
-          ctx.lineWidth=1.1;
-          ctx.beginPath();ctx.arc(x,yPred,3.6,0,Math.PI*2);ctx.stroke();
+          ctx.strokeStyle=correct?'#4dbb6e':'#d94f4f';
+          ctx.lineWidth=0.8;ctx.beginPath();ctx.arc(x,yPred,2.8,0,Math.PI*2);ctx.stroke();
           ctx.globalAlpha=1;
-        } else {
-          ctx.fillStyle=e.color;
-          ctx.globalAlpha=0.95;
-          ctx.beginPath();ctx.arc(x,yPred,2.2,0,Math.PI*2);ctx.fill();
+        }else{
+          ctx.fillStyle=e.color;ctx.globalAlpha=0.6;
+          ctx.beginPath();ctx.arc(x,yPred,1.8,0,Math.PI*2);ctx.fill();
           ctx.globalAlpha=1;
         }
       }
     }
 
+    // historic price line — drawn LAST so it stays readable above dots
+    ctx.strokeStyle='#000';ctx.lineWidth=3.5;ctx.lineJoin='round';ctx.beginPath();
+    hist.forEach((v,i)=>{const x=xAt(i),y=yAt(v);
+      if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);});
+    ctx.stroke();
+    ctx.strokeStyle=histColor;ctx.lineWidth=2;ctx.beginPath();
+    hist.forEach((v,i)=>{const x=xAt(i),y=yAt(v);
+      if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);});
+    ctx.stroke();
+    // current price marker
+    const lastX=xAt(hist.length-1), lastY=yAt(hist[hist.length-1]);
+    ctx.fillStyle=histColor;ctx.beginPath();ctx.arc(lastX,lastY,3,0,Math.PI*2);ctx.fill();
+    ctx.strokeStyle='#000';ctx.lineWidth=1.2;ctx.stroke();
     for(const k of Object.keys(accStats)){
       const s=accStats[k];
-      const el=document.getElementById('acc-'+k);
-      if(!el) continue;
-      if(s.n===0){ el.textContent=''; continue; }
+      const el=document.getElementById('acc-'+k);if(!el)continue;
+      if(s.n===0){el.textContent='';continue;}
       const acc=Math.round(s.hit/s.n*100);
       const avgErr=(s.err/s.n).toFixed(0);
       el.textContent=` ${acc}% ±${avgErr}bps (${s.n})`;
-      el.style.color=acc>=60?'#4ade80':acc>=45?'#94a3b8':'#f87171';
+      el.style.color=acc>=60?'#4dbb6e':acc>=45?'#666':'#d94f4f';
     }
   }
 
@@ -812,16 +847,63 @@
   async function loadConfig(){
     try{
       const r=await fetch('/api/config');const c=await r.json();
-      if(c&&Object.keys(c).length)CFG={...CFG,...c};
+      if(c&&Object.keys(c).length) CFG={...CFG,...c};
     }catch{}
     $('h-curve').textContent=`${CFG.size_min_pct}–${CFG.size_max_pct}% · ${CFG.sizing_curve}`;
-    $('m-conf-floor').textContent=`≥ ${CFG.min_confidence.toFixed(2)}`;
-    $('m-emove-floor').textContent=`≥ ${CFG.min_expected_move_bps.toFixed(0)}bps`;
-    $('m-unc-ceil').textContent=`≤ ${CFG.max_uncertainty.toFixed(2)}`;
+    $('proj-ttl').textContent=`Projection · ${CFG.projector_steps} steps`;
   }
+
+  function redrawCharts(){
+    if(priceHist.length>=2){
+      const last=priceHist[priceHist.length-1];
+      const pd=p0?((last-p0)/p0)*100:0;
+      drawPriceWithProjection('price-c',priceHist,lastForecastSteps,last,
+        pd>=0?'#4dbb6e':'#d94f4f',predictionTrail,currentTick);
+    }
+    if(eqHist.length>=2){
+      const ed=e0?((eqHist[eqHist.length-1]-e0)/e0)*100:0;
+      draw('eq-c',eqHist,ed>=0?'#4dbb6e':'#d94f4f');
+    }
+  }
+  // Legend toggles — click to hide/show each horizon or the projection
+  const legend=$('pred-legend');
+  if(legend){
+    legend.querySelectorAll('span[data-tgl]').forEach(el=>{
+      el.addEventListener('click',()=>{
+        const k=el.getAttribute('data-tgl');
+        VISIBLE[k]=!VISIBLE[k];
+        el.classList.toggle('off',!VISIBLE[k]);
+        requestAnimationFrame(redrawCharts);
+      });
+    });
+  }
+
+  // Redraw on window resize so canvases fill their containers at any size
+  const ro=new ResizeObserver(()=>requestAnimationFrame(redrawCharts));
+  ro.observe(document.querySelector('.charts-panel'));
+  window.addEventListener('resize',()=>requestAnimationFrame(redrawCharts));
 
   Promise.all([loadConfig(),loadTribes()]).then(connect);
 })();
+
+async function exportReport(){
+  const btn = document.getElementById('btn-export');
+  btn.textContent = '… loading';
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/audit/report');
+    const txt = await r.text();
+    const blob = new Blob([txt], {type:'text/plain'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    const cd = r.headers.get('content-disposition') || '';
+    const m = cd.match(/filename="([^"]+)"/);
+    a.download = m ? m[1] : 'pam_audit.txt';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  } catch(e) { alert('Export failed: ' + e); }
+  finally { btn.textContent = '⬇ REPORT'; btn.disabled = false; }
+}
 </script>
 </body>
 </html>
