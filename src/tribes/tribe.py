@@ -121,14 +121,33 @@ class Tribe:
         v = strat(self, ts, state)
         return self._blend_with_indicators(state, v)
 
-    def vote(self, ts: datetime, state: MarketState) -> Vote:
-        v = self._lifecycle_vote(ts, state)
+    def project_vote(self, ts: datetime, state: MarketState) -> Vote:
+        """Raw strategy signal for forward projection — no lifecycle gating.
+        Bypasses flat/hold/cooldown so the projector gets a fresh strategy
+        read at every step instead of collapsing to hold-conviction after step 1."""
+        v = self._fresh_signal(ts, state)
+        return self._apply_weight_and_fractions(ts, v)
+
+    def _apply_weight_and_fractions(self, ts: datetime, v: Vote) -> Vote:
         eff = self.effective_weight(ts)
         act = max(0.0, min(1.0, float(getattr(self.spec.flow, "activation_rate", 1.0))))
-        new_conv = v.conviction * act
-        if eff != v.weight or new_conv != v.conviction:
-            v = replace(v, weight=eff, conviction=max(0.0, min(1.0, new_conv)))
-        return v
+        raw_conv = max(0.0, min(1.0, v.conviction))
+        new_conv = raw_conv * act
+        if v.side is Side.BUY:
+            buy_frac = act * (0.5 + raw_conv / 2.0)
+            sell_frac = act * max(0.0, 0.5 - raw_conv / 2.0)
+        elif v.side is Side.SELL:
+            sell_frac = act * (0.5 + raw_conv / 2.0)
+            buy_frac = act * max(0.0, 0.5 - raw_conv / 2.0)
+        else:
+            buy_frac = 0.0
+            sell_frac = 0.0
+        return replace(v, weight=eff, conviction=max(0.0, min(1.0, new_conv)),
+                       buy_frac=buy_frac, sell_frac=sell_frac)
+
+    def vote(self, ts: datetime, state: MarketState) -> Vote:
+        v = self._lifecycle_vote(ts, state)
+        return self._apply_weight_and_fractions(ts, v)
 
     def _lifecycle_vote(self, ts: datetime, state: MarketState) -> Vote:
         if self._sim_side is None:

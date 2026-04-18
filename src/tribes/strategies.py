@@ -306,6 +306,256 @@ def funding_fader(tribe: "Tribe", ts: datetime, state: MarketState) -> Vote:
                  horizon_seconds=int(p.get("hold_seconds", 1800)))
 
 
+@register("leverage_cycle")
+def leverage_cycle(tribe: "Tribe", ts: datetime, state: MarketState) -> Vote:
+    """Reads the open-interest cycle: expansions are "late pile-on" setups
+    (fade the concurrent price trend), contractions are "squeeze/capitulate"
+    setups (follow the concurrent price trend — the OI drain IS the
+    unwind that's driving the move).
+
+    Four quadrants (oi_delta_pct × price_change_bps):
+      OI up, price up     → late longs piling in → fade (sell)
+      OI up, price down   → late shorts piling in → fade (buy)
+      OI down, price up   → short squeeze, capitulation buys → follow (buy)
+      OI down, price down → long capitulation → follow (sell)
+
+    Needs OI data from at least one venue. Idle: weak lean in the direction
+    implied by the current quadrant with low conviction."""
+    p = tribe.spec.strategy.params
+    oi_window_s = float(p.get("oi_window_s", 3600.0))
+    oi_ref_pct = float(p.get("oi_reference_pct", 3.0))
+    price_window_s = float(p.get("price_window_s", 3600.0))
+    price_ref_bps = float(p.get("price_reference_bps", 60.0))
+    strong_thr = float(p.get("strong_activation", 0.8))
+
+    if not state.oi:
+        return _offline(tribe, "no OI data yet")
+
+    oi_delta = state.oi_delta_pct(oi_window_s)
+    move_bps = state.price_change_bps(price_window_s)
+
+    if state.last_price is None:
+        return _offline(tribe, "no price yet")
+
+    oi_signal = oi_delta / max(oi_ref_pct, 1e-6)
+    price_signal = move_bps / max(price_ref_bps, 1.0)
+
+    # Direction: fade when OI expanding (price_signal negated), follow when
+    # OI draining (price_signal passed through).
+    if oi_signal >= 0:
+        # expansion quadrant — fade
+        direction = -1.0
+    else:
+        # contraction quadrant — follow the unwind
+        direction = 1.0
+
+    # Magnitude requires BOTH axes to be meaningful.
+    magnitude = min(abs(oi_signal), abs(price_signal))
+    signed = direction * magnitude * (1.0 if price_signal > 0 else -1.0)
+    # For the expansion quadrant, direction=-1 means: if price up, go down
+    # (fade), if price down, go up (fade). That's exactly -sign(price) × mag.
+    # For contraction, direction=+1 means: if price up, go up (follow), etc.
+    # That's exactly +sign(price) × mag. The formula above collapses to
+    # direction × sign(price) × mag — correct for both.
+
+    if magnitude >= strong_thr:
+        return _lean(tribe, max(-1.0, min(1.0, signed)),
+                     reason=f"leverage {'expansion-fade' if oi_signal>=0 else 'unwind-follow'} "
+                            f"oi={oi_delta:+.2f}% move={move_bps:+.0f}bps",
+                     horizon_seconds=int(p.get("hold_seconds", 3600)))
+
+    # Below the strong activation threshold — weak lean in the same
+    # directional quadrant but with capped conviction.
+    signed_weak = signed * 0.5
+    return _lean(tribe, max(-1.0, min(1.0, signed_weak)),
+                 reason=f"leverage cycle quiet oi={oi_delta:+.2f}% move={move_bps:+.0f}bps",
+                 horizon_seconds=int(p.get("hold_seconds", 3600)), cap=0.4)
+
+
+@register("options_hedger_proxy")
+def options_hedger_proxy(tribe: "Tribe", ts: datetime, state: MarketState) -> Vote:
+    """Proxy for options-dealer hedging flow. We don't have Deribit book
+    data on the free tier, so this archetype SIMULATES the two dominant
+    hedging patterns from what we CAN see:
+
+      1. Volatility regime: when realized vol is calm (book stable, dealers
+         net LONG gamma from retail call-buying), hedges FADE intraday
+         moves — buy dips, sell rips. This is the dominant pattern in
+         BTC perps during range regimes.
+
+      2. Volatility regime flip: once realized vol exceeds a threshold
+         (~60bps in a 5min window), the assumption is the market has
+         forced dealers SHORT gamma — their hedges now AMPLIFY the move.
+
+      3. Time-of-day weight: dealer-hedge flow is concentrated at the
+         two daily rebalance windows — Asia open (UTC 23-02) and US open
+         (UTC 13-15). Midday US and late Asia are quiet. We scale the
+         effective conviction by a per-hour factor.
+
+    This is explicitly a PROXY. It will misfire on days when the actual
+    options book has a dealer position opposite what our vol-regime
+    heuristic assumes. Treated as one voice in the council, not as
+    truth."""
+    p = tribe.spec.strategy.params
+    move_window_s = float(p.get("move_window_s", 900.0))       # 15min
+    move_ref_bps = float(p.get("move_reference_bps", 20.0))
+    vol_window_s = float(p.get("vol_window_s", 300.0))
+    flip_vol_bps = float(p.get("flip_vol_bps", 60.0))
+
+    if state.last_price is None:
+        return _offline(tribe, "no price yet")
+
+    move_bps = state.price_change_bps(move_window_s)
+    rng = state.price_range(vol_window_s)
+    if rng is None or rng[0] <= 0:
+        return _lean(tribe, 0.0, reason="no vol data yet",
+                     horizon_seconds=int(p.get("hold_seconds", 1800)))
+    lo, hi = rng
+    vol_bps = (hi - lo) / ((hi + lo) / 2.0) * 10_000.0
+
+    # Active-window weight: Asia open + US open are prime hedge-flow
+    # hours. Outside those, scale conviction down.
+    hour = ts.hour
+    if hour in (23, 0, 1, 2, 13, 14, 15):
+        tod_weight = 1.0
+    elif hour in (3, 4, 12, 16, 22):
+        tod_weight = 0.7
+    else:
+        tod_weight = 0.4
+
+    # Long-gamma regime: fade the move. Short-gamma regime: follow it.
+    short_gamma = vol_bps >= flip_vol_bps
+    raw = move_bps / max(move_ref_bps, 1.0)
+
+    if short_gamma:
+        signed = raw * 0.7 * tod_weight       # follow, muted — amplify the move
+        tag = "short-gamma amplify"
+    else:
+        signed = -raw * 0.7 * tod_weight      # fade — long-gamma dampen
+        tag = "long-gamma fade"
+
+    return _lean(tribe, max(-1.0, min(1.0, signed)),
+                 reason=f"{tag} move={move_bps:+.0f}bps vol={vol_bps:.0f}bps h={hour:02d}UTC tod_w={tod_weight:.1f}",
+                 horizon_seconds=int(p.get("hold_seconds", 1800)))
+
+
+@register("cross_venue_arb")
+def cross_venue_arb(tribe: "Tribe", ts: datetime, state: MarketState) -> Vote:
+    """Spread traders watching Binance vs Bybit/OKX taker aggression.
+
+    When Binance's flow runs materially hotter than the external-venue
+    average — say Binance is heavy-buying while Bybit/OKX are balanced or
+    selling — the move is being *led* by one venue. Two things then tend
+    to happen: either (a) external venues catch up (Binance was right,
+    trade continues) or (b) Binance reverts (it was the only buyer, price
+    rolls back). Empirically, the SHORT-horizon outcome is predominantly
+    (b): divergence at the print typically reverts over the next 30-120s
+    as spreads close. That's the trade.
+
+    Fade short-term divergence, confirmed by longer-term divergence being
+    same-sign (persistent one-venue dominance, not just a single aggressive
+    print).
+
+    Idle: weak fade of current divergence."""
+    p = tribe.spec.strategy.params
+    short_w = float(p.get("short_window_s", 60.0))
+    long_w = float(p.get("long_window_s", 300.0))
+    strong_thr = float(p.get("strong_divergence", 0.35))
+    confirm_thr = float(p.get("confirm_divergence", 0.15))
+
+    # cross_venue_divergence returns 0.0 when no cross-venue data — the
+    # strategy should treat that as offline (nothing to arb).
+    if not state.cross_flow:
+        return _offline(tribe, "no cross-venue flow yet")
+
+    short_div = state.cross_venue_divergence(short_w)
+    long_div = state.cross_venue_divergence(long_w)
+
+    # Strong + confirmed → full fade.
+    if abs(short_div) >= strong_thr and short_div * long_div > 0 and abs(long_div) >= confirm_thr:
+        signed = -short_div / strong_thr * 0.9
+        return _lean(tribe, max(-1.0, min(1.0, signed)),
+                     reason=f"fade venue divergence short={short_div:+.2f} long={long_div:+.2f}",
+                     horizon_seconds=int(p.get("hold_seconds", 300)))
+
+    # Strong short-term but NOT confirmed on longer window → weaker fade
+    # (it may be a fleeting one-print event).
+    if abs(short_div) >= strong_thr:
+        signed = -short_div / strong_thr * 0.5
+        return _lean(tribe, max(-1.0, min(1.0, signed)),
+                     reason=f"one-shot venue divergence {short_div:+.2f}",
+                     horizon_seconds=int(p.get("hold_seconds", 300)), cap=0.6)
+
+    # Idle — weak fade of short-window divergence. Even when below the
+    # strong threshold, a spread trader always holds a residual lean.
+    signed = -short_div * 0.4
+    return _lean(tribe, signed,
+                 reason=f"venue flow balanced ({short_div:+.2f})",
+                 horizon_seconds=int(p.get("hold_seconds", 300)))
+
+
+@register("basis_arb")
+def basis_arb(tribe: "Tribe", ts: datetime, state: MarketState) -> Vote:
+    """Cash-and-carry structural arb. Reads three channels that funding_fader
+    ignores:
+
+      1. *Annualized* basis (rate × 3 × 365) rather than the raw 8h print —
+         a 1bps epoch and a 3bps epoch feel the same to funding_fader but
+         are 11% vs 33% annualized to a basis trader.
+      2. Perp/mark premium in bps — direct measure of same-side wedge.
+      3. OI-delta over the last hour — is leverage BUILDING into this
+         basis, or unwinding out of it?
+
+    The archetype fades persistent rich basis (short perp / long spot), and
+    fades it HARDER when OI is expanding on the same side (crowded trade
+    about to unwind). Slow horizons (4-24h) — this is structural capital,
+    not scalp.
+
+    Idle: weak fade of whatever residual basis currently is."""
+    p = tribe.spec.strategy.params
+    rich_annualized_pct = float(p.get("rich_annualized_pct", 15.0))
+    oi_window_s = float(p.get("oi_window_s", 3600.0))
+    oi_ref_pct = float(p.get("oi_reference_pct", 2.0))
+    premium_ref_bps = float(p.get("premium_reference_bps", 10.0))
+
+    f = float(state.last_funding_rate or 0.0)
+    annualized_pct = f * 3.0 * 365.0 * 100.0
+
+    if state.last_price is not None and state.last_mark_price and state.last_mark_price > 0:
+        premium_bps = (state.last_price - state.last_mark_price) / state.last_mark_price * 10_000.0
+    else:
+        premium_bps = 0.0
+
+    oi_delta = state.oi_delta_pct(oi_window_s)
+
+    fund_signal = annualized_pct / max(rich_annualized_pct, 1e-6)
+    prem_signal = premium_bps / max(premium_ref_bps, 1e-6)
+    oi_signal = oi_delta / max(oi_ref_pct, 1e-6)
+
+    if abs(fund_signal) >= 1.0:
+        # Basis rich. Boost conviction when OI is expanding on the paid side
+        # (crowded carry → deeper unwind when it snaps).
+        boost = 1.0 + min(max(oi_signal * (1.0 if fund_signal > 0 else -1.0), 0.0), 2.0) * 0.4
+        signed = -((fund_signal + prem_signal * 0.3) / 2.0) * boost
+        return _lean(tribe, max(-1.0, min(1.0, signed)),
+                     reason=f"basis rich ann={annualized_pct:+.1f}% prem={premium_bps:+.0f}bps oi={oi_delta:+.2f}%",
+                     horizon_seconds=int(p.get("hold_seconds", 14400)))
+
+    if abs(prem_signal) >= 1.0 and fund_signal * prem_signal > 0:
+        # Premium alone is extreme, funding co-signs — moderate fade.
+        signed = -(prem_signal + fund_signal) / 2.5
+        return _lean(tribe, max(-1.0, min(1.0, signed)),
+                     reason=f"premium wedge ann={annualized_pct:+.1f}% prem={premium_bps:+.0f}bps",
+                     horizon_seconds=int(p.get("hold_seconds", 14400)))
+
+    # Idle: weak fade of residual basis. Still structural — these guys
+    # always have a slight short-carry bias when funding is positive.
+    signed = -(fund_signal * 0.35 + prem_signal * 0.15)
+    return _lean(tribe, max(-1.0, min(1.0, signed)),
+                 reason=f"basis quiet ann={annualized_pct:+.1f}% prem={premium_bps:+.0f}bps",
+                 horizon_seconds=int(p.get("hold_seconds", 14400)))
+
+
 @register("grid_bot")
 def grid_bot(tribe: "Tribe", ts: datetime, state: MarketState) -> Vote:
     """Retail auto-bots (3Commas, Pionex, Binance grid). Place a ladder of

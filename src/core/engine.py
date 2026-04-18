@@ -29,6 +29,8 @@ from ..decision.engine import DecisionEngine
 from ..execution.base import Executor
 from ..execution.ledger import Ledger
 from ..projector.chess import ChessProjector
+from ..projector.kernel_calibrator import KernelCalibrator
+from ..regime.classifier import RegimeClassifier
 from ..tribes.market_state import MarketState
 from ..tribes.tribe import Tribe
 
@@ -52,6 +54,8 @@ class TradingEngine:
         broadcaster: "UIBroadcaster | None" = None,
         auditor: ForecastAuditor | None = None,
         calibrator: TribeCalibrator | None = None,
+        kernel_calibrator: KernelCalibrator | None = None,
+        regime_classifier: RegimeClassifier | None = None,
     ) -> None:
         self.bus = bus
         self.tribes = tribes
@@ -64,6 +68,8 @@ class TradingEngine:
         self.broadcaster = broadcaster
         self.auditor = auditor
         self.calibrator = calibrator
+        self.kernel_calibrator = kernel_calibrator
+        self.regime_classifier = regime_classifier
         self._tick_count = 0
         self._starting_equity: float = executor.equity_usd
         # Prediction anchors. Each is (label, step_index) where step_index is
@@ -71,12 +77,13 @@ class TradingEngine:
         # +tick_seconds into the future). Used by the UI to stamp a colored
         # dot on the price chart at every tick — gives an auditable trail of
         # what the council expected vs what happened.
+        # Horizons all fit within projector_steps × tick_seconds (≤ 10min at
+        # defaults). Anchors beyond that were previously silently dropped.
         self._anchor_specs = [
             ("15s",  1),
             ("1m",   max(1, 60  // max(tick_seconds, 1))),
             ("5m",   max(1, 300 // max(tick_seconds, 1))),
             ("10m",  max(1, 600 // max(tick_seconds, 1))),
-            ("15m",  max(1, 900 // max(tick_seconds, 1))),
         ]
 
     async def run(self) -> None:
@@ -108,6 +115,14 @@ class TradingEngine:
                 continue
             if ev.kind == "funding" and ev.severity < 0.25:
                 continue
+            # Phase F — cross-venue trade volume is comparable to Binance's,
+            # and `oi` ticks every 60s — both would swamp the UI feed. Drop
+            # cross_trade entirely (only useful as an aggregate signal) and
+            # keep oi gated behind a moderate severity (we emit 0, so never).
+            if ev.kind == "cross_trade":
+                continue
+            if ev.kind == "oi":
+                continue
             await self.broadcaster.publish({
                 "type": "event",
                 "ts": ev.ts.astimezone(timezone.utc).isoformat(),
@@ -132,6 +147,10 @@ class TradingEngine:
         if mark is None or mark <= 0 or not forecast.steps:
             return []
         bps_per_unit = float(getattr(self.projector, "bps_per_unit_pressure", 0.0))
+        # Phase E — regime overlay. Projector used this scalar to generate
+        # the step pressures; anchors must apply the same scaling or the
+        # "predicted price" line on the chart disagrees with the forecast.
+        bps_per_unit *= float(getattr(self.projector, "regime_multiplier", 1.0))
         out: list[dict] = []
         cum_bps = 0.0
         price = mark
@@ -172,7 +191,21 @@ class TradingEngine:
                 m = self.calibrator.skill_multiplier(v.tribe_id)
                 if m != 1.0 and v.side is not Side.ABSTAIN:
                     new_conv = max(0.0, min(1.0, v.conviction * m))
+                    # Recompute internal distribution fractions so they stay
+                    # consistent with the scaled conviction. act ≈ buy+sell.
+                    act_est = v.buy_frac + v.sell_frac
+                    if act_est > 1e-9:
+                        raw_new = max(0.0, min(1.0, new_conv / act_est))
+                        if v.side is Side.BUY:
+                            nb = act_est * (0.5 + raw_new / 2.0)
+                            ns = act_est * max(0.0, 0.5 - raw_new / 2.0)
+                        else:
+                            ns = act_est * (0.5 + raw_new / 2.0)
+                            nb = act_est * max(0.0, 0.5 - raw_new / 2.0)
+                    else:
+                        nb, ns = v.buy_frac, v.sell_frac
                     votes.append(replace(v, conviction=new_conv,
+                                         buy_frac=nb, sell_frac=ns,
                                          reason=v.reason + f" | skill×{m:.2f}"))
                 else:
                     votes.append(v)
@@ -182,11 +215,30 @@ class TradingEngine:
         else:
             votes = raw_votes
         agg = aggregate_votes(votes, ts)
+
+        # Phase E — regime overlay. Classify the tape, push the multiplier
+        # onto the projector so this tick's forecast (and anchors) use the
+        # regime-adjusted gain. `regime_snapshot` piggybacks on the broadcast
+        # payload for UI consumption.
+        regime_snapshot: dict | None = None
+        if self.regime_classifier is not None:
+            regime = self.regime_classifier.classify(self.state)
+            self.projector.regime_multiplier = regime.multiplier
+            regime_snapshot = regime.to_dict()
+
         forecast = self.projector.project(self.state)
 
-        # 2) Council-driven exits: close positions whose direction no longer
-        #    matches the current forecast. Must happen BEFORE the entry
-        #    decision so equity/notional caps reflect this tick's reality.
+        # 2a) Funding accrual — deduct before exits so the equity used for
+        #     capacity checks is already net of funding costs this tick.
+        if hasattr(self.executor, "apply_funding"):
+            self.executor.apply_funding(
+                self.state.last_funding_rate or 0.0,
+                float(self.tick_seconds),
+            )
+
+        # 2b) Council-driven exits: close positions whose direction no longer
+        #     matches the current forecast. Must happen BEFORE the entry
+        #     decision so equity/notional caps reflect this tick's reality.
         self.executor.evaluate_exits(ts, self.state.last_price, forecast)
 
         # 3) Max-hold backstop (time-based hard cap, independent of forecast).
@@ -200,11 +252,13 @@ class TradingEngine:
             (1 if p.side.value == "buy" else -1) * p.size_usd
             for p in self.executor.positions
         )
+        regime_tag = regime_snapshot["label"] if regime_snapshot else "-"
         logger.info(
             "[tick {:>4}] px={:.2f} net={:+.3f} unc={:.2f} emove={:+.1f}bps conf={:.2f} "
-            "open={} net_exp=${:+.0f} eq=${:.2f} | {} — {}",
+            "reg={} open={} net_exp=${:+.0f} eq=${:.2f} | {} — {}",
             self._tick_count, self.state.last_price, agg.net_pressure, agg.uncertainty,
             forecast.expected_move_bps, forecast.confidence,
+            regime_tag,
             open_n, net_pos, self.executor.equity_usd,
             intent.action, intent.reason,
         )
@@ -223,6 +277,7 @@ class TradingEngine:
         # trailing window in memory for the UI.
         backscore_snapshot: dict | None = None
         calibrator_snapshot: dict | None = None
+        kernel_snapshot: dict | None = None
         if self.auditor is not None:
             resolved_now = self.auditor.record_tick(
                 ts, self.state.last_price, predictions,
@@ -235,8 +290,18 @@ class TradingEngine:
             # calibrator so each tribe's EWMA moves toward the truth.
             if self.calibrator is not None and resolved_now:
                 self.calibrator.apply_resolved(resolved_now)
+            # Phase A loop: the same resolved anchors fit the projector's
+            # gain. Push the refreshed value straight onto the projector so
+            # the NEXT tick's forecast uses it.
+            if self.kernel_calibrator is not None and resolved_now:
+                self.kernel_calibrator.apply_resolved(resolved_now)
+                self.projector.bps_per_unit_pressure = (
+                    self.kernel_calibrator.current_gain()
+                )
         if self.calibrator is not None and self._tick_count % 20 == 0:
             calibrator_snapshot = self.calibrator.snapshot()
+        if self.kernel_calibrator is not None and self._tick_count % 20 == 0:
+            kernel_snapshot = self.kernel_calibrator.snapshot()
 
         # Tick record for daily audit
         self.ledger.write({
@@ -307,8 +372,11 @@ class TradingEngine:
                 "starting_equity_usd": self._starting_equity,
                 "trades": getattr(self.executor, "trades_completed", 0),
                 "wins": getattr(self.executor, "wins", 0),
+                "recent_trades": list(getattr(self.executor, "recent_trades", [])),
                 "action": intent.action,
                 "reason": intent.reason,
                 "backscore": backscore_snapshot,
                 "calibration": calibrator_snapshot,
+                "kernel": kernel_snapshot,
+                "regime": regime_snapshot,
             })

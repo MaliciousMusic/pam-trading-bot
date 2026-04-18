@@ -21,10 +21,16 @@ from src.decision.engine import DecisionEngine
 from src.execution.ledger import Ledger
 from src.execution.paper import PaperExecutor
 from src.ingress.binance_ws import BinancePerpsWS
+from src.ingress.bybit_ws import BybitPublicWS
+from src.ingress.event_recorder import EventRecorder
 from src.ingress.fgi import FGIPoller
+from src.ingress.oi_poller import OIPoller
+from src.ingress.okx_ws import OKXPublicWS
 from src.ingress.reddit_rss import RedditRSSPoller
 from src.ingress.rss_feeds import CURATED_FEEDS, RSSFeedPoller
 from src.projector.chess import ChessProjector
+from src.projector.kernel_calibrator import KernelCalibrator
+from src.regime.classifier import RegimeClassifier
 from src.tribes.loader import load_all
 from src.tribes.market_state import MarketState
 from src.ui.broadcaster import UIBroadcaster
@@ -92,7 +98,28 @@ async def main() -> None:
         max_shrink=float(cal_cfg.get("max_shrink", 0.6)),
         max_boost=float(cal_cfg.get("max_boost", 1.4)),
         apply=bool(cal_cfg.get("apply", False)),
+        fast_halflife_resolved=int(cal_cfg.get("fast_halflife_resolved", 50)),
+        fast_min_samples=int(cal_cfg.get("fast_min_samples", 10)),
+        regime_shift_threshold=float(cal_cfg.get("regime_shift_threshold", 0.12)),
     )
+    # Phase A — projector gain calibration. Feeds on the same resolved
+    # anchors the tribe calibrator consumes; nudges `bps_per_unit_pressure`
+    # toward the median realized/predicted ratio. Safe by default
+    # (clamped, EWMA-smoothed, refuses to move until min_samples seen).
+    kc_cfg = cfg.get("projector_calibration", {}) or {}
+    kernel_calibrator = KernelCalibrator(
+        initial_gain=float(cfg["projector"]["bps_per_unit_pressure"]),
+        halflife_resolved=int(kc_cfg.get("halflife_resolved", 300)),
+        min_samples=int(kc_cfg.get("min_samples", 50)),
+        window=int(kc_cfg.get("window", 2000)),
+        apply=bool(kc_cfg.get("apply", True)),
+    )
+    # Push any resumed gain onto the projector before the first tick.
+    projector.bps_per_unit_pressure = kernel_calibrator.current_gain()
+
+    # Phase E — regime overlay. Thresholds and per-label multipliers live
+    # in settings.regime; defaults are already calibrated for BTC perps.
+    regime_classifier = RegimeClassifier(cfg.get("regime", {}) or {})
 
     engine = TradingEngine(
         bus=bus, tribes=tribes, state=state,
@@ -102,6 +129,8 @@ async def main() -> None:
         broadcaster=broadcaster,
         auditor=auditor,
         calibrator=calibrator,
+        kernel_calibrator=kernel_calibrator,
+        regime_classifier=regime_classifier,
     )
 
     client = BinancePerpsWS(bus, streams=ds["streams"])
@@ -118,7 +147,9 @@ async def main() -> None:
         "tick_seconds": int(cfg["clock"]["tick_seconds"]),
     }
     app = create_app(broadcaster, _tribe_meta(tribes), ui_cfg,
-                     auditor=auditor, calibrator=calibrator)
+                     auditor=auditor, calibrator=calibrator,
+                     kernel_calibrator=kernel_calibrator,
+                     regime_classifier=regime_classifier, state=state)
 
     host = cfg.get("ui", {}).get("host", "127.0.0.1")
     port = int(cfg.get("ui", {}).get("port", 8765))
@@ -126,6 +157,31 @@ async def main() -> None:
 
     # Tasks to gather. Core trading loop + exchange stream always on.
     coros = [client.run(), engine.run(), server.serve()]
+
+    # Phase D — event tape recorder for tournament replay. Subscribes to
+    # the bus and writes every event to data/events/YYYY-MM-DD.jsonl so
+    # tomorrow's tournament can score variants on the same session. Depth
+    # events are the bulk of the feed — off by default to keep disk sane;
+    # re-enable via settings.recorder.include_depth for full fidelity.
+    rec_cfg = cfg.get("recorder", {}) or {}
+    skip_kinds = set() if rec_cfg.get("include_depth") else {"book"}
+    coros.append(EventRecorder(bus, skip_kinds=skip_kinds).run())
+
+    # Phase F — multi-venue open interest (Binance/Bybit/OKX public REST).
+    oi_cfg = sources_cfg.get("multi_venue_oi", {}) or {}
+    if oi_cfg.get("enabled"):
+        coros.append(OIPoller(
+            bus,
+            symbol=cfg.get("symbol", "BTCUSDT"),
+            poll_seconds=int(oi_cfg.get("poll_seconds", 60)),
+        ).run())
+
+    # Phase F — cross-venue public trade streams. Events land as
+    # kind="cross_trade" so the execution venue's own flow stays isolated.
+    if sources_cfg.get("bybit_ws", {}).get("enabled"):
+        coros.append(BybitPublicWS(bus, symbol=cfg.get("symbol", "BTCUSDT")).run())
+    if sources_cfg.get("okx_ws", {}).get("enabled"):
+        coros.append(OKXPublicWS(bus).run())
 
     # Sentiment feeds (free) — wake up the news_reactor tribe.
     if sources_cfg.get("fear_greed_index", {}).get("enabled"):

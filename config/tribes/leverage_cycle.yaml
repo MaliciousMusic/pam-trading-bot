@@ -1,0 +1,92 @@
+id: leverage_cycle
+name: Leverage Cycle Rider
+description: >-
+  Systematic capital reading the OI × price quadrant. OI expansions
+  alongside a trend imply late-pile-on positioning (fade); OI
+  contractions alongside a trend imply unwind/squeeze (follow). Uses
+  multi-venue aggregated OI (Binance+Bybit+OKX) with 60min lookback
+  matched against the 60min price move. Distinct input axis from the
+  funding-fader archetypes — no funding-rate dependency.
+
+demographics:
+  capital_band_usd: [25000, 2000000]
+  count_estimate: 3000
+  experience_years: [3, 15]
+  jurisdiction: [NA, EU, APAC]
+
+hardware:
+  tier: workstation
+  typical_latency_ms: 200
+  uptime: continuous
+  specs:
+    screens: 2-4
+    connectivity: business_fiber
+
+software:
+  platforms: [binance_pro, bybit, okx]
+  tools: [coinglass_free, custom_oi_scanner, tradingview]
+  charting: advanced
+  order_types_used: [limit, stop_market, trailing_stop]
+  data_feeds: [oi_time_series, mark_price, trade]
+
+strategy:
+  family: leverage_cycle
+  params:
+    oi_window_s: 3600
+    oi_reference_pct: 3.0        # 3% hourly OI move is material
+    price_window_s: 3600
+    price_reference_bps: 60.0    # 60bps/hr is a trend
+    strong_activation: 0.8       # both axes must exceed 80% of ref for strong lean
+    hold_seconds: 3600
+
+attention:
+  kinds: [oi, trade, funding]
+  tags: [oi, mark_price, trade]
+  ignored_tags: [news, social, liq_long, liq_short]
+  min_severity: 0.0
+
+personality:
+  risk_tolerance: 0.60
+  fomo: 0.10
+  panic: 0.15
+  patience: 0.70
+  herding: 0.15
+  reaction_mu_seconds: 120.0
+  reaction_sigma_seconds: 300.0
+
+flow:
+  weight: 0.06
+  # OI scanners run continuously; cohort rebalances on each poll cycle.
+  activation_rate: 0.10
+  typical_hold_seconds: [1800, 14400]
+  default_conviction: 0.65
+  cooldown_seconds: 600
+
+disposition:
+  idle_bias: 0.0
+  idle_conviction: 0.05
+
+circadian:
+  # Systematic multi-hour scanners, running 24/7 with light dip during
+  # the cross-session gap (UTC 04-06) when liquidity is thin everywhere.
+  timezone_label: "24/7 systematic"
+  presence_by_hour_utc:
+    [0.90, 0.90, 0.90, 0.85, 0.75, 0.70, 0.75, 0.85,
+     0.95, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00,
+     0.95, 0.90, 0.85, 0.85, 0.85, 0.85, 0.85, 0.90]
+
+# Leverage-cycle lens: the strat encodes the 4-quadrant logic. Indicator
+# blend adds confirming momentum + taker imbalance reads (OI is orthogonal
+# to these, but a crowded position often shows up in the taker tape too).
+indicators:
+  price_momentum:
+    window_s: 3600
+    ref_bps: 60
+    action: follow
+    weight: 0.5
+  taker_imbalance:
+    window_s: 900
+    reference_usd: 2000000
+    action: follow
+    weight: 0.4
+indicator_weight: 0.35

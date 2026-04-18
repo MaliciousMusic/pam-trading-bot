@@ -38,6 +38,9 @@ class DecisionEngine:
 
         self.leverage = float(settings.get("leverage", 1.0))
 
+        d = settings.get("decision", {})
+        self.min_conf = float(d.get("min_conf", 0.10))
+
     def decide(
         self,
         ts: datetime,
@@ -55,6 +58,8 @@ class DecisionEngine:
             return self._hold(ts, price, emove, conf, "no mark price")
         if emove == 0:
             return self._hold(ts, price, emove, conf, "council flat")
+        if conf < self.min_conf:
+            return self._hold(ts, price, emove, conf, f"council incoherent conf={conf:.3f}")
 
         side = Side.BUY if emove > 0 else Side.SELL
         pct = self._size_pct(conf)

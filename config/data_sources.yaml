@@ -15,13 +15,36 @@ sources:
                                # pressure moves price more; deep book →
                                # same pressure gets absorbed).
 
-  coinglass_oi:
-    enabled: false             # open interest aggregated across venues (free tier)
+  # Phase F — multi-venue open interest. We skip CoinGlass's gated API
+  # and aggregate Binance/Bybit/OKX public OI endpoints directly — same
+  # signal, zero auth. Emits one kind="oi" event per venue per poll.
+  multi_venue_oi:
+    enabled: true
     kind: rest_poll
     poll_seconds: 60
+    venues: [binance, bybit, okx]
 
+  # Phase F — cross-venue taker flow. Public trade streams from Bybit and
+  # OKX feed a separate `cross_trade` event kind so Binance's own taker
+  # flow (the execution venue's actual felt pressure) stays distinct.
+  # Enables the cross_venue_arb archetype in Phase G.
+  bybit_ws:
+    enabled: true
+    kind: websocket
+    endpoint: wss://stream.bybit.com/v5/public/linear
+    streams: [publicTrade.BTCUSDT]
+  okx_ws:
+    enabled: true
+    kind: websocket
+    endpoint: wss://ws.okx.com:8443/ws/v5/public
+    streams: [trades:BTC-USDT-SWAP]
+
+  # CryptoPanic is served through the shared RSS poller (their free feed
+  # at /news/btc/feed/ — no key required). See src/ingress/rss_feeds.py
+  # CURATED_FEEDS. Leaving this entry here as a placeholder for any
+  # future API-token-based enrichment.
   cryptopanic_news:
-    enabled: false             # free news feed
+    enabled: false
     kind: rest_poll
     poll_seconds: 30
 

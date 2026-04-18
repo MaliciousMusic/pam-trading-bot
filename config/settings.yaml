@@ -35,7 +35,8 @@ decision:
   #
   # Dead zone: how far the flipped emove must exceed 0 before closing.
   # Prevents whipsaw when the forecast oscillates near zero.
-  exit_dead_zone_bps: 0.5
+  exit_dead_zone_bps: 3.0
+  min_conf: 0.10                # council must agree before opening — below this is noise
 
 # Confidence-weighted position sizing. At conf = 0 we inject `min_pct_equity`;
 # at conf = 1.0 we inject `max_pct_equity`. Every non-flat council projection
@@ -56,7 +57,25 @@ sizing:
 
 projector:
   bps_per_unit_pressure: 8.0  # linear kernel: net_pressure=1.0 → 8bps per step
-  confidence_decay: 0.9       # multiplicative per step
+  # Decay kernel: step i contributes decay^i to expected_move and confidence.
+  # 0.90 → effective horizon ≈ 1/(1-0.9) = 10 steps (~30s). With projector_steps=200
+  # that meant the forecast collapsed to the next ~10 steps regardless of the
+  # 10-min setting. 0.98 → effective horizon ≈ 50 steps (~2.5 min) of the
+  # 200-step (10-min) projection — the far horizon still contributes meaningfully
+  # while near steps still dominate.
+  confidence_decay: 0.98
+
+# Phase A — live projector-gain fitting. Each resolved backscore anchor
+# updates a running EWMA of `realized / predicted` bps; the correction is
+# applied to `bps_per_unit_pressure` so the forecast stops being systematically
+# off-scale. Clamped to [1, 40] bps so a bad fit can't silence or blow up.
+# `apply: true` pushes the fitted value onto the projector live; `false`
+# measures only (visible in UI, projector keeps the hand-picked default).
+projector_calibration:
+  apply: true
+  halflife_resolved: 300    # EWMA halflife in resolved anchors (~15–30 min)
+  min_samples: 50           # wait for this many usable pairs before adjusting
+  window: 2000              # trailing pairs kept for the median fit
 
 execution:
   fee_rate_bps: 5.0
@@ -71,15 +90,56 @@ audit:
 # conviction by a clamped multiplier in future ticks. `apply: false` is the
 # safe default — measure first, close the loop once there's real data.
 calibration:
-  apply: false                 # flip to true to scale convictions by skill
-  halflife_resolved: 500       # EWMA halflife in resolved anchors
+  apply: true                  # scales vote conviction by measured skill
+  halflife_resolved: 500       # slow EWMA halflife in resolved anchors (stable skill)
   min_samples: 30              # don't multiply until this many resolutions per tribe
   max_shrink: 0.6              # unreliable tribe: down to 0.6× its conviction
   max_boost: 1.4               # reliable tribe: up to 1.4× its conviction
+  # Phase H — within-session regime adaptation. A fast EWMA runs in parallel
+  # at a much shorter halflife. When it diverges from the slow estimate by
+  # more than `regime_shift_threshold`, the fast score takes over — the
+  # tribe has entered a changed regime and the stale history is no longer
+  # informative. Resolves the chop→cascade-flip adaptation gap where a
+  # tribe skilled in one regime bleeds conviction into the next one until
+  # the slow EWMA catches up hundreds of anchors later.
+  fast_halflife_resolved: 50   # fast EWMA halflife (~minutes within a busy session)
+  fast_min_samples: 10         # fast floor — smaller because halflife is smaller
+  regime_shift_threshold: 0.12 # |fast − slow| above this triggers fast-override
+
+# Phase E — live regime overlay. Every tick the classifier labels the tape
+# from MarketState stats (realized vol, drift efficiency, recent liquidations)
+# and its multiplier scales the projector's kernel gain. Chop dampens
+# (price mean-reverts, pressure doesn't stick), cascade amplifies (thin book,
+# liquidations self-reinforce), trend/normal sit between. This is a single
+# scalar by design — keeps the projector auditable.
+regime:
+  vol_window_s: 300            # rolling realized-vol window (5 min)
+  liq_window_s: 60             # liquidation tally window
+  chop_vol_bps: 15.0           # vol ≤ this OR eff ≤ chop_eff → chop
+  chop_eff: 0.30               # drift/range ratio below this = chop
+  trend_eff: 0.55              # drift/range ratio above this = trend
+  cascade_vol_bps: 60.0        # vol ≥ this → cascade (overrides chop/trend)
+  cascade_liq_usd: 5000000     # 60s liquidations ≥ this → cascade
+  multipliers:
+    chop:         0.6
+    normal:       1.0
+    trend_up:     1.2
+    trend_down:   1.2
+    cascade_up:   1.7
+    cascade_down: 1.7
 
 ui:
   host: 127.0.0.1
   port: 8765
+
+# Phase D — event-tape recorder. Persists the bus stream to
+# data/events/YYYY-MM-DD.jsonl so the nightly tournament (scripts/
+# run_tournament.py) can score variant councils against the same
+# session the parent lived through. Depth@100ms events are excluded by
+# default because they dominate volume (millions/day); flip include_depth
+# to true if a variant's depth-kernel sensitivity needs full fidelity.
+recorder:
+  include_depth: false
 
 logging:
   level: INFO

@@ -47,8 +47,13 @@ class PaperExecutor(Executor):
         self.trades_completed = 0
         self.wins = 0
         self._next_id = 1
+        self._recent_trades: list[dict] = []   # last 60 closed, newest last
 
     # -- Executor interface ---------------------------------------------
+
+    @property
+    def recent_trades(self) -> list[dict]:
+        return self._recent_trades
 
     @property
     def equity_usd(self) -> float:
@@ -84,6 +89,29 @@ class PaperExecutor(Executor):
             else:
                 survivors.append(p)
         self._positions = survivors
+
+    def apply_funding(self, funding_rate: float, tick_seconds: float) -> None:
+        """Accrue perpetual-futures funding for every open position.
+
+        Longs pay when funding_rate > 0 (bulls pay bears), shorts receive.
+        Shorts pay when funding_rate < 0 (bears pay bulls), longs receive.
+        Binance epochs are 8 hours (28 800 s); we prorate per tick.
+
+            payment = size_usd * funding_rate * (tick_seconds / 28_800)
+        """
+        if not self._positions or funding_rate == 0.0:
+            return
+        total_paid = 0.0
+        for p in self._positions:
+            sign = 1.0 if p.side is Side.BUY else -1.0
+            payment = p.size_usd * funding_rate * sign * (tick_seconds / 28_800.0)
+            self._equity -= payment
+            total_paid += payment
+        if abs(total_paid) > 0.01:
+            logger.debug(
+                "FUNDING  net=${:+.4f}  rate={:.6f}  open={}",
+                total_paid, funding_rate, len(self._positions),
+            )
 
     def mark_to_market(self, ts: datetime, price: float) -> None:
         """Hard backstop: close positions that exceeded max_hold_seconds."""
@@ -194,6 +222,23 @@ class PaperExecutor(Executor):
             p.id, p.side.value.upper(), p.size_usd, fill, pnl_usd, fee,
             net, held_s, self._equity, reason,
         )
+        self._recent_trades.append({
+            "id": p.id,
+            "side": p.side.value,
+            "size_usd": p.size_usd,
+            "entry_price": p.entry_price,
+            "exit_price": fill,
+            "held_s": round(held_s),
+            "reason": reason,
+            "pnl_usd": round(pnl_usd, 4),
+            "fee_usd": round(fee, 4),
+            "net_usd": round(net, 4),
+            "fee_killed": bool(pnl_usd > 0 and net <= 0),
+            "expected_move_bps": p.expected_move_bps,
+            "confidence": round(p.confidence, 3),
+        })
+        if len(self._recent_trades) > 60:
+            self._recent_trades.pop(0)
         self._log({
             "event": "close", "ts": ts, "position_id": p.id, "side": p.side.value,
             "size_usd": p.size_usd, "entry_price": p.entry_price, "fill_price": fill,
