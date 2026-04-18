@@ -71,3 +71,30 @@ circadian:
     [0.30, 0.25, 0.28, 0.35, 0.40, 0.50, 0.70, 0.85,
      0.95, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00,
      0.95, 0.85, 0.70, 0.55, 0.45, 0.40, 0.35, 0.30]
+
+# Classic TA lens: RSI, momentum, taker volume, volatility regime.
+# Discretionary — breakouts confirmed by RSI + volume. Stays out of chop.
+indicators:
+  rsi:
+    window_s: 300
+    overbought: 72
+    oversold: 28
+    action: follow         # break out of range → ride; extremes get taken for the break
+    weight: 0.8
+  price_momentum:
+    window_s: 120
+    ref_bps: 15
+    action: follow
+    weight: 0.7
+  taker_imbalance:
+    window_s: 120
+    reference_usd: 800000
+    action: follow         # volume confirms the break
+    weight: 0.6
+  volatility_regime:
+    window_s: 600
+    low_bps: 10
+    high_bps: 60
+    prefer: high           # they WANT volatility; low vol = stand aside
+    weight: 0.4
+indicator_weight: 0.5

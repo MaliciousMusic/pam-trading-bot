@@ -71,3 +71,34 @@ circadian:
     [0.70, 0.65, 0.65, 0.70, 0.75, 0.80, 0.90, 0.95,
      1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00,
      1.00, 0.95, 0.90, 0.85, 0.80, 0.75, 0.75, 0.70]
+
+# Swing lens: long-window drift + macro/regulation regime. They don't
+# react to ticks; they react to regime. Funding-aware (crowded trade fade).
+indicators:
+  price_momentum:
+    window_s: 1800          # 30-min drift, not 60-second noise
+    ref_bps: 60
+    action: follow
+    weight: 0.8
+  price_zscore:
+    window_s: 3600          # hourly mean — mean-revert if price is 2σ stretched
+    extreme: 2.5
+    action: fade            # they don't chase the extended leg
+    weight: 0.4
+  news_pulse:regulation:   # alias → resolves to news_pulse with macro tag
+    window_s: 3600
+    tag: regulation         # SEC/Fed/CFTC press matters; crypto blogs don't
+    reference: 0.5
+    action: follow
+    weight: 0.9
+  news_pulse:macro:         # alias → second news_pulse for macro items
+    window_s: 3600
+    tag: macro
+    reference: 0.5
+    action: follow
+    weight: 0.6
+  funding_extreme:
+    extreme: 0.0008
+    action: fade
+    weight: 0.5
+indicator_weight: 0.55

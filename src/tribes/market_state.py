@@ -64,6 +64,55 @@ class RollingSeries:
         return min(xs), max(xs)
 
 
+class TaggedSeries:
+    """Time-stamped tuples of (score, tags). Supports filtered aggregation.
+
+    Used for news events where each item carries a bag of category tags
+    (`regulation`, `influencer`, `business`, `twitter`, ...) and strategies
+    want to query subsets — e.g. "only regulation/macro items in the last
+    30 minutes" without scanning every news event in process.
+    """
+
+    __slots__ = ("max_age_s", "_data")
+
+    def __init__(self, max_age_s: float) -> None:
+        self.max_age_s = max_age_s
+        self._data: deque[tuple[float, float, frozenset[str]]] = deque()
+
+    def add(self, ts: datetime, score: float, tags: Iterable[str]) -> None:
+        t = ts.timestamp()
+        self._data.append((t, score, frozenset(tags)))
+        cutoff = t - self.max_age_s
+        while self._data and self._data[0][0] < cutoff:
+            self._data.popleft()
+
+    def advance_clock(self, ts: datetime) -> None:
+        cutoff = ts.timestamp() - self.max_age_s
+        while self._data and self._data[0][0] < cutoff:
+            self._data.popleft()
+
+    def _iter(self, window_s: float | None, any_of: frozenset[str] | None):
+        if not self._data:
+            return
+        latest = self._data[-1][0]
+        w = window_s if window_s is not None else self.max_age_s
+        cutoff = latest - w
+        for t, s, tags in self._data:
+            if t < cutoff:
+                continue
+            if any_of is not None and not (tags & any_of):
+                continue
+            yield s, tags
+
+    def score(self, window_s: float, any_of: Iterable[str] | None = None) -> float:
+        aof = frozenset(any_of) if any_of else None
+        return sum(s for s, _ in self._iter(window_s, aof))
+
+    def count(self, window_s: float, any_of: Iterable[str] | None = None) -> int:
+        aof = frozenset(any_of) if any_of else None
+        return sum(1 for _ in self._iter(window_s, aof))
+
+
 class MarketState:
     """Shared read model the voting tribes query."""
 
@@ -77,6 +126,13 @@ class MarketState:
         # Social/sentiment series — signed score ∈ [-1,+1] per reddit post / pulse.
         # Kept longer than market windows because headlines carry across minutes.
         self.social = RollingSeries(1800.0)                # 30min social pulse history
+        # News series from curated RSS (SEC/Fed, Coindesk/Cointelegraph, substack,
+        # Nitter mirrors). Tagged with category so strategies can filter:
+        #   regulation_pulse() — SEC/CFTC/Fed weight
+        #   influencer_pulse() — Twitter/Substack talkers
+        #   business_pulse()   — Reuters/mainstream
+        # Kept 2h because regulation items keep mattering for the whole session.
+        self.news = TaggedSeries(7200.0)
         self.last_price: float | None = None
         self.last_mark_price: float | None = None
         self.last_funding_rate: float = 0.0
@@ -122,6 +178,19 @@ class MarketState:
                 self.fgi_value = int(v)
                 self.fgi_classification = str(ev.payload.get("classification", ""))
                 self.fgi_ts = ev.ts
+        elif ev.kind == "news":
+            # Signed score in [-1,+1] — RSS poller already clipped. Severity is
+            # the source-weighted impact (SEC=1.0, HN=0.3) and becomes the
+            # magnitude contribution — an SEC bear story (score=-0.5, sev=1.0)
+            # contributes -0.5 while a random blog (score=-0.5, sev=0.3) feeds
+            # -0.15. This is how we let Fed news swamp Substack chatter.
+            sc = float(ev.payload.get("score", 0.0))
+            sev = float(ev.severity or 0.0)
+            effective = sc * sev if sc != 0 else 0.0
+            if effective != 0 or "regulation" in ev.tags or "macro" in ev.tags:
+                # Regulation/macro items still register at 0 score — their
+                # occurrence alone is a regime signal for swing/news tribes.
+                self.news.add(ev.ts, effective, ev.tags)
 
     # -- queries --------------------------------------------------------
 
@@ -161,6 +230,32 @@ class MarketState:
             return 0.0
         return (self.fgi_value - 50) / 50.0
 
+    # -- news queries (tagged RSS) ---------------------------------------
+
+    def news_score(self, window_s: float, tag: str | None = None) -> float:
+        """Signed, severity-weighted sum of news scores in `window_s`.
+        Positive = bullish headlines dominate. If `tag` is given, filter
+        to items carrying that tag (e.g. 'regulation', 'influencer')."""
+        return self.news.score(window_s, [tag] if tag else None)
+
+    def news_volume(self, window_s: float, tag: str | None = None) -> int:
+        """Raw count of news items matching `tag` within the window."""
+        return self.news.count(window_s, [tag] if tag else None)
+
+    def regulation_pulse(self, window_s: float = 3600.0) -> float:
+        """Signed score from SEC/Fed/CFTC items only. High-impact regime shifts."""
+        return self.news.score(window_s, ["regulation", "macro"])
+
+    def influencer_pulse(self, window_s: float = 1800.0) -> float:
+        """Signed score from substack/Twitter talkers. Retail copy-traders
+        react to this before they react to price."""
+        return self.news.score(window_s, ["influencer", "twitter"])
+
+    def business_pulse(self, window_s: float = 3600.0) -> float:
+        """Signed score from Reuters/mainstream business coverage — often
+        the vector for TradFi attention spikes."""
+        return self.news.score(window_s, ["business", "mainstream"])
+
     # -- projection support --------------------------------------------
 
     def snapshot(self) -> "MarketState":
@@ -172,6 +267,7 @@ class MarketState:
         s.short_liq._data = deque(self.short_liq._data)
         s.prices._data = deque(self.prices._data)
         s.social._data = deque(self.social._data)
+        s.news._data = deque(self.news._data)
         s.last_price = self.last_price
         s.last_mark_price = self.last_mark_price
         s.last_funding_rate = self.last_funding_rate
@@ -187,4 +283,5 @@ class MarketState:
         self.short_liq.advance_clock(ts)
         self.prices.advance_clock(ts)
         self.social.advance_clock(ts)
+        self.news.advance_clock(ts)
         self.last_update = ts

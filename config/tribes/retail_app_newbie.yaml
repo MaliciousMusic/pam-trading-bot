@@ -77,3 +77,22 @@ circadian:
     [0.35, 0.30, 0.28, 0.30, 0.35, 0.45, 0.55, 0.65,
      0.75, 0.85, 0.90, 0.95, 1.00, 1.00, 1.00, 0.95,
      0.90, 0.85, 0.80, 0.75, 0.70, 0.60, 0.50, 0.40]
+
+# Archetype's "view of the tape" — what this cohort actually reacts to.
+# Newbies don't read charts; they feel price momentum and get pulled in by
+# headlines they see on the app's "Markets in the news" card or social.
+indicators:
+  price_momentum:
+    window_s: 600
+    ref_bps: 80            # needs a really visible move to register
+    action: follow         # buy green, sell red — classic chase
+    weight: 1.0
+  news_pulse:
+    window_s: 3600
+    reference: 0.5         # moderate: any mainstream headline counts
+    action: follow         # they ride the headline, don't fade
+    weight: 0.5
+  fgi_bias:
+    action: follow         # peak greed pulls them in; extreme fear makes them exit
+    weight: 0.4
+indicator_weight: 0.4      # strategy carries the bulk; indicators add flavor
