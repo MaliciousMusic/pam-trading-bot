@@ -46,7 +46,13 @@ personality:
   herding: 0.2
 
 flow:
+  # weight is OVERRIDDEN at load time (see derive.py). Value below = pre-derivation hand-tune.
   weight: 0.05
+  # Positional trend-followers hold for days — on most 15s ticks they're
+  # holding, not entering. ~2% of the cohort has a scaling order in flight
+  # during a given tick (adjusting size on regime confirmation / stop
+  # trailing). Big capital per participant, so small activation still counts.
+  activation_rate: 0.02
   typical_hold_seconds: [3600, 259200]
   default_conviction: 0.7
   cooldown_seconds: 300

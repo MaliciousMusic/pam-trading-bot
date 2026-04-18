@@ -3,20 +3,46 @@ exchange: binance_perps
 symbol: BTCUSDT
 base_capital_usd: 5000        # used when mode=live; paper sizes off this too
 
+# Perpetual futures leverage. $5k equity × 4% per-trade × 10× leverage =
+# $2000 notional per trade — a 15 bps move is $3 P&L, visible and testable.
+# Retail Binance perps averages ~10-20× leverage; 10× is conservative.
+leverage: 10
+
 clock:
   tick_seconds: 15            # voting cadence
-  projector_steps: 20         # chess forward sim depth (5 min horizon at 15s/step)
+  # 60 × 15s = 15-minute forward horizon. The UI pins prediction anchors at
+  # +15s, +1min, +5min, +10min, +15min and colors them; over time you get a
+  # dot-trail you can compare against actual price.
+  projector_steps: 60
 
 risk:
-  max_concurrent_positions: 1
-  min_hold_seconds: 30
-  max_hold_seconds: 600
+  # Portfolio caps. Every tick that passes entry gates opens a NEW trade
+  # (long or short), so the cap limits how many can stack before we stop
+  # adding. Each existing trade runs independently with its own TP/SL.
+  max_concurrent_positions: 20
+  # Total notional across all open positions cannot exceed this fraction
+  # of equity. With leverage 10× and cap 500, we'd use ~50% of available
+  # buying power — leaves headroom for adverse moves without margin trouble.
+  max_total_notional_pct: 500
+  min_hold_seconds: 0           # disabled — each position has its own TP/SL
+  max_hold_seconds: 600         # hard backstop if TP/SL never hit
 
 decision:
   min_expected_move_bps: 4    # lowered from 8; realistic market rarely projects >8bps cumulative
   min_confidence: 0.08        # lowered from 0.15; signal_quality × directional rarely hits that
   max_uncertainty: 0.90
   reversal_factor: 1.2        # how strongly forecast must flip to kill a position
+  # Fee-aware entry gate: the forecast expected_move must clear the
+  # ROUND-TRIP cost (entry+exit fees+slippage) with some margin, else
+  # the trade is a guaranteed loser even if the forecast is right.
+  # Round-trip cost = 2 × (fee_rate_bps + slippage_bps). With defaults that
+  # is 14 bps; we require expected_move > 14 + 2 bps margin.
+  fee_safety_margin_bps: 2.0
+  # Stop-loss: each position's SL is at `sl_ratio × expected_move_bps` against
+  # us, floored by `sl_min_bps` to avoid micro-stops on noise. TP is at the
+  # forecasted expected_move. With sl_ratio=0.7 that yields R:R ≈ 1.4:1.
+  sl_ratio: 0.7
+  sl_min_bps: 20.0
 
 # Confidence-bracketed position sizing. At conf = min_confidence we inject
 # `min_pct_equity`; at conf = 1.0 we inject `max_pct_equity`. This lets us

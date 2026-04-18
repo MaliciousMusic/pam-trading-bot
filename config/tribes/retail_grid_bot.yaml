@@ -53,7 +53,14 @@ personality:
   herding: 0.0
 
 flow:
+  # weight is OVERRIDDEN at load time (see derive.py). Value below = pre-derivation hand-tune.
   weight: 0.10
+  # Grid bots rebalance mechanically — a ladder of resting orders gets
+  # touched several times per minute on a working grid, so ~15% of the
+  # cohort's ladders trigger an order during a given 15s tick. One of the
+  # largest retail cohorts (Binance's native grid product alone has ~1M+
+  # enabled users; Pionex + 3Commas add hundreds of thousands more).
+  activation_rate: 0.15
   typical_hold_seconds: [60, 1800]
   default_conviction: 0.35
   cooldown_seconds: 0

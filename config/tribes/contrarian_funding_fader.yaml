@@ -43,7 +43,12 @@ personality:
   herding: 0.15
 
 flow:
+  # weight is OVERRIDDEN at load time (see derive.py). Value below = pre-derivation hand-tune.
   weight: 0.04
+  # Funding epochs fire every 8h on perps. Between epochs the cohort mostly
+  # holds. ~4% of the cohort is actively rebalancing/entering per tick
+  # (concentrated in the minutes around each 00/08/16 UTC funding print).
+  activation_rate: 0.04
   typical_hold_seconds: [1800, 28800]
   default_conviction: 0.6
   cooldown_seconds: 600

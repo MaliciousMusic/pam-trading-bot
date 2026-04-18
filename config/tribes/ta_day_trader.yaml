@@ -47,7 +47,13 @@ personality:
   herding: 0.35
 
 flow:
+  # weight is OVERRIDDEN at load time (see derive.py). Value below = pre-derivation hand-tune.
   weight: 0.12
+  # Semi-pro chart-watchers glued to 2–4 screens; most carry an order or
+  # an alert-triggered setup every tick during their active hours. ~25%
+  # of the cohort is expressing a directional view per tick (the rest are
+  # between setups or managing an existing position silently).
+  activation_rate: 0.25
   typical_hold_seconds: [300, 3600]
   default_conviction: 0.65
   cooldown_seconds: 60

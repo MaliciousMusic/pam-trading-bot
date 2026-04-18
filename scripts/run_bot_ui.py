@@ -63,6 +63,9 @@ async def main() -> None:
         starting_equity_usd=float(cfg.get("base_capital_usd", 5000)),
         fee_rate_bps=float(cfg["execution"]["fee_rate_bps"]),
         slippage_bps=float(cfg["execution"]["slippage_bps"]),
+        max_concurrent_positions=int(cfg["risk"]["max_concurrent_positions"]),
+        max_total_notional_pct=float(cfg["risk"]["max_total_notional_pct"]),
+        max_hold_seconds=int(cfg["risk"]["max_hold_seconds"]),
         ledger=ledger,
     )
     projector = ChessProjector(
@@ -90,6 +93,11 @@ async def main() -> None:
         "size_min_pct": float(cfg["sizing"]["min_pct_equity"]),
         "size_max_pct": float(cfg["sizing"]["max_pct_equity"]),
         "sizing_curve": str(cfg["sizing"]["curve"]),
+        "leverage": float(cfg.get("leverage", 1.0)),
+        "max_concurrent_positions": int(cfg["risk"]["max_concurrent_positions"]),
+        "max_total_notional_pct": float(cfg["risk"]["max_total_notional_pct"]),
+        "sl_ratio": float(cfg["decision"].get("sl_ratio", 0.7)),
+        "sl_min_bps": float(cfg["decision"].get("sl_min_bps", 20.0)),
         "bps_per_unit_pressure": float(cfg["projector"]["bps_per_unit_pressure"]),
         "projector_steps": int(cfg["clock"]["projector_steps"]),
         "tick_seconds": int(cfg["clock"]["tick_seconds"]),

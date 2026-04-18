@@ -65,7 +65,18 @@ class Personality(_Base):
 
 
 class Flow(_Base):
-    weight: float = 0.0                                   # estimated flow share
+    # `weight` is the *derived* per-tick flow share. It is overwritten at load
+    # time by derive.py using `count_estimate × geometric_mid(capital_band_usd)
+    # × activation_rate`, then normalized across all tribes. A value written
+    # here is a fallback used only when the tribe lacks the inputs needed to
+    # derive one (missing count/capital/rate).
+    weight: float = 0.0
+    # Fraction of the population that expresses a directional view during
+    # a single tick. 1.0 = every member trading every tick (colo MMs); 0.005
+    # = once-per-week newbie retail. Calibrated from public aggregates
+    # (Binance perps volume, Kaiko flow reports, Glassnode active-addresses)
+    # — see per-tribe YAML comments for source reasoning.
+    activation_rate: float = 0.1
     typical_hold_seconds: list[int] = Field(default_factory=lambda: [60, 600])
     default_conviction: float = 0.5
     cooldown_seconds: int = 0                              # min gap between STRONG votes
