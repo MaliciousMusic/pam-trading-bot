@@ -27,6 +27,9 @@ execution:
   fee_rate_bps: 5.0
   slippage_bps: 2.0
 
+audit:
+  horizon_seconds: 60           # forward-price window used to score each tribe vote
+
 ui:
   host: 127.0.0.1
   port: 8765
