@@ -96,7 +96,13 @@
   .m{background:var(--bg2);padding:10px;border-radius:4px;text-align:center}
   .m .k{font-size:9px;color:var(--muted);letter-spacing:.1em;
     text-transform:uppercase;margin-bottom:4px}
-  .m .v{font-family:var(--mono);font-size:16px;font-weight:600}
+  .m .v{font-family:var(--mono);font-size:16px;font-weight:600;transition:color .3s}
+  .m .v.armed{color:var(--buy)}
+  .m .v.below{color:var(--sell)}
+  .m .floor{font-size:8.5px;color:var(--muted);letter-spacing:.05em;margin-top:2px;font-family:var(--mono)}
+
+  .curve-badge{font-family:var(--mono);font-size:10px;padding:2px 8px;border-radius:3px;
+    background:var(--bg3);color:var(--accent);letter-spacing:.1em;text-transform:uppercase}
 
   .proj{background:var(--bg2);border-radius:4px;padding:12px}
   .proj-ttl{font-size:10px;color:var(--muted);letter-spacing:.15em;
@@ -153,6 +159,7 @@
   <div class="hdr-item"><span class="k">Session P&amp;L</span><span class="v" id="h-fitness">—</span></div>
   <div class="hdr-item"><span class="k">Trades W/T</span><span class="v" id="h-trades">—</span></div>
   <div class="hdr-item"><span class="k">Tick</span><span class="v" id="h-tick">—</span></div>
+  <div class="hdr-item"><span class="k">Sizing</span><span class="v curve-badge" id="h-curve">—</span></div>
   <span class="spacer"></span>
   <span id="conn">connecting</span>
 </header>
@@ -207,9 +214,9 @@
       <div class="track"><div class="marker" id="g-mark"></div></div>
     </div>
     <div class="metrics">
-      <div class="m"><div class="k">E-Move</div><div class="v" id="m-emove">—</div></div>
-      <div class="m"><div class="k">Conf</div><div class="v" id="m-conf">—</div></div>
-      <div class="m"><div class="k">Unc</div><div class="v" id="m-unc">—</div></div>
+      <div class="m"><div class="k">E-Move</div><div class="v" id="m-emove">—</div><div class="floor" id="m-emove-floor"></div></div>
+      <div class="m"><div class="k">Conf</div><div class="v" id="m-conf">—</div><div class="floor" id="m-conf-floor"></div></div>
+      <div class="m"><div class="k">Unc</div><div class="v" id="m-unc">—</div><div class="floor" id="m-unc-ceil"></div></div>
     </div>
     <div class="proj">
       <div class="proj-ttl">Chess Projection · 20 × 15s</div>
@@ -217,7 +224,7 @@
       <div class="proj-lbl"><span>+15s</span><span>+150s</span><span>+300s</span></div>
     </div>
     <div class="box pos flat" id="pos-box">
-      <div class="k"><span>Position</span></div>
+      <div class="k"><span>Position</span><span class="v" id="pos-pct">—</span></div>
       <div class="side" id="pos-side">FLAT</div>
       <div class="meta" id="pos-meta"></div>
     </div>
@@ -258,6 +265,8 @@
   const tribeMeta={};             // id → {name, weight, pos:{x,y}, el}
   const voteHistory={};           // id → ring of last N sides
   const priceHist=[],eqHist=[];const MAX=240;let p0=null,e0=null;
+  let CFG={min_confidence:0.15,min_expected_move_bps:8,max_uncertainty:0.9,
+           size_min_pct:0.5,size_max_pct:4.0,sizing_curve:'linear'};
 
   function tribePos(i,n){
     const a=(i/n)*2*Math.PI - Math.PI/2;
@@ -443,9 +452,17 @@
     $('g-val').textContent=(np>=0?'+':'')+np.toFixed(3);
 
     const emv=$('m-emove');emv.textContent=bps(t.expected_move_bps);
-    emv.style.color=t.expected_move_bps>0?'var(--buy)':t.expected_move_bps<0?'var(--sell)':'var(--fg)';
-    $('m-conf').textContent=t.confidence.toFixed(2);
-    $('m-unc').textContent=t.uncertainty.toFixed(2);
+    const emThresh=CFG.min_expected_move_bps||0;
+    emv.classList.toggle('armed', Math.abs(t.expected_move_bps)>=emThresh);
+    emv.classList.toggle('below', Math.abs(t.expected_move_bps)<emThresh);
+
+    const cv=$('m-conf');cv.textContent=t.confidence.toFixed(2);
+    cv.classList.toggle('armed', t.confidence>=CFG.min_confidence);
+    cv.classList.toggle('below', t.confidence<CFG.min_confidence);
+
+    const uv=$('m-unc');uv.textContent=t.uncertainty.toFixed(2);
+    uv.classList.toggle('armed', t.uncertainty<=CFG.max_uncertainty);
+    uv.classList.toggle('below', t.uncertainty>CFG.max_uncertainty);
 
     renderProjection(t.forecast_steps||[]);
 
@@ -482,10 +499,13 @@
     const box=$('pos-box');box.classList.remove('long','short','flat');
     if(!t.position){
       box.classList.add('flat');$('pos-side').textContent='FLAT';$('pos-meta').textContent='';
+      $('pos-pct').textContent='—';
     }else{
       const long=t.position.side==='buy';box.classList.add(long?'long':'short');
       $('pos-side').textContent=long?'LONG':'SHORT';
+      const pct=t.equity_usd>0?(t.position.size_usd/t.equity_usd)*100:0;
       $('pos-meta').textContent=`$${fmt(t.position.size_usd)} @ ${fmt(t.position.entry_price)}`;
+      $('pos-pct').textContent=pct.toFixed(2)+'%';
     }
   }
 
@@ -553,7 +573,18 @@
     ws.onerror=()=>ws.close();
   }
 
-  loadTribes().then(connect);
+  async function loadConfig(){
+    try{
+      const r=await fetch('/api/config');const c=await r.json();
+      if(c&&Object.keys(c).length)CFG={...CFG,...c};
+    }catch{}
+    $('h-curve').textContent=`${CFG.size_min_pct}–${CFG.size_max_pct}% · ${CFG.sizing_curve}`;
+    $('m-conf-floor').textContent=`≥ ${CFG.min_confidence.toFixed(2)}`;
+    $('m-emove-floor').textContent=`≥ ${CFG.min_expected_move_bps.toFixed(0)}bps`;
+    $('m-unc-ceil').textContent=`≤ ${CFG.max_uncertainty.toFixed(2)}`;
+  }
+
+  Promise.all([loadConfig(),loadTribes()]).then(connect);
 })();
 </script>
 </body>
