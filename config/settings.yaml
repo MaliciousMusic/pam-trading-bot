@@ -1,12 +1,12 @@
 mode: paper                   # paper | live
 exchange: binance_perps
 symbol: BTCUSDT
-base_capital_usd: 5000        # used when mode=live; paper sizes off this too
+base_capital_usd: 50000       # paper-only; bumped so per-trade P&L is visible
 
-# Perpetual futures leverage. $5k equity × 4% per-trade × 10× leverage =
-# $2000 notional per trade — a 15 bps move is $3 P&L, visible and testable.
-# Retail Binance perps averages ~10-20× leverage; 10× is conservative.
-leverage: 10
+# Perpetual futures leverage. $50k equity × 6% per-trade × 15× leverage =
+# $45k notional per trade — a 15 bps move is ~$67 P&L, comfortably visible
+# and meaningful for analyzing the sizing curve vs realized pnl.
+leverage: 15
 
 clock:
   tick_seconds: 15            # voting cadence
@@ -54,8 +54,8 @@ decision:
 #   linear     — size grows in proportion to (conf - min_conf)
 #   quadratic  — size grows with the square; low-conf entries stay very small
 sizing:
-  min_pct_equity: 0.5
-  max_pct_equity: 4.0
+  min_pct_equity: 1.0
+  max_pct_equity: 6.0
   curve: linear
 
 projector:
