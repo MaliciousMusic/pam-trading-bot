@@ -36,9 +36,14 @@ class Hypothesis:
 
 
 # ── heuristic bands ─────────────────────────────────────────────────────
+#
+# Under the always-leaning v2 contract every tribe votes directionally on
+# nearly every tick; `participation` is now ≈ 1.0 for everyone and is no
+# longer informative. What we care about is `engaged_rate` — how often the
+# tribe raises its voice above a whisper (conviction ≥ ENGAGED_CONVICTION).
 
-LOW_PARTICIPATION = 0.05      # fired on <5% of ticks → likely starved or over-tight
-HIGH_PARTICIPATION = 0.95     # fired on >95% → likely too loose, adds noise
+LOW_ENGAGED_RATE = 0.05       # raised voice on <5% of ticks → starved or over-tight
+HIGH_ENGAGED_RATE = 0.60      # raised voice on >60% → trigger-happy
 WEAK_HIT_RATE = 0.38          # conviction-weighted hit-rate below this is bad
 STRONG_HIT_RATE = 0.58        # above this is notable
 
@@ -52,6 +57,8 @@ GATE_PARAM: dict[str, str] = {
     "liquidation_hunter": "strategy.params.min_liq_usd",
     "funding_fader":      "strategy.params.extreme_funding_rate",
     "news_reactor":       "strategy.params.extreme_social_score",
+    "grid_bot":           "strategy.params.grid_band_bps",
+    "copy_trader":        "strategy.params.min_social_score",
 }
 WEIGHT_PATH = "flow.weight"
 
@@ -110,8 +117,8 @@ def generate(report: DailyReport, tribes: list[TribeSpec]) -> list[Hypothesis]:
         family = spec.strategy.family
         gate = GATE_PARAM.get(family)
 
-        # 1) Silent tribes — loosen gate.
-        if s.participation < LOW_PARTICIPATION and gate:
+        # 1) Whispering tribes — loosen gate so they actually commit.
+        if s.engaged_rate < LOW_ENGAGED_RATE and gate:
             try:
                 cur = float(_get(data, gate))
                 proposed = cur * (1 - gain)
@@ -119,14 +126,15 @@ def generate(report: DailyReport, tribes: list[TribeSpec]) -> list[Hypothesis]:
                     hypotheses.append(Hypothesis(
                         tribe_id=spec.id, field=gate,
                         current=cur, proposed=proposed,
-                        rationale=f"silent ({s.participation:.1%}) — loosen gate by {gain:.0%}",
-                        priority=0.95 if s.participation == 0 else 0.75,
+                        rationale=f"whispering (engaged={s.engaged_rate:.1%}) "
+                                  f"— loosen gate by {gain:.0%}",
+                        priority=0.95 if s.engaged_votes == 0 else 0.75,
                     ))
             except (KeyError, TypeError):
                 pass
 
-        # 2) Over-firing tribes with weak hit-rate — tighten gate.
-        elif s.participation > HIGH_PARTICIPATION and \
+        # 2) Over-engaged tribes with weak hit-rate — tighten gate.
+        elif s.engaged_rate > HIGH_ENGAGED_RATE and \
              s.conviction_weighted_hit_rate < WEAK_HIT_RATE and gate:
             try:
                 cur = float(_get(data, gate))
@@ -135,7 +143,7 @@ def generate(report: DailyReport, tribes: list[TribeSpec]) -> list[Hypothesis]:
                     hypotheses.append(Hypothesis(
                         tribe_id=spec.id, field=gate,
                         current=cur, proposed=proposed,
-                        rationale=f"over-firing ({s.participation:.1%}) "
+                        rationale=f"over-engaged ({s.engaged_rate:.1%}) "
                                   f"with hr={s.conviction_weighted_hit_rate:.1%} — tighten",
                         priority=0.80,
                     ))
@@ -143,7 +151,7 @@ def generate(report: DailyReport, tribes: list[TribeSpec]) -> list[Hypothesis]:
                 pass
 
         # 3) Profitable voter — bump weight.
-        if s.directional_votes >= 10 and s.conviction_weighted_hit_rate >= STRONG_HIT_RATE:
+        if s.engaged_votes >= 10 and s.conviction_weighted_hit_rate >= STRONG_HIT_RATE:
             try:
                 cur = float(_get(data, WEIGHT_PATH))
                 proposed = min(0.5, cur * (1 + gain))

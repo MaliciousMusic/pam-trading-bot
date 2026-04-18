@@ -47,3 +47,17 @@ flow:
   typical_hold_seconds: [1800, 28800]
   default_conviction: 0.6
   cooldown_seconds: 600
+
+disposition:
+  # Strategy overrides with live funding-sign fade; spec default flat.
+  idle_bias: 0.0
+  idle_conviction: 0.05
+
+circadian:
+  # Mostly bot-run funding arbitrage. 24/7 with slight dips during pre-funding
+  # low-activity hours, but the positions themselves hold through sleep.
+  timezone_label: "24/7 (arb bot)"
+  presence_by_hour_utc:
+    [0.90, 0.90, 0.90, 0.90, 0.90, 0.90, 0.90, 0.90,
+     0.90, 0.90, 0.90, 0.90, 0.90, 0.90, 0.90, 0.90,
+     0.90, 0.90, 0.90, 0.90, 0.90, 0.90, 0.90, 0.90]

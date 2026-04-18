@@ -6,7 +6,8 @@ personal memory if any).
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 
 from ..core.types import Event, Side, Vote
 from .market_state import MarketState
@@ -27,6 +28,20 @@ class Tribe:
     def weight(self) -> float:
         return self.spec.flow.weight
 
+    def presence_factor(self, ts: datetime) -> float:
+        """0..1 multiplier on this tribe's weight at the given UTC hour.
+        Captures 'the APAC crowd is asleep right now' — people sleep, bots
+        don't. Retail tribes should drop here; 24/7 algos stay at 1.0."""
+        hour = ts.astimezone(timezone.utc).hour
+        curve = self.spec.circadian.presence_by_hour_utc
+        if not curve:
+            return 1.0
+        # Tolerant of misconfigured curves (not exactly length 24).
+        return max(0.0, min(1.0, float(curve[hour % len(curve)])))
+
+    def effective_weight(self, ts: datetime) -> float:
+        return self.weight * self.presence_factor(ts)
+
     def observe(self, ev: Event) -> None:
         """Optional hook. MarketState already absorbs everything — override
         only if this tribe needs private memory beyond what MarketState offers.
@@ -35,20 +50,34 @@ class Tribe:
 
     def vote(self, ts: datetime, state: MarketState) -> Vote:
         if self._cooldown_until and ts < self._cooldown_until:
-            return self._abstain("cooldown")
-        strat = get_strategy(self.spec.strategy.family)
-        v = strat(self, ts, state)
-        cd = self.spec.flow.cooldown_seconds
-        if v.side is not Side.ABSTAIN and cd > 0:
-            self._cooldown_until = ts + timedelta(seconds=cd)
+            # Resting from a strong take, but still present — idle lean only.
+            v = self._idle_lean("cooldown")
+        else:
+            strat = get_strategy(self.spec.strategy.family)
+            v = strat(self, ts, state)
+            cd = self.spec.flow.cooldown_seconds
+            trigger = float(getattr(self.spec.flow, "strong_vote_conviction", 0.3))
+            if v.side is not Side.ABSTAIN and v.conviction >= trigger and cd > 0:
+                self._cooldown_until = ts + timedelta(seconds=cd)
+        # Scale weight by circadian presence — they're still voting, just
+        # with less clout when their cohort is asleep.
+        eff = self.effective_weight(ts)
+        if eff != v.weight:
+            v = replace(v, weight=eff)
         return v
 
-    def _abstain(self, reason: str = "") -> Vote:
+    def _idle_lean(self, reason: str) -> Vote:
+        d = self.spec.disposition
+        bias = max(-1.0, min(1.0, float(d.idle_bias)))
+        conv = max(0.0, min(1.0, float(d.idle_conviction)))
+        if bias == 0.0 or conv == 0.0:
+            side = Side.ABSTAIN
+            conv = 0.0
+        else:
+            side = Side.BUY if bias > 0 else Side.SELL
+            conv = conv * abs(bias)        # scale conviction by |bias|
         return Vote(
-            tribe_id=self.spec.id,
-            side=Side.ABSTAIN,
-            conviction=0.0,
-            horizon_seconds=0,
-            weight=self.weight,
-            reason=reason,
+            tribe_id=self.spec.id, side=side, conviction=conv,
+            horizon_seconds=0, weight=self.weight, reason=reason,
         )
+

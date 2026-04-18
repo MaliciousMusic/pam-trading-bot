@@ -1,0 +1,77 @@
+id: copy_trader
+name: Copy Trader (Signal Follower)
+description: >-
+  Retail auto-following "lead traders" on Binance Copy Trading, Bybit
+  Copy, bitget, plus Telegram signal groups and YouTube influencers.
+  Capital replicates whatever the leader does — but with latency and
+  attenuation. Their entries LAG the move they're chasing, which means
+  they reliably buy strength and sell weakness seconds-to-minutes after
+  it already printed. A crowded, trend-confirming cohort.
+
+demographics:
+  capital_band_usd: [50, 5000]
+  count_estimate: 600000
+  experience_years: [0, 3]
+  jurisdiction: [global]
+
+hardware:
+  tier: laptop
+  typical_latency_ms: 1500
+  uptime: continuous            # the bot leg is 24/7 even if the human isn't
+  specs:
+    placement: mobile_app_or_vps
+
+software:
+  platforms: [binance_copy, bybit_copy, bitget_copy, telegram_auto_forwarder]
+  tools: [3commas_signal, cornix, zignaly]
+  charting: none
+  order_types_used: [market, stop_market]
+  data_feeds: [price_ticker, social_signals]
+
+strategy:
+  family: copy_trader
+  params:
+    social_window_s: 600
+    confirm_window_s: 120
+    min_social_volume: 2
+    min_social_score: 1.2
+    herd_drift_bps: 40           # scale for idle drift-following
+    hold_seconds: 900
+  style_notes: >-
+    Reacts to social pulse CONFIRMED by a same-direction price nudge.
+    Always herding at idle — even without a signal they lean with recent
+    drift, because somebody on their feed is chasing something.
+
+attention:
+  kinds: [social, trade]
+  tags: [social, headline, influencer, price]
+  ignored_tags: [orderbook_tick, funding]
+  min_severity: 0.3
+
+personality:
+  risk_tolerance: 0.7
+  fomo: 0.85
+  panic: 0.4
+  patience: 0.25
+  herding: 0.95
+
+flow:
+  weight: 0.08
+  typical_hold_seconds: [300, 7200]
+  default_conviction: 0.6
+  cooldown_seconds: 90
+  strong_vote_conviction: 0.35
+
+disposition:
+  # Slight permabull — crypto influencers skew bullish on average.
+  idle_bias: 0.08
+  idle_conviction: 0.08
+
+circadian:
+  # Bot leg is 24/7 but signal volume rises strongly during waking hours
+  # in NA/EU. APAC contributes some signals too, so the floor isn't low.
+  timezone_label: "global (signal-driven)"
+  presence_by_hour_utc:
+    [0.6, 0.55, 0.55, 0.6, 0.65, 0.7, 0.75, 0.80,
+     0.85, 0.90, 0.95, 1.00, 1.00, 1.00, 1.00, 1.00,
+     0.95, 0.90, 0.85, 0.80, 0.75, 0.70, 0.65, 0.60]
