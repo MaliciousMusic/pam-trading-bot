@@ -34,7 +34,6 @@ from loguru import logger
 from ..aggregator.voting import aggregate_votes
 from ..core.types import Forecast
 from ..tribes.market_state import MarketState
-from ..tribes.strategies import get as get_strategy
 from ..tribes.tribe import Tribe
 
 
@@ -59,23 +58,35 @@ class ChessProjector:
         ts = start_ts
         step_aggs: list = []
         step_bps_list: list[float] = []
-        for _ in range(self.steps):
-            ts = ts + timedelta(seconds=self.tick_seconds)
-            sim.advance_clock(ts)
-            votes = []
-            for t in self.tribes:
-                try:
-                    strat = get_strategy(t.spec.strategy.family)
-                except KeyError:
-                    continue
-                votes.append(strat(t, ts, sim))
-            agg = aggregate_votes(votes, ts)
-            step_aggs.append(agg)
-            step_bps = agg.net_pressure * self.bps_per_unit_pressure
-            step_bps_list.append(step_bps)
-            if sim.last_price is not None and sim.last_price > 0:
-                sim.last_price = sim.last_price * (1 + step_bps / 10_000.0)
-                sim.prices.add(ts, sim.last_price)
+        # Snapshot cooldown state per tribe so the projection doesn't mutate
+        # the live Tribe object. Without this, a strong projected vote would
+        # put the REAL tribe into cooldown.
+        saved_cooldowns = [t._cooldown_until for t in self.tribes]
+        try:
+            for _ in range(self.steps):
+                ts = ts + timedelta(seconds=self.tick_seconds)
+                sim.advance_clock(ts)
+                # Route through Tribe.vote() so circadian presence AND
+                # activation_rate dampening are honored inside the projection.
+                # Otherwise retail tribes vote at full conviction 24/7 in the
+                # forecast, inflating confidence in off-peak hours.
+                votes = [t.vote(ts, sim) for t in self.tribes]
+                agg = aggregate_votes(votes, ts)
+                step_aggs.append(agg)
+                step_bps = agg.net_pressure * self.bps_per_unit_pressure
+                step_bps_list.append(step_bps)
+                if sim.last_price is not None and sim.last_price > 0:
+                    sim.last_price = sim.last_price * (1 + step_bps / 10_000.0)
+                    sim.prices.add(ts, sim.last_price)
+                # Funding drifts toward zero as the market digests the move.
+                # Crude, but better than the frozen value — long enough
+                # horizons need SOME funding-dynamic so trend_follower's
+                # funding_guard isn't stuck looking at stale extreme funding.
+                if sim.last_funding_rate is not None:
+                    sim.last_funding_rate *= 0.995
+        finally:
+            for t, cd in zip(self.tribes, saved_cooldowns):
+                t._cooldown_until = cd
 
         kernel = [self.confidence_decay ** i for i in range(len(step_bps_list))]
         k_sum = sum(kernel) or 1.0

@@ -59,11 +59,20 @@ class Tribe:
             trigger = float(getattr(self.spec.flow, "strong_vote_conviction", 0.3))
             if v.side is not Side.ABSTAIN and v.conviction >= trigger and cd > 0:
                 self._cooldown_until = ts + timedelta(seconds=cd)
-        # Scale weight by circadian presence — they're still voting, just
-        # with less clout when their cohort is asleep.
+        # Population-model corrections, applied to every vote:
+        #   1) Circadian presence: the cohort that's asleep contributes less.
+        #   2) Activation rate: only a fraction of the population is actually
+        #      expressing a directional view this tick (0.5% for app newbies,
+        #      100% for colo MMs). This scales CONVICTION, not weight — a
+        #      newbie tribe with 0.5% activation means "most newbies aren't
+        #      trading right now", so their aggregate force is dampened. We
+        #      keep conviction in (0,1] instead of collapsing to idle so the
+        #      few who ARE active still move the signal proportionally.
         eff = self.effective_weight(ts)
-        if eff != v.weight:
-            v = replace(v, weight=eff)
+        act = max(0.0, min(1.0, float(getattr(self.spec.flow, "activation_rate", 1.0))))
+        new_conv = v.conviction * act
+        if eff != v.weight or new_conv != v.conviction:
+            v = replace(v, weight=eff, conviction=max(0.0, min(1.0, new_conv)))
         return v
 
     def _idle_lean(self, reason: str) -> Vote:
