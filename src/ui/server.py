@@ -19,7 +19,11 @@ from .broadcaster import UIBroadcaster
 STATIC_DIR = Path(__file__).parent / "static"
 
 
-def create_app(broadcaster: UIBroadcaster, tribe_meta: list[dict]) -> FastAPI:
+def create_app(
+    broadcaster: UIBroadcaster,
+    tribe_meta: list[dict],
+    config: dict | None = None,
+) -> FastAPI:
     app = FastAPI(title="PAM Council", docs_url=None, redoc_url=None)
 
     @app.get("/")
@@ -29,6 +33,10 @@ def create_app(broadcaster: UIBroadcaster, tribe_meta: list[dict]) -> FastAPI:
     @app.get("/api/tribes")
     async def tribes():
         return JSONResponse(tribe_meta)
+
+    @app.get("/api/config")
+    async def cfg():
+        return JSONResponse(config or {})
 
     @app.websocket("/ws")
     async def ws_endpoint(ws: WebSocket):
