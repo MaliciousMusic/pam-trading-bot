@@ -1,0 +1,21 @@
+[Unit]
+Description=PAM trading bot — council dashboard + tick loop
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pam
+WorkingDirectory=/home/pam/pam-trading-bot
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/pam/pam-trading-bot/.venv/bin/python -m scripts.run_bot_ui
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
