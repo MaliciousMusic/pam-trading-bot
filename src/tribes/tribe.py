@@ -37,7 +37,7 @@ _EXIT_SCALE = 0.50
 
 
 class Tribe:
-    def __init__(self, spec: TribeSpec) -> None:
+    def __init__(self, spec: TribeSpec, *, rng_seed: int | None = None) -> None:
         self.spec = spec
         self._cooldown_until: datetime | None = None
         # Simulated position state
@@ -45,6 +45,11 @@ class Tribe:
         self._sim_entry_ts: datetime | None = None
         self._sim_entry_conv: float = 0.0
         self._sim_hold_seconds: float = 0.0
+        # Per-tribe RNG. Isolates each tribe's stochastic draws so enabling
+        # or disabling one tribe never reshuffles another's stream — the key
+        # property for deterministic replay across variant configurations.
+        # rng_seed=None → nondeterministic fresh Random (live behavior).
+        self._rng = random.Random(rng_seed) if rng_seed is not None else random.Random()
 
     @property
     def id(self) -> str:
@@ -114,7 +119,7 @@ class Tribe:
         hi = max(lo, float(hi))
         log_lo = math.log(lo)
         log_hi = math.log(hi)
-        return min(math.exp(random.uniform(log_lo, log_hi)), 86400.0)
+        return min(math.exp(self._rng.uniform(log_lo, log_hi)), 86400.0)
 
     def _fresh_signal(self, ts: datetime, state: MarketState) -> Vote:
         strat = get_strategy(self.spec.strategy.family)

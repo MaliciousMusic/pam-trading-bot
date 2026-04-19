@@ -284,3 +284,23 @@ recorder:
 logging:
   level: INFO
   dir: logs
+
+# Historical replay harness. Reads cached 1m klines + 8h funding history and
+# feeds the live pipeline unchanged. Two modes: sprint (headless batch) and
+# watch (paced virtual clock + UI at /replay). Cold-start is intentional —
+# no warmup, no HTF pre-fill, so the report visualizes whether the council
+# stabilizes as context accumulates. See src/replay/ for the implementation.
+replay:
+  cache_dir: data                # kline/funding caches under data/klines, data/funding
+  outputs_dir: data/replays      # per-run decision logs + summary zips live here
+  rng_seed: 42                   # master seed; per-tribe seeds derived from this
+  # Multi-variant sprint default: these three synth rates run in parallel
+  # from the same kline fetch. 6 = skeletal flow, 60 = ~1/sec (close to live
+  # aggTrade cadence), 600 = dense. Comparison exposes whether tribe votes
+  # are robust to flow-granularity or whether they're reading noise.
+  default_variants:
+    - synth_6
+    - synth_60
+    - synth_600
+  watch_default_speed: 10        # × real-time; user can pick 1/10/25/50/100
+  parallel_day_fetches: 2        # kline fetcher politeness cap
