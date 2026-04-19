@@ -1,0 +1,134 @@
+id: liquidation_hunter
+name: Liquidation Hunter
+description: Pros watching open-interest buildup + funding skews + the liquidation
+  tape, positioning FOR cascade continuation. When big longs start getting flushed
+  they stay short into the flush, not against it.
+demographics:
+  capital_band_usd:
+  - 50000.0
+  - 2000000.0
+  count_estimate: 4000
+  experience_years:
+  - 2.0
+  - 15.0
+  jurisdiction:
+  - NA
+  - EU
+  - APAC
+hardware:
+  tier: workstation
+  typical_latency_ms: 80
+  uptime: continuous
+  specs:
+    screens: 3-6
+    connectivity: fiber
+software:
+  platforms:
+  - binance_pro
+  - bybit
+  - okx
+  - deribit
+  tools:
+  - coinglass_pro
+  - tensorcharts
+  - hyblock
+  - custom_liq_scanner
+  charting: advanced
+  order_types_used:
+  - limit
+  - stop_market
+  - trailing_stop
+  data_feeds:
+  - liquidation_feed
+  - oi_time_series
+  - funding
+  - orderbook_imbalance
+strategy:
+  family: liquidation_hunter
+  params:
+    liq_window_seconds: 60
+    min_liq_usd: 750000
+    hold_seconds: 180
+  style_notes: ''
+attention:
+  kinds:
+  - liquidation
+  - funding
+  - trade
+  tags:
+  - liq_long
+  - liq_short
+  - funding
+  ignored_tags:
+  - news
+  - social
+  min_severity: 0.3
+personality:
+  risk_tolerance: 0.65
+  fomo: 0.2
+  panic: 0.15
+  patience: 0.55
+  herding: 0.3
+  reaction_mu_seconds: 2.0
+  reaction_sigma_seconds: 5.0
+flow:
+  weight: 0.09699715027307285
+  activation_rate: 0.12
+  typical_hold_seconds:
+  - 120
+  - 1800
+  default_conviction: 0.75
+  cooldown_seconds: 60
+  strong_vote_conviction: 0.3
+disposition:
+  idle_bias: -0.05
+  idle_conviction: 0.06
+circadian:
+  timezone_label: EU+US (pro)
+  presence_by_hour_utc:
+  - 0.5
+  - 0.45
+  - 0.45
+  - 0.5
+  - 0.55
+  - 0.65
+  - 0.75
+  - 0.85
+  - 0.95
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 0.95
+  - 0.85
+  - 0.75
+  - 0.65
+  - 0.6
+  - 0.55
+  - 0.55
+  - 0.5
+indicators:
+  liq_imbalance:
+    window_s: 60
+    reference_usd: 500000
+    action: follow
+    weight: 1.0
+  funding_extreme:
+    extreme: 0.0005
+    action: fade
+    weight: 0.7
+  volatility_regime:
+    window_s: 300
+    low_bps: 20
+    high_bps: 120
+    prefer: high
+    weight: 0.5
+indicator_weight: 0.5
+indicator_regime_range: 0.4
+indicator_regime_low_bps: 20.0
+indicator_regime_high_bps: 120.0
+indicator_regime_prefer: high
+indicator_regime_window_s: 300.0

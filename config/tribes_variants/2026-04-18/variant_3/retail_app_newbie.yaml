@@ -1,0 +1,126 @@
+id: retail_app_newbie
+name: Retail App Newbie
+description: "Phone-only newcomer using eToro, Revolut, Coinbase-consumer, or Binance\
+  \ Lite. Checks the app a few times a day, reacts to \"price going up\" or \"price\
+  \ going down\" without charting. High FOMO, high panic, long latency. Tiny capital\
+  \ each \u2014 many of them."
+demographics:
+  capital_band_usd:
+  - 15.0
+  - 500.0
+  count_estimate: 2000000
+  experience_years:
+  - 0.0
+  - 1.0
+  jurisdiction:
+  - global
+hardware:
+  tier: phone
+  typical_latency_ms: 4000
+  uptime: intermittent
+  specs:
+    screen: small
+    connectivity: mobile_data
+software:
+  platforms:
+  - etoro
+  - revolut
+  - coinbase_consumer
+  - binance_lite
+  - crypto_com_app
+  tools: []
+  charting: none
+  order_types_used:
+  - market
+  data_feeds:
+  - app_price_ticker
+strategy:
+  family: app_fomo
+  params:
+    price_window_seconds: 600
+    min_move_bps: 45
+    conviction_scale: 0.5
+    hold_seconds: 7200
+  style_notes: Chases recent moves. Buys into green runs after they've been running
+    a while; panic-sells red. Rarely trades mid-range conditions.
+attention:
+  kinds:
+  - trade
+  - news
+  - social
+  tags:
+  - price
+  - headline
+  - influencer
+  ignored_tags:
+  - funding
+  - orderbook_tick
+  - liquidation
+  min_severity: 0.4
+personality:
+  risk_tolerance: 0.3
+  fomo: 0.9
+  panic: 0.85
+  patience: 0.1
+  herding: 0.9
+  reaction_mu_seconds: 900.0
+  reaction_sigma_seconds: 1800.0
+flow:
+  weight: 0.013281881804570097
+  activation_rate: 0.005
+  typical_hold_seconds:
+  - 3600
+  - 86400
+  default_conviction: 0.4
+  cooldown_seconds: 300
+  strong_vote_conviction: 0.3
+disposition:
+  idle_bias: 0.15
+  idle_conviction: 0.1
+circadian:
+  timezone_label: global
+  presence_by_hour_utc:
+  - 0.35
+  - 0.3
+  - 0.28
+  - 0.3
+  - 0.35
+  - 0.45
+  - 0.55
+  - 0.65
+  - 0.75
+  - 0.85
+  - 0.9
+  - 0.95
+  - 1.0
+  - 1.0
+  - 1.0
+  - 0.95
+  - 0.9
+  - 0.85
+  - 0.8
+  - 0.75
+  - 0.7
+  - 0.6
+  - 0.5
+  - 0.4
+indicators:
+  price_momentum:
+    window_s: 600
+    ref_bps: 80
+    action: follow
+    weight: 1.0
+  news_pulse:
+    window_s: 3600
+    reference: 0.5
+    action: follow
+    weight: 0.5
+  fgi_bias:
+    action: follow
+    weight: 0.4
+indicator_weight: 0.4
+indicator_regime_range: 0.0
+indicator_regime_low_bps: 15.0
+indicator_regime_high_bps: 60.0
+indicator_regime_prefer: high
+indicator_regime_window_s: 300.0

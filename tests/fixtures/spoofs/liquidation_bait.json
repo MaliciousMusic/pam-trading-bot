@@ -1,0 +1,101 @@
+{
+  "id": "liquidation_bait",
+  "description": "Cascade-style long-liquidation prints suggest a flush is starting; cascade-following tribes (liquidation_hunter, retail_degen, swing_trend_follower) get baited short. Price quickly reverses upward — the cascade was a head-fake.",
+  "bait_side": "sell",
+  "real_outcome_bps": 250,
+  "scoring_window_s": 240,
+  "events": [
+    {
+      "offset_s": 0,
+      "kind": "liquidation",
+      "source": "spoof.liquidation",
+      "tags": ["liquidation", "liq_long", "cascade"],
+      "severity": 0.95,
+      "payload": {
+        "notional_usd": 12000000,
+        "n_liquidations": 32,
+        "side": "long"
+      }
+    },
+    {
+      "offset_s": 8,
+      "kind": "liquidation",
+      "source": "spoof.liquidation",
+      "tags": ["liquidation", "liq_long", "cascade"],
+      "severity": 0.97,
+      "payload": {
+        "notional_usd": 18000000,
+        "n_liquidations": 45,
+        "side": "long"
+      }
+    },
+    {
+      "offset_s": 18,
+      "kind": "liquidation",
+      "source": "spoof.liquidation",
+      "tags": ["liquidation", "liq_long", "cascade"],
+      "severity": 0.99,
+      "payload": {
+        "notional_usd": 28000000,
+        "n_liquidations": 62,
+        "side": "long"
+      }
+    },
+    {
+      "offset_s": 30,
+      "kind": "trade",
+      "source": "spoof.aggTrade",
+      "tags": ["price", "trade", "taker_sell"],
+      "severity": 0.9,
+      "payload": {
+        "price_pct_from_anchor": -0.4,
+        "qty": 20,
+        "notional_usd": 1800000,
+        "is_sell_aggressor": true,
+        "agg_id": "spoof_liq_dump"
+      }
+    },
+    {
+      "offset_s": 75,
+      "kind": "trade",
+      "source": "spoof.aggTrade",
+      "tags": ["price", "trade", "taker_buy"],
+      "severity": 0.9,
+      "payload": {
+        "price_pct_from_anchor": 0.5,
+        "qty": 30,
+        "notional_usd": 2700000,
+        "is_sell_aggressor": false,
+        "agg_id": "spoof_liq_rev_1"
+      }
+    },
+    {
+      "offset_s": 120,
+      "kind": "trade",
+      "source": "spoof.aggTrade",
+      "tags": ["price", "trade", "taker_buy"],
+      "severity": 0.92,
+      "payload": {
+        "price_pct_from_anchor": 1.4,
+        "qty": 40,
+        "notional_usd": 3600000,
+        "is_sell_aggressor": false,
+        "agg_id": "spoof_liq_rev_2"
+      }
+    },
+    {
+      "offset_s": 180,
+      "kind": "trade",
+      "source": "spoof.aggTrade",
+      "tags": ["price", "trade", "taker_buy"],
+      "severity": 0.95,
+      "payload": {
+        "price_pct_from_anchor": 2.5,
+        "qty": 60,
+        "notional_usd": 5400000,
+        "is_sell_aggressor": false,
+        "agg_id": "spoof_liq_rev_3"
+      }
+    }
+  ]
+}

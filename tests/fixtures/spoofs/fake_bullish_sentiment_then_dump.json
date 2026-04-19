@@ -1,0 +1,133 @@
+{
+  "id": "fake_bullish_sentiment_then_dump",
+  "description": "Five rapid bullish news + FGI + social pulses, then a -3% taker-sell tape over 90s. The narrative-driven tribes (news_fader, copy_trader, retail_*) get baited long; the council should fade or stay flat.",
+  "bait_side": "buy",
+  "real_outcome_bps": -300,
+  "scoring_window_s": 300,
+  "events": [
+    {
+      "offset_s": 0,
+      "kind": "news",
+      "source": "spoof.news",
+      "tags": ["news", "headline", "regulation"],
+      "severity": 1.0,
+      "payload": {
+        "score": 0.95,
+        "title": "BREAKING: SEC approves multi-issuer spot BTC ETF tranche (SPOOF)",
+        "event_type": "etf_approval",
+        "impact_bps": 80,
+        "side": 1
+      }
+    },
+    {
+      "offset_s": 5,
+      "kind": "sentiment",
+      "source": "spoof.fgi",
+      "tags": ["sentiment", "fgi"],
+      "severity": 0.85,
+      "payload": {
+        "value": 88,
+        "classification": "Extreme Greed"
+      }
+    },
+    {
+      "offset_s": 12,
+      "kind": "social_pulse",
+      "source": "spoof.twitter",
+      "tags": ["social", "influencer"],
+      "severity": 0.85,
+      "payload": {
+        "score": 0.92,
+        "title": "Top 5 crypto influencers signal breakout (SPOOF)"
+      }
+    },
+    {
+      "offset_s": 25,
+      "kind": "news",
+      "source": "spoof.news",
+      "tags": ["news", "headline", "business"],
+      "severity": 0.92,
+      "payload": {
+        "score": 0.85,
+        "title": "MicroStrategy adds $500M BTC to treasury (SPOOF)"
+      }
+    },
+    {
+      "offset_s": 40,
+      "kind": "social_pulse",
+      "source": "spoof.reddit",
+      "tags": ["social"],
+      "severity": 0.7,
+      "payload": {
+        "score": 0.78
+      }
+    },
+    {
+      "offset_s": 60,
+      "kind": "news",
+      "source": "spoof.news",
+      "tags": ["news", "headline", "macro"],
+      "severity": 0.9,
+      "payload": {
+        "score": 0.88,
+        "title": "Institutional inflows hit weekly record (SPOOF)"
+      }
+    },
+    {
+      "offset_s": 90,
+      "kind": "trade",
+      "source": "spoof.aggTrade",
+      "tags": ["price", "trade", "taker_sell"],
+      "severity": 0.95,
+      "payload": {
+        "price_pct_from_anchor": -1.0,
+        "qty": 50,
+        "notional_usd": 4500000,
+        "is_sell_aggressor": true,
+        "agg_id": "spoof_dump_1"
+      }
+    },
+    {
+      "offset_s": 120,
+      "kind": "trade",
+      "source": "spoof.aggTrade",
+      "tags": ["price", "trade", "taker_sell"],
+      "severity": 0.95,
+      "payload": {
+        "price_pct_from_anchor": -1.8,
+        "qty": 60,
+        "notional_usd": 5400000,
+        "is_sell_aggressor": true,
+        "agg_id": "spoof_dump_2"
+      }
+    },
+    {
+      "offset_s": 150,
+      "kind": "trade",
+      "source": "spoof.aggTrade",
+      "tags": ["price", "trade", "taker_sell"],
+      "severity": 0.97,
+      "payload": {
+        "price_pct_from_anchor": -2.5,
+        "qty": 80,
+        "notional_usd": 7200000,
+        "is_sell_aggressor": true,
+        "agg_id": "spoof_dump_3"
+      }
+    },
+    {
+      "offset_s": 180,
+      "kind": "trade",
+      "source": "spoof.aggTrade",
+      "tags": ["price", "trade", "taker_sell"],
+      "severity": 0.99,
+      "payload": {
+        "price_pct_from_anchor": -3.0,
+        "qty": 100,
+        "notional_usd": 9000000,
+        "is_sell_aggressor": true,
+        "agg_id": "spoof_dump_4"
+      }
+    }
+  ]
+}

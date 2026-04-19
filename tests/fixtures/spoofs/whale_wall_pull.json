@@ -1,0 +1,93 @@
+{
+  "id": "whale_wall_pull",
+  "description": "A massive bid wall appears 4bps below mid for ~14s, then disappears within two book updates. Order-book-anchored tribes (microstructure_prober, mm_algo, ta_day_trader) read the imbalance as bullish support; the wall was a spoof and price drifts down.",
+  "bait_side": "buy",
+  "real_outcome_bps": -150,
+  "scoring_window_s": 180,
+  "events": [
+    {
+      "offset_s": 0,
+      "kind": "book",
+      "source": "spoof.depth",
+      "tags": ["book", "bid", "imbalance"],
+      "severity": 0.95,
+      "payload": {
+        "best_bid_pct_from_anchor": -0.04,
+        "best_ask_pct_from_anchor": 0.04,
+        "bid_depth_5bps_usd": 22000000,
+        "ask_depth_5bps_usd": 4500000,
+        "wall_present": true
+      }
+    },
+    {
+      "offset_s": 6,
+      "kind": "book",
+      "source": "spoof.depth",
+      "tags": ["book", "bid", "imbalance"],
+      "severity": 0.95,
+      "payload": {
+        "best_bid_pct_from_anchor": -0.04,
+        "best_ask_pct_from_anchor": 0.04,
+        "bid_depth_5bps_usd": 25000000,
+        "ask_depth_5bps_usd": 4700000,
+        "wall_present": true
+      }
+    },
+    {
+      "offset_s": 14,
+      "kind": "book",
+      "source": "spoof.depth",
+      "tags": ["book", "ask"],
+      "severity": 0.9,
+      "payload": {
+        "best_bid_pct_from_anchor": -0.05,
+        "best_ask_pct_from_anchor": 0.05,
+        "bid_depth_5bps_usd": 3200000,
+        "ask_depth_5bps_usd": 4600000,
+        "wall_pulled": true
+      }
+    },
+    {
+      "offset_s": 30,
+      "kind": "trade",
+      "source": "spoof.aggTrade",
+      "tags": ["price", "trade", "taker_sell"],
+      "severity": 0.85,
+      "payload": {
+        "price_pct_from_anchor": -0.4,
+        "qty": 18,
+        "notional_usd": 1620000,
+        "is_sell_aggressor": true,
+        "agg_id": "spoof_wall_drift_1"
+      }
+    },
+    {
+      "offset_s": 80,
+      "kind": "trade",
+      "source": "spoof.aggTrade",
+      "tags": ["price", "trade", "taker_sell"],
+      "severity": 0.85,
+      "payload": {
+        "price_pct_from_anchor": -1.0,
+        "qty": 22,
+        "notional_usd": 2000000,
+        "is_sell_aggressor": true,
+        "agg_id": "spoof_wall_drift_2"
+      }
+    },
+    {
+      "offset_s": 130,
+      "kind": "trade",
+      "source": "spoof.aggTrade",
+      "tags": ["price", "trade", "taker_sell"],
+      "severity": 0.85,
+      "payload": {
+        "price_pct_from_anchor": -1.5,
+        "qty": 28,
+        "notional_usd": 2520000,
+        "is_sell_aggressor": true,
+        "agg_id": "spoof_wall_drift_3"
+      }
+    }
+  ]
+}

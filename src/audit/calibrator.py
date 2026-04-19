@@ -244,6 +244,48 @@ class TribeCalibrator:
         # 3 — slow fallback.
         return self._ewma_to_multiplier(slow)
 
+    def apply_skepticism_prior(
+        self,
+        skepticism_by_tribe: dict[str, float],
+        *,
+        max_swing: float = 0.2,
+        overwrite_existing: bool = False,
+    ) -> int:
+        """Set each tribe's starting EWMA from its adversarial-replay
+        skepticism score (Phase 14).
+
+        `skepticism ∈ [0, 1]` — fraction of spoof fixtures where the tribe
+        voted AGAINST the bait. Maps linearly into a starting EWMA:
+
+            skepticism 0.0 → ewma 0.5 - max_swing  (chronically fooled)
+            skepticism 0.5 → ewma 0.5              (no signal)
+            skepticism 1.0 → ewma 0.5 + max_swing  (consistently skeptical)
+
+        By default tribes with `n > 0` are left untouched — the prior is
+        an *initialization*, not a runtime override; live calibration data
+        always wins once it exists. Pass `overwrite_existing=True` to
+        reset live samples too.
+
+        Returns the number of tribes whose skill state was set or updated."""
+        swing = max(0.0, min(0.5, float(max_swing)))
+        n_changed = 0
+        for tid, score in skepticism_by_tribe.items():
+            s = max(0.0, min(1.0, float(score)))
+            ewma_prior = 0.5 + (s - 0.5) * 2.0 * swing
+            existing = self._skill.get(tid)
+            if existing and existing.get("n", 0) > 0 and not overwrite_existing:
+                continue
+            self._skill[tid] = {
+                "n": existing.get("n", 0) if existing else 0,
+                "correct": existing.get("correct", 0) if existing else 0,
+                "ewma": ewma_prior,
+                "ewma_fast": ewma_prior,
+            }
+            n_changed += 1
+        if n_changed:
+            self._save()
+        return n_changed
+
     def regime_shift_alerts(self) -> list[dict]:
         """List tribes currently in a detected regime shift (fast-slow
         divergence beyond threshold). Sorted by magnitude. Useful for UI

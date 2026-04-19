@@ -162,8 +162,37 @@ def _tribe_bars_html(tribe_net: dict[str, float]) -> str:
     return "\n".join(rows)
 
 
+def _drift_html(metrics: RunMetrics) -> str:
+    """Phase 13 drift banner — same logic as the markdown drift block."""
+    sb = next((v for v in metrics.variants
+               if v.variant_id == "variant_0" and v.lineage_generation > 0), None)
+    cohort = [v for v in metrics.variants
+              if v.variant_id != "variant_0" and v.lineage_generation > 0]
+    if sb is None or not cohort:
+        return ""
+    sorted_cohort = sorted(v.equity_delta for v in cohort)
+    n = len(sorted_cohort)
+    median = (sorted_cohort[n // 2] if n % 2
+              else 0.5 * (sorted_cohort[n // 2 - 1] + sorted_cohort[n // 2]))
+    if sb.equity_delta <= median:
+        return ""
+    gap = sb.equity_delta - median
+    return (
+        f'<div style="margin-top:14px; padding:10px 14px; '
+        f'background:rgba(217,79,79,.18); border-left:4px solid #d94f4f; '
+        f'color:#ff7b7b; border-radius:4px; font-size:14px;">'
+        f'<strong>&#9888; DRIFT WATCH</strong> &mdash; seed-bank '
+        f'<code>variant_0</code> outperformed the evolved cohort median by '
+        f'<strong>${gap:+,.2f}</strong>. If this repeats next generation, '
+        f'mutation cycle is destroying alpha &mdash; flag GENETIC_DRIFT.'
+        f'</div>'
+    )
+
+
 def _variant_section(vm: VariantMetrics, color: str, show_all_charts: bool) -> str:
     delta_cls = "up" if vm.equity_delta >= 0 else "down"
+    fdelta_cls = "up" if vm.frictionless_delta >= 0 else "down"
+    drag_cls = "down" if vm.bps_drag_avg > 0 else "up"
     delta_str = f'{vm.equity_delta:+,.2f}'
     wr_pct = f"{vm.win_rate*100:.1f}%"
 
@@ -174,6 +203,27 @@ def _variant_section(vm: VariantMetrics, color: str, show_all_charts: bool) -> s
         f'<td>${vm.start_equity:,.2f}</td><td>${vm.end_equity:,.2f}</td>'
         f'<td class="{delta_cls}">${delta_str}</td></tr></table>'
     )
+
+    # Phase 11 — friction accounting block. Surfaces realised vs intended
+    # so the user can see how much of the strategy's edge the venue eats.
+    friction = (
+        f'<table style="margin-top:8px;"><tr>'
+        f'<th>Frictionless &#916;eq</th><th>Friction $</th>'
+        f'<th>Avg intended bps</th><th>Avg realized bps</th>'
+        f'<th>Avg drag bps</th><th>Cap clipped</th><th>Cap rejected</th>'
+        f'</tr><tr>'
+        f'<td class="{fdelta_cls}">${vm.frictionless_delta:+,.2f}</td>'
+        f'<td>${vm.friction_cost_usd:,.2f}  '
+        f'<small style="color:#888">(slip ${vm.slippage_usd_total:,.2f} '
+        f'+ fee ${vm.fee_usd_total:,.2f})</small></td>'
+        f'<td>{vm.intended_bps_avg:+.1f}</td>'
+        f'<td>{vm.realized_bps_avg:+.1f}</td>'
+        f'<td class="{drag_cls}">{vm.bps_drag_avg:+.1f}</td>'
+        f'<td>{vm.capacity_clipped_count}</td>'
+        f'<td>{vm.capacity_rejected_count}</td>'
+        f'</tr></table>'
+    )
+    stats = stats + friction
 
     charts = ""
     if show_all_charts:
@@ -200,12 +250,89 @@ def _variant_section(vm: VariantMetrics, color: str, show_all_charts: bool) -> s
     regime_svg = _svg_hbar(vm.regime_counts, "#76b7b2")
     tribe_html = _tribe_bars_html(vm.tribe_net)
 
+    # Phase 11 — per-trade table (last 20 closes) so the realized vs
+    # intended drag is visible at the trade level, not just in aggregate.
+    trades_html = ""
+    if vm.trades_table:
+        rows: list[str] = []
+        for t in vm.trades_table[-20:]:
+            ib = float(t["intended_bps"])
+            rb = float(t["realized_bps"])
+            drag = ib - rb
+            net = float(t["net_usd"])
+            net_cls = "up" if net >= 0 else "down"
+            drag_cls = "down" if drag > 0 else "up"
+            ts = (t.get("ts") or "")[-8:]
+            reason = html.escape((t.get("reason") or "")[:36])
+            rows.append(
+                f"<tr>"
+                f"<td>{html.escape(ts)}</td>"
+                f"<td>{html.escape(str(t.get('side','')))}</td>"
+                f"<td>${float(t['size_usd']):,.0f}</td>"
+                f"<td>{ib:+.1f}</td><td>{rb:+.1f}</td>"
+                f'<td class="{drag_cls}">{drag:+.1f}</td>'
+                f"<td>${float(t['total_slip_usd']):.2f}</td>"
+                f"<td>${float(t['total_fee_usd']):.2f}</td>"
+                f'<td class="{net_cls}">${net:+.2f}</td>'
+                f"<td>{reason}</td>"
+                f"</tr>"
+            )
+        trades_html = (
+            f'<div class="chart-box" style="margin-top:8px;">'
+            f'<h3>Per-trade intended vs realized (last 20)</h3>'
+            f'<table><tr>'
+            f'<th>ts</th><th>side</th><th>size</th>'
+            f'<th>int&nbsp;bps</th><th>real&nbsp;bps</th><th>drag&nbsp;bps</th>'
+            f'<th>slip&nbsp;$</th><th>fee&nbsp;$</th>'
+            f'<th>net&nbsp;$</th><th>reason</th>'
+            f'</tr>{"".join(rows)}</table></div>'
+        )
+
+    # Phase 11 — frictionless vs realized equity curve overlay so the
+    # cumulative drag is one glance away.
+    fric_chart = ""
+    if vm.frictionless_curve and vm.equity_curve:
+        # Resample frictionless curve to same length as equity_curve for overlay.
+        n = len(vm.equity_curve)
+        if n > 0 and len(vm.frictionless_curve) > 1:
+            step_f = max(1, len(vm.frictionless_curve) // n)
+            fric_sampled = vm.frictionless_curve[::step_f][:n]
+            # Pad with last value if undersampled.
+            while len(fric_sampled) < n:
+                fric_sampled.append(fric_sampled[-1])
+        else:
+            fric_sampled = list(vm.frictionless_curve) or [vm.frictionless_end_equity]
+        fric_svg = _svg_line(
+            [("realized eq", vm.equity_curve),
+             ("frictionless eq", fric_sampled)],
+            [color, "#888"],
+            height=160,
+        )
+        fric_chart = (
+            f'<div class="chart-box" style="margin-top:8px;">'
+            f'<h3>Equity — realized vs frictionless</h3>{fric_svg}</div>'
+        )
+
+    lineage_blurb = ""
+    if vm.lineage_generation > 0:
+        par = html.escape(vm.lineage_parent_id or "—")
+        notes = html.escape(vm.lineage_notes) if vm.lineage_notes else ""
+        notes_html = f' &bull; <em>{notes}</em>' if notes else ""
+        lineage_blurb = (
+            f'<div style="font-size:13px; color:#aaa; margin:-4px 0 10px 0;">'
+            f'lineage: gen <strong>{vm.lineage_generation}</strong> &bull; '
+            f'parent <strong>{par}</strong> &bull; '
+            f'<strong>{vm.lineage_mutated_count}</strong> mutated fields'
+            f'{notes_html}</div>'
+        )
+
     return (
         f'<section>'
         f'<h2>{html.escape(vm.variant_id)} '
         f'<small style="font-weight:normal;color:#888;">'
         f'synth_rate={vm.synth_rate} &bull; seed={vm.seed}</small></h2>'
-        f'{stats}{charts}'
+        f'{lineage_blurb}'
+        f'{stats}{charts}{fric_chart}'
         f'<div class="chart-grid">'
         f'<div class="chart-box"><h3>Actions</h3>{action_svg}</div>'
         f'<div class="chart-box"><h3>Regime</h3>{regime_svg}</div>'
@@ -213,6 +340,7 @@ def _variant_section(vm: VariantMetrics, color: str, show_all_charts: bool) -> s
         f'<div class="chart-box" style="margin-top:8px;">'
         f'<h3>Tribe net pressure (avg signed conviction)</h3>'
         f'{tribe_html}</div>'
+        f'{trades_html}'
         f'</section>'
     )
 
@@ -223,24 +351,41 @@ def render_html(metrics: RunMetrics) -> str:
     # Comparison table for multi-variant
     comparison = ""
     if metrics.is_multi:
+        any_evolved = any(v.lineage_generation > 0 for v in metrics.variants)
         rows = ""
         for vm, color in zip(metrics.variants, colors):
             delta_cls = "up" if vm.equity_delta >= 0 else "down"
+            fdelta_cls = "up" if vm.frictionless_delta >= 0 else "down"
+            drag_cls = "down" if vm.bps_drag_avg > 0 else "up"
+            extra = ""
+            if any_evolved:
+                gen = vm.lineage_generation if vm.lineage_generation else "—"
+                par = html.escape(vm.lineage_parent_id or "—")
+                extra = f"<td>{gen}</td><td>{par}</td>"
             rows += (
                 f"<tr>"
                 f'<td><span style="color:{color}">&#9632;</span> {html.escape(vm.variant_id)}</td>'
+                f"{extra}"
                 f"<td>{vm.synth_rate}</td><td>{vm.seed}</td>"
                 f"<td>{vm.ticks:,}</td><td>{vm.trades}</td>"
                 f'<td>{vm.win_rate*100:.1f}%</td>'
                 f'<td class="{delta_cls}">${vm.equity_delta:+,.2f}</td>'
+                f'<td class="{fdelta_cls}">${vm.frictionless_delta:+,.2f}</td>'
+                f'<td>${vm.friction_cost_usd:,.2f}</td>'
+                f'<td class="{drag_cls}">{vm.bps_drag_avg:+.1f}</td>'
                 f"</tr>\n"
             )
+        head_extra = "<th>gen</th><th>parent</th>" if any_evolved else ""
         comparison = (
             f"<section><h2>Variant comparison</h2>"
             f"<table><tr>"
-            f"<th>variant</th><th>synth_rate</th><th>seed</th>"
-            f"<th>ticks</th><th>trades</th><th>win&nbsp;%</th><th>&#916;equity</th>"
-            f"</tr>{rows}</table></section>"
+            f"<th>variant</th>{head_extra}<th>synth_rate</th><th>seed</th>"
+            f"<th>ticks</th><th>trades</th><th>win&nbsp;%</th>"
+            f"<th>&#916;equity</th><th>&#916;eq frictionless</th>"
+            f"<th>friction $</th><th>drag bps</th>"
+            f"</tr>{rows}</table>"
+            f"{_drift_html(metrics)}"
+            f"</section>"
         )
 
     # Combined equity chart (all variants)

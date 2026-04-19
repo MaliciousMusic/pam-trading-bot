@@ -45,6 +45,31 @@ risk:
   max_drawdown_from_peak_pct: 8.0
   max_daily_loss_pct: 5.0
 
+  # Phase 10 — session-drawdown HARD halt. Unlike peak_dd above (auto-clears
+  # on recovery), this halt hard-closes every open position the moment it
+  # trips and stays halted until an operator calls manual_unlock(). Forces a
+  # post-mortem before resuming. Default 8% matches the peak-dd ceiling but
+  # is measured against the session peak so a session that started under
+  # water doesn't inherit yesterday's halt.
+  max_session_dd_pct: 8.0
+
+  # Phase 10 — per-trade SL floor. Any position whose unrealized loss
+  # reaches this fraction of current equity is closed immediately, before
+  # shape-aware / peak-favorable / edge-exhausted layers even evaluate.
+  # 1% of $50k equity = $500 max loss per position.
+  max_position_loss_pct: 1.0
+
+  # Phase 10 — black-swan detonation stop. Rolling `black_swan_window_s`
+  # price delta vs `black_swan_sigma_window_s` realized stddev. When
+  # |Δ| > N·σ, close-all and suspend new opens for `cooldown_s`.
+  # 5σ is the classic Nassim-Taleb threshold; 30s vs 5-min σ catches
+  # sharp liquidation cascades without false-firing on normal chop.
+  # Set black_swan_sigma=0 to disable.
+  black_swan_sigma: 5.0
+  black_swan_window_s: 30
+  black_swan_sigma_window_s: 300
+  black_swan_cooldown_s: 600
+
 decision:
   # Council-driven entry AND exit. Every non-flat projection opens a trade;
   # each open position is re-evaluated every tick and closed the moment the
@@ -204,7 +229,11 @@ projector_calibration:
   window: 2000              # trailing pairs kept for the median fit
 
 execution:
-  fee_rate_bps: 5.0
+  # Binance perps retail taker: 0.045% = 4.5 bps after BNB discount; 5 bps
+  # is conservative. Phase 11 — bumped to 2 bps per side (~realistic round
+  # trip), plus half_spread_bps each side. Together: 4 bps fee + 1 bps
+  # spread = 5 bps-per-side friction floor before book depth kicks in.
+  fee_rate_bps: 2.0
   slippage_bps: 2.0
   # Size-scaled slippage (added 2026-04-19). Stacked entries on the same
   # directional bet aren't truly independent — real markets eat through
@@ -214,6 +243,22 @@ execution:
   # costs 2×2.5=5bps. Set k=0 to collapse back to flat slippage.
   slippage_size_k: 0.5
   slippage_ref_notional_usd: 100000.0
+  # Phase 11 — book-depth-shaded fills. Slippage is computed against the
+  # live 5-bp side depth from @depth20@100ms when available; the
+  # model is: "eating the whole 5-bp band costs 5 bp of slippage", i.e.
+  # slippage_bps = 5 · size_usd / side_depth_5bps_usd. Capped at
+  # `slippage_cap_bps` to guard against corrupted book snapshots. The
+  # legacy size-scaled model above is the fallback when L2 isn't wired.
+  slippage_cap_bps: 30.0
+  # Half-spread per side. Binance BTC/USDT perps typically quote a 1-bp
+  # spread, so 0.5 bp half-spread is accurate. Taker pays this every fill.
+  half_spread_bps: 0.5
+  # Capacity cap: any order larger than this fraction of the 5-bp side
+  # depth is clipped (NOT rejected) and the executor emits a
+  # CAPACITY_CLIPPED flag on the trade row. 0.25 = 25% of the top-of-book
+  # 5-bp band — above that the linear slippage model starts underestimating.
+  # Set to 0.0 to disable clipping.
+  book_depth_frac_cap: 0.25
 
 audit:
   horizon_seconds: 60           # forward-price window used to score each tribe vote

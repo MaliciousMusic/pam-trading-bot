@@ -171,11 +171,14 @@ def _build_stack(
     ledger_dir: Path,
     rng_seed: int,
     starting_equity_usd: float | None = None,
+    tribes_dir: Path | None = None,
 ) -> tuple[list[Tribe], MarketState, ChessProjector, DecisionEngine,
            PaperExecutor, RegimeClassifier]:
-    tribes = load_all(rng_seed=rng_seed)
+    tribes = load_all(rng_seed=rng_seed, tribes_dir=tribes_dir)
     if not tribes:
-        raise RuntimeError("no tribes loaded — check config/tribes/*.yaml")
+        raise RuntimeError(
+            f"no tribes loaded — check {tribes_dir or 'config/tribes/'}/*.yaml"
+        )
     state = MarketState()
     projector = ChessProjector(
         tribes=tribes,
@@ -189,18 +192,31 @@ def _build_stack(
     ledger = Ledger(directory=ledger_dir)
     _start_eq = (starting_equity_usd if starting_equity_usd is not None
                  else float(cfg.get("base_capital_usd", 5000)))
+    _risk = cfg.get("risk", {}) or {}
+    _exec = cfg.get("execution", {}) or {}
     executor = PaperExecutor(
         starting_equity_usd=_start_eq,
-        fee_rate_bps=float(cfg["execution"]["fee_rate_bps"]),
-        slippage_bps=float(cfg["execution"]["slippage_bps"]),
-        max_concurrent_positions=int(cfg["risk"]["max_concurrent_positions"]),
-        max_total_notional_pct=float(cfg["risk"]["max_total_notional_pct"]),
-        max_hold_seconds=int(cfg["risk"]["max_hold_seconds"]),
+        fee_rate_bps=float(_exec.get("fee_rate_bps", 5.0)),
+        slippage_bps=float(_exec.get("slippage_bps", 2.0)),
+        max_concurrent_positions=int(_risk.get("max_concurrent_positions", 20)),
+        max_total_notional_pct=float(_risk.get("max_total_notional_pct", 500)),
+        max_hold_seconds=int(_risk.get("max_hold_seconds", 600)),
         exit_dead_zone_bps=float(cfg["decision"].get("exit_dead_zone_bps", 0.5)),
         ledger=ledger,
         exit_strategy=cfg.get("exit_strategy", {}) or {},
-        slippage_size_k=float(cfg["execution"].get("slippage_size_k", 0.0)),
-        slippage_ref_notional_usd=float(cfg["execution"].get("slippage_ref_notional_usd", 100_000)),
+        slippage_size_k=float(_exec.get("slippage_size_k", 0.0)),
+        slippage_ref_notional_usd=float(_exec.get("slippage_ref_notional_usd", 100_000)),
+        max_drawdown_from_peak_pct=float(_risk.get("max_drawdown_from_peak_pct", 0.0)),
+        max_daily_loss_pct=float(_risk.get("max_daily_loss_pct", 0.0)),
+        max_session_dd_pct=float(_risk.get("max_session_dd_pct", 0.0)),
+        max_position_loss_pct=float(_risk.get("max_position_loss_pct", 0.0)),
+        black_swan_sigma=float(_risk.get("black_swan_sigma", 0.0)),
+        black_swan_window_s=float(_risk.get("black_swan_window_s", 30.0)),
+        black_swan_sigma_window_s=float(_risk.get("black_swan_sigma_window_s", 300.0)),
+        black_swan_cooldown_s=float(_risk.get("black_swan_cooldown_s", 600.0)),
+        slippage_cap_bps=float(_exec.get("slippage_cap_bps", 30.0)),
+        book_depth_frac_cap=float(_exec.get("book_depth_frac_cap", 0.25)),
+        half_spread_bps=float(_exec.get("half_spread_bps", 0.5)),
     )
     regime_classifier = RegimeClassifier(cfg.get("regime", {}) or {})
     return tribes, state, projector, decision, executor, regime_classifier
@@ -219,6 +235,7 @@ async def run_sprint(
     bars: list[dict] | None = None,
     funding: list[dict] | None = None,
     starting_equity_usd: float | None = None,
+    tribes_dir: Path | None = None,
 ) -> SprintResult:
     """Run one sprint-mode replay of `day` at the given `synth_rate`.
 
@@ -260,6 +277,7 @@ async def run_sprint(
     tribes, state, projector, decision, executor, regime_classifier = _build_stack(
         cfg, ledger_dir=ledger_dir, rng_seed=seed,
         starting_equity_usd=starting_equity_usd,
+        tribes_dir=tribes_dir,
     )
     logger.info("[sprint] loaded {} tribes (seed={})", len(tribes), seed)
 
@@ -308,6 +326,7 @@ async def run_sprint(
         "equity_delta_usd": summary["equity_delta_usd"],
         "trades": summary["trades"],
         "wins": summary["wins"],
+        "tribes_dir": str(tribes_dir) if tribes_dir is not None else None,
         "created_at_utc": datetime.utcnow().isoformat() + "Z",
     }
     manifest_path.write_bytes(orjson.dumps(manifest, option=orjson.OPT_INDENT_2))

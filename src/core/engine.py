@@ -199,6 +199,7 @@ class TradingEngine:
             self.projector.regime_multiplier = regime.multiplier
             regime_snapshot = regime.to_dict()
             regime_label_now = regime_snapshot.get("label")
+            self.projector.regime_label = regime_label_now or "normal"
 
         # Skill overlay: scale each tribe's conviction by its measured
         # skill multiplier before aggregation. Multiplier is 1.0 when the
@@ -248,7 +249,14 @@ class TradingEngine:
                 float(self.tick_seconds),
             )
 
-        # 2b) Council-driven exits: close positions whose direction no longer
+        # 2b) Phase 10 — black-swan detonation stop. Runs BEFORE forecast-
+        #     driven exits because a 5σ move can outpace the projector's
+        #     reaction; if this fires, every position is already closed by
+        #     the time evaluate_exits sees the book.
+        if hasattr(self.executor, "check_black_swan"):
+            self.executor.check_black_swan(ts, self.state)
+
+        # 2c) Council-driven exits: close positions whose direction no longer
         #     matches the current forecast. Must happen BEFORE the entry
         #     decision so equity/notional caps reflect this tick's reality.
         regime_label = regime_snapshot["label"] if regime_snapshot else None
@@ -411,4 +419,6 @@ class TradingEngine:
                 "calibration": calibrator_snapshot,
                 "kernel": kernel_snapshot,
                 "regime": regime_snapshot,
+                "risk": (self.executor.risk_snapshot()
+                         if hasattr(self.executor, "risk_snapshot") else None),
             })

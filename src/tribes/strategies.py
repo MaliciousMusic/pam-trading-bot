@@ -27,6 +27,7 @@ Design notes:
 """
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -696,3 +697,128 @@ def news_reactor(tribe: "Tribe", ts: datetime, state: MarketState) -> Vote:
     return _lean(tribe, signed,
                  reason=f"sentiment quiet (news={news_any:+.2f} fgi={state.fgi_value})",
                  horizon_seconds=int(p.get("hold_seconds", 600)))
+
+
+@register("microstructure_prober")
+def microstructure_prober(tribe: "Tribe", ts: datetime, state: MarketState) -> Vote:
+    """Phase 12 — silent tribe.
+
+    Reads the order-book microstructure that the rest of the council ignores:
+
+      A. **L2 imbalance** — bid_5bps_usd / (bid+ask). Persistent skew >55% in
+         either direction is a quiet directional bid; it precedes mid-price
+         drift before any trade prints.
+      B. **Queue-position decay** — % loss in same-side depth over the last
+         15s. A side burning down fast (depth halving) means the resting
+         orders are getting eaten — continuation in the *opposing* side's
+         direction (because the eaten side WAS the resistance).
+      C. **Iceberg detection** — last-window's max single-trade notional vs
+         median trade notional. A single print >= 4× the median that's same-
+         signed as net flow is an iceberg refill — follow.
+      D. **Trade-size entropy** — Shannon-style entropy across 4 size buckets.
+         Low entropy (one bucket dominates) = an institution algo running on
+         a fixed slice; that's directional flow, follow it.
+
+    Each input contributes a partial signed signal in [-1, +1]; the final
+    vote is their cap-summed average. Orthogonal to every other tribe — none
+    of them touch the depth series or per-trade notional distribution.
+
+    Channels offline (no book data, no trades) → ABSTAIN.
+    """
+    p = tribe.spec.strategy.params
+    win = float(p.get("imb_window_s", 15))
+    decay_window = float(p.get("decay_window_s", 15))
+    iceberg_window = float(p.get("iceberg_window_s", 30))
+    iceberg_mult = float(p.get("iceberg_mult", 4.0))
+    bias_threshold = float(p.get("imbalance_threshold", 0.55))
+    horizon = int(p.get("hold_seconds", 90))
+
+    bid_d = state.bid_depth_5bps_usd
+    ask_d = state.ask_depth_5bps_usd
+    if not bid_d or not ask_d or (bid_d + ask_d) <= 0:
+        return _offline(tribe, "no L2 depth yet")
+
+    contributions: list[tuple[float, str]] = []
+
+    # A. L2 imbalance.
+    imb = bid_d / (bid_d + ask_d)  # ∈ (0,1); 0.5 = balanced
+    if imb >= bias_threshold or imb <= (1.0 - bias_threshold):
+        # Map (1-T)..T → -1..+1.
+        signed_imb = (imb - 0.5) / max(bias_threshold - 0.5, 1e-6)
+        signed_imb = max(-1.0, min(1.0, signed_imb))
+        contributions.append((signed_imb * 0.5,
+                              f"L2 imb {imb:.2f}"))
+
+    # B. Queue-position decay. Compare oldest vs newest depth in the window.
+    def _decay(series, window_s: float) -> float | None:
+        fl = series.first_last(window_s)
+        if not fl:
+            return None
+        first, last = fl
+        if first <= 0:
+            return None
+        return (last - first) / first  # negative when burning down
+    bid_decay = _decay(state.bid_depth_series, decay_window)
+    ask_decay = _decay(state.ask_depth_series, decay_window)
+    if bid_decay is not None and ask_decay is not None:
+        # Bid melting → bears are hitting it → follow down (negative side).
+        # Ask melting → bulls are lifting it → follow up (positive).
+        # Combine: ask_decay < bid_decay → bullish (ask is melting faster).
+        diff = ask_decay - bid_decay  # in (-1, 1) typically; sign matters
+        if abs(diff) > 0.10:  # at least 10pp differential
+            contributions.append((max(-1.0, min(1.0, -diff * 2.0)),
+                                  f"queue Δbid={bid_decay:+.0%} Δask={ask_decay:+.0%}"))
+
+    # C. Iceberg detection.
+    sizes = list(state.trade_sizes._window(iceberg_window))
+    if len(sizes) >= 5:
+        absvals = sorted(abs(v) for _, v in sizes)
+        median = absvals[len(absvals) // 2]
+        if median > 0:
+            # Largest signed print this window.
+            biggest_signed = max((v for _, v in sizes), key=lambda x: abs(x))
+            if abs(biggest_signed) >= iceberg_mult * median:
+                ice = max(-1.0, min(1.0, biggest_signed
+                                    / (iceberg_mult * 5.0 * median)))
+                contributions.append((ice * 0.5,
+                                      f"iceberg {biggest_signed:+,.0f} ≥{iceberg_mult}× med"))
+
+    # D. Trade-size entropy. Bucket |notional| into 4 quantile-style bands;
+    # measure entropy. Lower entropy = one bucket dominates = algo running.
+    if len(sizes) >= 8:
+        absvals = [abs(v) for _, v in sizes]
+        mx = max(absvals) or 1.0
+        bins = [0, 0, 0, 0]
+        for a in absvals:
+            r = a / mx
+            idx = min(3, int(r * 4))
+            bins[idx] += 1
+        n = sum(bins)
+        ent = 0.0
+        for c in bins:
+            if c > 0:
+                pp = c / n
+                ent -= pp * math.log2(pp)
+        # Max entropy with 4 equal buckets = 2.0 bits; low = one bucket has all.
+        if ent < 1.2:
+            net_dir = sum(v for _, v in sizes)
+            if abs(net_dir) > 0:
+                # Algo signal direction = sign of net_dir; magnitude scales by
+                # how peaked the distribution is.
+                peakiness = (1.2 - ent) / 1.2
+                contributions.append((max(-1.0, min(1.0,
+                                       (1.0 if net_dir > 0 else -1.0) * peakiness * 0.6)),
+                                      f"size entropy {ent:.2f} net={net_dir:+,.0f}"))
+
+    if not contributions:
+        # Quiet microstructure — small lean from raw imbalance only.
+        signed = (imb - 0.5) * 0.4  # max ±0.2
+        return _lean(tribe, signed,
+                     reason=f"micro quiet imb={imb:.2f}",
+                     horizon_seconds=horizon)
+
+    avg_signed = sum(s for s, _ in contributions) / len(contributions)
+    avg_signed = max(-1.0, min(1.0, avg_signed))
+    why = " | ".join(label for _, label in contributions)
+    return _lean(tribe, avg_signed, reason=f"micro: {why}",
+                 horizon_seconds=horizon)

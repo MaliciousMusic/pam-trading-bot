@@ -1,0 +1,60 @@
+{
+  "generation": "2026-04-18",
+  "variant_count": 6,
+  "hypotheses": [
+    {
+      "tribe_id": "contrarian_funding_fader",
+      "field": "strategy.params.extreme_funding_rate",
+      "current": 0.0005,
+      "proposed": 0.000375,
+      "rationale": "whispering (engaged=0.0%) — loosen gate by 25%",
+      "priority": 0.95,
+      "variant_dir": "2026-04-18\\variant_0"
+    },
+    {
+      "tribe_id": "copy_trader",
+      "field": "strategy.params.min_social_score",
+      "current": 1.2,
+      "proposed": 0.8999999999999999,
+      "rationale": "whispering (engaged=0.0%) — loosen gate by 25%",
+      "priority": 0.95,
+      "variant_dir": "2026-04-18\\variant_1"
+    },
+    {
+      "tribe_id": "news_fader",
+      "field": "strategy.params.extreme_social_score",
+      "current": 2.5,
+      "proposed": 1.875,
+      "rationale": "whispering (engaged=0.0%) — loosen gate by 25%",
+      "priority": 0.95,
+      "variant_dir": "2026-04-18\\variant_2"
+    },
+    {
+      "tribe_id": "retail_app_newbie",
+      "field": "strategy.params.min_move_bps",
+      "current": 60.0,
+      "proposed": 45.0,
+      "rationale": "whispering (engaged=0.0%) — loosen gate by 25%",
+      "priority": 0.95,
+      "variant_dir": "2026-04-18\\variant_3"
+    },
+    {
+      "tribe_id": "swing_trend_follower",
+      "field": "strategy.params.min_persistent_move_bps",
+      "current": 90.0,
+      "proposed": 67.5,
+      "rationale": "whispering (engaged=0.0%) — loosen gate by 25%",
+      "priority": 0.95,
+      "variant_dir": "2026-04-18\\variant_4"
+    },
+    {
+      "tribe_id": "ta_day_trader",
+      "field": "strategy.params.break_buffer_bps",
+      "current": 6.0,
+      "proposed": 4.5,
+      "rationale": "whispering (engaged=0.0%) — loosen gate by 25%",
+      "priority": 0.95,
+      "variant_dir": "2026-04-18\\variant_5"
+    }
+  ]
+}

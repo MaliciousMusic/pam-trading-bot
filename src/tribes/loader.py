@@ -28,17 +28,28 @@ def _derive_tribe_seed(tribe_id: str, master: int) -> int:
     return (tribe_hash ^ (int(master) & 0xFFFFFFFF)) & 0xFFFFFFFF
 
 
-def load_all(*, rng_seed: int | None = None) -> list[Tribe]:
+def load_all(
+    *, rng_seed: int | None = None, tribes_dir: Path | None = None,
+) -> list[Tribe]:
     """Load every tribe spec. When `rng_seed` is provided, each tribe
     gets a deterministic per-id seed derived from it — mandatory for
     replay to produce byte-identical decision logs across runs. Live
-    behavior (rng_seed=None) keeps each Tribe on a fresh Random()."""
-    if not TRIBES_DIR.exists():
-        logger.warning("no tribes dir at {}", TRIBES_DIR)
+    behavior (rng_seed=None) keeps each Tribe on a fresh Random().
+
+    `tribes_dir` defaults to the project's `config/tribes/`. Phase 13's
+    evolutionary loop points it at a per-variant directory under
+    `config/tribes_variants/<gen>/variant_<id>/` so each variant runs its
+    own mutated council."""
+    src_dir = Path(tribes_dir) if tribes_dir is not None else TRIBES_DIR
+    if not src_dir.exists():
+        logger.warning("no tribes dir at {}", src_dir)
         return []
     registered = set(available_strategies())
     specs: list[TribeSpec] = []
-    for path in sorted(TRIBES_DIR.glob("*.yaml")):
+    for path in sorted(src_dir.glob("*.yaml")):
+        # `lineage.yaml` lives in variant dirs and isn't a tribe spec.
+        if path.name == "lineage.yaml":
+            continue
         with path.open("r", encoding="utf-8") as f:
             raw = yaml.safe_load(f)
         spec = TribeSpec.model_validate(raw)

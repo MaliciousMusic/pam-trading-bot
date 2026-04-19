@@ -1,0 +1,135 @@
+id: retail_grid_bot
+name: Retail Grid Bot
+description: "Retail-facing automated trading bots (3Commas, Pionex, Binance native\
+  \ grid, custom Python scripts on a Raspberry Pi). Place a ladder of passive limit\
+  \ orders around a moving mid; buy every dip, sell every rip, mechanically. Plentiful\
+  \ \u2014 one of the largest cohorts in crypto retail now. Never sleeps and never\
+  \ pulls quotes, so under sustained one-way flow it bleeds into the move rather than\
+  \ stepping aside like a pro MM."
+demographics:
+  capital_band_usd:
+  - 100.0
+  - 20000.0
+  count_estimate: 800000
+  experience_years:
+  - 0.0
+  - 5.0
+  jurisdiction:
+  - global
+hardware:
+  tier: laptop
+  typical_latency_ms: 800
+  uptime: continuous
+  specs:
+    placement: vps_or_home
+    attended: 'no'
+software:
+  platforms:
+  - binance_pro
+  - bybit
+  - okx
+  - binance_app_grid
+  tools:
+  - 3commas
+  - pionex
+  - binance_grid_native
+  - custom_py_grid
+  charting: basic
+  order_types_used:
+  - post_only_limit
+  - limit
+  - oco
+  data_feeds:
+  - price_ticker
+strategy:
+  family: grid_bot
+  params:
+    grid_window_seconds: 120
+    grid_band_bps: 15
+    hold_seconds: 300
+  style_notes: Constant passive fade of micro-moves. Idle = mechanical micro-fade
+    of any drift. Structurally mean-reverting; happy on chop, bleeds in trends.
+attention:
+  kinds:
+  - trade
+  tags:
+  - price
+  - taker_buy
+  - taker_sell
+  ignored_tags:
+  - news
+  - social
+  - funding
+  - liq_long
+  - liq_short
+  min_severity: 0.0
+personality:
+  risk_tolerance: 0.25
+  fomo: 0.0
+  panic: 0.0
+  patience: 1.0
+  herding: 0.0
+  reaction_mu_seconds: 5.0
+  reaction_sigma_seconds: 10.0
+flow:
+  weight: 0.08675688865374129
+  activation_rate: 0.15
+  typical_hold_seconds:
+  - 60
+  - 1800
+  default_conviction: 0.35
+  cooldown_seconds: 0
+  strong_vote_conviction: 0.4
+disposition:
+  idle_bias: 0.0
+  idle_conviction: 0.04
+circadian:
+  timezone_label: 24/7
+  presence_by_hour_utc:
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+indicators:
+  price_momentum:
+    window_s: 120
+    ref_bps: 15
+    action: fade
+    weight: 1.0
+  price_zscore:
+    window_s: 600
+    extreme: 1.5
+    action: fade
+    weight: 0.7
+  volatility_regime:
+    window_s: 600
+    low_bps: 10
+    high_bps: 50
+    prefer: low
+    weight: 0.3
+indicator_weight: 0.5
+indicator_regime_range: 0.35
+indicator_regime_low_bps: 10.0
+indicator_regime_high_bps: 60.0
+indicator_regime_prefer: low
+indicator_regime_window_s: 600.0
