@@ -79,19 +79,20 @@
 
 ---
 
-## Phase 7 — Multi-variant watch panes (NEXT)
+## ✅ Phase 7 — Multi-variant watch panes
 
 **Goal:** `POST /api/replay/start` accepts an optional `variants: list[{synth_rate, seed}]` field. When >1 variant, the dashboard opens N side-by-side mini equity/price panels, one per variant, each receiving its own tick stream. The amber banner shows aggregate progress.
 
-**Design constraints:**
-- Each variant runs as a separate `WatchEngine` task, all sharing the same `UIBroadcaster` but tagging messages with `variant_id`
-- UI: tick messages gain an optional `variant_id` field (absent = live / single-variant replay, no existing handler breaks)
-- Mini-panes are NEW components — `onTick` is not touched; a new `onVariantTick(variant_id, m)` handler routes tagged messages
-- Layout: CSS grid overlay, collapsible, defaults to single-pane if only one variant
+- `WatchEngine`: `variant_id` + `emit_replay_state` params; tick messages tagged with `"variant_id"`
+- `_conduct()`: free coroutine sending 1-per-second aggregate `replay_state` with `variant_count` field
+- `WatchController.start()`: `variants: list[dict]` param; single path unchanged; multi path builds N stacks + conductor task
+- `server.py`: `_ReplayStartBody.variants` field forwarded to controller
+- `index.html`: synth-rate checkboxes (multi-select); `onVariantTick(vid,m)` + `_ensureVariantPane()` + `_sparklineSvg()`; `#variant-panes` fixed bottom bar with per-variant price+equity sparklines + action badge; `resetChartState()` clears variant state; `ws.onmessage` routes by `m.variant_id`
+- `test_replay_phase7.py`: 2-variant concurrent run (29+29 ticks, 10 conductor msgs, `variant_id=None` backward-compat) ✓
 
 ---
 
-## Phase 8 — Click-a-bar inspect modal
+## Phase 8 — Click-a-bar inspect modal (NEXT)
 
 **Goal:** Clicking any bar in the equity or price chart opens a modal showing the tick-level detail for that time window: council votes, regime, forecast, positions, action.
 

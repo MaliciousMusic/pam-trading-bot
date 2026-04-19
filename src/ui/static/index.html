@@ -316,6 +316,39 @@
   }
   .rb-btn:hover{background:rgba(200,168,75,.28)}
 
+  /* ── Variant comparison panes (Phase 7) ─────────────────────── */
+  #variant-panes{
+    display:none;position:fixed;bottom:0;left:0;right:0;z-index:150;
+    background:var(--bg1);border-top:2px solid var(--accent);
+    flex-direction:column;
+  }
+  #variant-panes.active{display:flex}
+  .vp-header{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:3px 12px;font-size:10px;color:var(--accent);letter-spacing:.1em;
+    border-bottom:1px solid var(--bg3);flex-shrink:0;
+  }
+  .vp-close{background:none;border:none;color:var(--accent);cursor:pointer;font-size:13px;padding:0 4px}
+  #vp-grid{display:flex;overflow-x:auto;height:130px}
+  .vp-pane{
+    min-width:190px;flex:1;padding:6px 10px;border-right:1px solid var(--bg3);
+    display:flex;flex-direction:column;gap:3px;font-size:10px;
+  }
+  .vp-hdr{display:flex;align-items:center;gap:6px}
+  .vp-id{color:var(--accent);font-weight:700;letter-spacing:.06em;flex:1}
+  .vp-price{opacity:.75}
+  .vp-action{font-size:9px;padding:1px 5px;border-radius:2px;letter-spacing:.05em}
+  .vp-action.long{background:rgba(77,187,110,.2);color:#4dbb6e}
+  .vp-action.short{background:rgba(217,79,79,.2);color:#d94f4f}
+  .vp-action.hold,.vp-action.close{background:rgba(200,168,75,.1);color:var(--accent);opacity:.55}
+  .vp-charts{display:flex;gap:10px;flex:1;align-items:flex-end}
+  .vp-chart-wrap{display:flex;flex-direction:column;gap:1px}
+  .vp-chart-lbl{font-size:8px;opacity:.45;letter-spacing:.05em}
+  .vp-eq-row{display:flex;align-items:center;gap:6px;font-size:9px}
+  .vp-eq-delta{font-weight:600}
+  .vp-eq-delta.pos{color:#4dbb6e}.vp-eq-delta.neg{color:#d94f4f}
+  .vp-regime{font-size:9px;opacity:.5;letter-spacing:.04em}
+
   /* ── Replay start form (shown at /replay) ───────────────────── */
   #replay-start{
     display:none;position:fixed;inset:0;z-index:500;
@@ -387,12 +420,15 @@
       <input id="rs-symbol" type="text" value="BTCUSDT"></div>
     <div class="rs-row"><label>SPEED (×real-time)</label>
       <input id="rs-speed" type="number" value="10" min="0.1" max="1000" step="1"></div>
-    <div class="rs-row"><label>SYNTH RATE (ticks/bar)</label>
-      <select id="rs-synth">
-        <option value="6">6</option>
-        <option value="60" selected>60</option>
-        <option value="600">600</option>
-      </select></div>
+    <div class="rs-row"><label>SYNTH RATES — check multiple to compare variants</label>
+      <div style="display:flex;gap:12px;margin-top:2px">
+        <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer">
+          <input type="checkbox" class="sr-chk" value="6"> 6/bar</label>
+        <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer">
+          <input type="checkbox" class="sr-chk" value="60" checked> 60/bar</label>
+        <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer">
+          <input type="checkbox" class="sr-chk" value="600"> 600/bar</label>
+      </div></div>
     <div class="rs-row"><label>SEED</label>
       <input id="rs-seed" type="number" value="42" min="0"></div>
     <div class="rs-actions">
@@ -1209,6 +1245,82 @@
     while(feed.children.length>3)feed.removeChild(feed.lastChild);
   }
 
+  /* ── Variant panes — Phase 7 ─────────────────────────────────── */
+  const _variantState = {};  // variant_id → {priceHist, eqHist, startEq}
+
+  function _sparklineSvg(data, color, w=120, h=32) {
+    if (data.length < 2) return `<svg width="${w}" height="${h}"></svg>`;
+    const mn = Math.min(...data), mx = Math.max(...data);
+    const rng = mx - mn || 1;
+    const pts = data.map((v, i) => {
+      const x = (i / (data.length - 1)) * w;
+      const y = h - ((v - mn) / rng) * (h - 2) - 1;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(' ');
+    return `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" style="display:block">` +
+      `<polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
+  }
+
+  function _ensureVariantPane(vid) {
+    if (document.getElementById(`vp-${vid}`)) return;
+    const grid = $('vp-grid');
+    const pane = document.createElement('div');
+    pane.className = 'vp-pane'; pane.id = `vp-${vid}`;
+    pane.innerHTML = `
+      <div class="vp-hdr">
+        <span class="vp-id">${vid}</span>
+        <span class="vp-price" id="vpp-${vid}">—</span>
+        <span class="vp-action hold" id="vpa-${vid}">HOLD</span>
+      </div>
+      <div class="vp-charts">
+        <div class="vp-chart-wrap">
+          <div class="vp-chart-lbl">PRICE</div>
+          <div id="vpc-price-${vid}"></div>
+        </div>
+        <div class="vp-chart-wrap">
+          <div class="vp-chart-lbl">EQUITY</div>
+          <div id="vpc-eq-${vid}"></div>
+        </div>
+      </div>
+      <div class="vp-eq-row">
+        <span class="vp-eq-delta" id="vpd-${vid}">$0.00</span>
+        <span class="vp-regime" id="vpr-${vid}"></span>
+      </div>`;
+    grid.appendChild(pane);
+    $('variant-panes').classList.add('active');
+  }
+
+  function onVariantTick(vid, m) {
+    _ensureVariantPane(vid);
+    if (!_variantState[vid]) _variantState[vid] = {priceHist:[], eqHist:[], startEq: m.equity_usd};
+    const vs = _variantState[vid];
+    const MAX_V = 300;
+    vs.priceHist.push(m.price); if (vs.priceHist.length > MAX_V) vs.priceHist.shift();
+    vs.eqHist.push(m.equity_usd); if (vs.eqHist.length > MAX_V) vs.eqHist.shift();
+
+    const priceEl = document.getElementById(`vpp-${vid}`);
+    if (priceEl) priceEl.textContent = m.price ? `$${m.price.toFixed(0)}` : '—';
+
+    const actEl = document.getElementById(`vpa-${vid}`);
+    if (actEl) { actEl.textContent = (m.action||'hold').toUpperCase(); actEl.className = `vp-action ${m.action||'hold'}`; }
+
+    const priceChart = document.getElementById(`vpc-price-${vid}`);
+    if (priceChart) priceChart.innerHTML = _sparklineSvg(vs.priceHist, '#60a5fa');
+
+    const eqChart = document.getElementById(`vpc-eq-${vid}`);
+    if (eqChart) eqChart.innerHTML = _sparklineSvg(vs.eqHist, '#4dbb6e');
+
+    const delta = m.equity_usd - vs.startEq;
+    const deltaEl = document.getElementById(`vpd-${vid}`);
+    if (deltaEl) {
+      deltaEl.textContent = `${delta >= 0 ? '+' : ''}$${delta.toFixed(2)}`;
+      deltaEl.className = `vp-eq-delta ${delta >= 0 ? 'pos' : 'neg'}`;
+    }
+
+    const regEl = document.getElementById(`vpr-${vid}`);
+    if (regEl && m.regime) regEl.textContent = m.regime.label || '';
+  }
+
   /* ── Replay banner — ONLY function that touches #replay-banner ── */
   function onReplayState(m){
     const banner=$('replay-banner');
@@ -1244,22 +1356,29 @@
     lastForecastSteps=[]; lastForecastBps=null;
     lastForecastSigma=null; lastForecastSamples=null;
     knownPositions.clear();
-    // Reset header displays
     ['h-price','h-equity','h-fitness','h-trades','h-tick'].forEach(
-      id=>{const el=$( id);if(el)el.textContent='—'});
+      id=>{const el=$(id);if(el)el.textContent='—'});
+    // Clear variant panes
+    Object.keys(_variantState).forEach(k=>delete _variantState[k]);
+    const grid=$('vp-grid');if(grid)grid.innerHTML='';
+    $('variant-panes').classList.remove('active');
   }
 
   async function replayStart(){
     const day=$('rs-day').value;
     const symbol=$('rs-symbol').value||'BTCUSDT';
     const speed=parseFloat($('rs-speed').value)||10;
-    const synth_rate=parseInt($('rs-synth').value)||60;
     const seed=parseInt($('rs-seed').value)||42;
+    const checked=[...document.querySelectorAll('.sr-chk:checked')].map(el=>parseInt(el.value));
+    const rates=checked.length>0?checked:[60];
     $('replay-start').classList.remove('visible');
     resetChartState();
+    const body=rates.length>1
+      ?{day,symbol,speed,seed,variants:rates.map(r=>({synth_rate:r,seed}))}
+      :{day,symbol,speed,seed,synth_rate:rates[0]};
     await fetch('/api/replay/start',{method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({day,symbol,speed,synth_rate,seed})}).catch(()=>{});
+      body:JSON.stringify(body)}).catch(()=>{});
   }
 
   /* Show start modal when at /replay and no replay is active */
@@ -1275,7 +1394,9 @@
     ws=new WebSocket(`${proto}//${location.host}/ws`);
     ws.onopen=()=>{const c=$('conn');c.textContent='live';c.className='live'};
     ws.onmessage=e=>{const m=JSON.parse(e.data);
-      if(m.type==='tick')onTick(m);else if(m.type==='event')onEvent(m);
+      if(m.type==='tick'){
+        if(m.variant_id!=null)onVariantTick(m.variant_id,m);else onTick(m);
+      }else if(m.type==='event')onEvent(m);
       else if(m.type==='replay_state')onReplayState(m)};
     ws.onclose=()=>{const c=$('conn');c.textContent='disconnected';c.className='dead';
       setTimeout(connect,2000)};
@@ -1345,5 +1466,14 @@ async function exportReport(){
   finally { btn.textContent = '⬇ REPORT'; btn.disabled = false; }
 }
 </script>
+<!-- Variant comparison panes — shown during multi-variant replay -->
+<div id="variant-panes">
+  <div class="vp-header">
+    <span>VARIANT COMPARISON</span>
+    <button class="vp-close" onclick="$('variant-panes').classList.remove('active')" title="Collapse">✕</button>
+  </div>
+  <div id="vp-grid"></div>
+</div>
+
 </body>
 </html>

@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from pydantic import BaseModel
 from loguru import logger
 
 from ..audit.backscore import ForecastAuditor
@@ -29,6 +30,19 @@ from .broadcaster import UIBroadcaster
 STATIC_DIR = Path(__file__).parent / "static"
 
 
+class _ReplayStartBody(BaseModel):
+    day: str
+    speed: float = 10.0
+    synth_rate: int = 60
+    seed: int = 42
+    symbol: str = "BTCUSDT"
+    variants: list[dict] | None = None  # [{synth_rate, seed, variant_id?}] for multi-variant
+
+
+class _SpeedBody(BaseModel):
+    speed: float
+
+
 def create_app(
     broadcaster: UIBroadcaster,
     tribe_meta: list[dict],
@@ -39,12 +53,50 @@ def create_app(
     kernel_calibrator: KernelCalibrator | None = None,
     regime_classifier: RegimeClassifier | None = None,
     state: MarketState | None = None,
+    watch_controller=None,
 ) -> FastAPI:
     app = FastAPI(title="PAM Council", docs_url=None, redoc_url=None)
 
     @app.get("/")
     async def index():
         return FileResponse(STATIC_DIR / "index.html")
+
+    @app.get("/replay")
+    async def replay_page():
+        return FileResponse(STATIC_DIR / "index.html")
+
+    @app.post("/api/replay/start")
+    async def replay_start(body: _ReplayStartBody):
+        if watch_controller is None:
+            return JSONResponse({"error": "replay not available"}, status_code=503)
+        from datetime import date as _date
+        day = _date.fromisoformat(body.day)
+        run_id = await watch_controller.start(
+            day=day, speed=body.speed, synth_rate=body.synth_rate,
+            seed=body.seed, symbol=body.symbol, variants=body.variants,
+        )
+        return JSONResponse({"run_id": run_id, "status": "started"})
+
+    @app.post("/api/replay/speed")
+    async def replay_speed(body: _SpeedBody):
+        if watch_controller is None:
+            return JSONResponse({"error": "replay not available"}, status_code=503)
+        watch_controller.set_speed(body.speed)
+        return JSONResponse({"speed": body.speed})
+
+    @app.post("/api/replay/pause")
+    async def replay_pause():
+        if watch_controller is None:
+            return JSONResponse({"error": "replay not available"}, status_code=503)
+        paused = watch_controller.toggle_pause()
+        return JSONResponse({"paused": paused})
+
+    @app.post("/api/replay/stop")
+    async def replay_stop():
+        if watch_controller is None:
+            return JSONResponse({"error": "replay not available"}, status_code=503)
+        await watch_controller.stop()
+        return JSONResponse({"status": "stopped"})
 
     @app.get("/api/tribes")
     async def tribes():
