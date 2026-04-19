@@ -161,7 +161,7 @@ class CachedHistoricalClient:
         self._sem = asyncio.Semaphore(PARALLEL_DAY_FETCHES)
         self._net_lock = asyncio.Lock()  # serializes the POLITE_GAP_S sleep
 
-    async def _session(self) -> aiohttp.ClientSession:
+    def _session(self) -> aiohttp.ClientSession:
         return aiohttp.ClientSession(
             headers={"User-Agent": self.user_agent, "Accept": "application/json"}
         )

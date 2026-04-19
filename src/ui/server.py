@@ -38,6 +38,7 @@ class _ReplayStartBody(BaseModel):
     seed: int = 42
     symbol: str = "BTCUSDT"
     variants: list[dict] | None = None  # [{synth_rate, seed, variant_id?}] for multi-variant
+    days: int = 1  # 1 = single-day; >1 chains consecutive UTC days with equity carry-over
 
 
 class _SpeedBody(BaseModel):
@@ -60,11 +61,13 @@ def create_app(
 
     @app.get("/")
     async def index():
-        return FileResponse(STATIC_DIR / "index.html")
+        return FileResponse(STATIC_DIR / "index.html",
+                            headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
 
     @app.get("/replay")
     async def replay_page():
-        return FileResponse(STATIC_DIR / "index.html")
+        return FileResponse(STATIC_DIR / "index.html",
+                            headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
 
     @app.post("/api/replay/start")
     async def replay_start(body: _ReplayStartBody):
@@ -75,6 +78,7 @@ def create_app(
         run_id = await watch_controller.start(
             day=day, speed=body.speed, synth_rate=body.synth_rate,
             seed=body.seed, symbol=body.symbol, variants=body.variants,
+            days=body.days,
         )
         return JSONResponse({"run_id": run_id, "status": "started"})
 

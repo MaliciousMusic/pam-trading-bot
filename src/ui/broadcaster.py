@@ -15,6 +15,7 @@ class UIBroadcaster:
     def __init__(self, tick_buffer: int = 120) -> None:
         self._subs: set[asyncio.Queue[dict]] = set()
         self._tick_buffer: deque[dict] = deque(maxlen=tick_buffer)
+        self.mute_live: bool = False  # True during replay — drops live-engine ticks
 
     def subscribe(self) -> asyncio.Queue[dict]:
         q: asyncio.Queue[dict] = asyncio.Queue(maxsize=200)
@@ -27,7 +28,11 @@ class UIBroadcaster:
     def recent_ticks(self) -> list[dict]:
         return list(self._tick_buffer)
 
-    async def publish(self, msg: dict[str, Any]) -> None:
+    async def publish(self, msg: dict[str, Any], *, _replay: bool = False) -> None:
+        # Drop live-engine tick messages while a replay is running.
+        # Replay messages bypass the gate via _replay=True.
+        if self.mute_live and not _replay and msg.get("type") == "tick":
+            return
         if msg.get("type") == "tick":
             self._tick_buffer.append(msg)
         for q in list(self._subs):
@@ -40,3 +45,7 @@ class UIBroadcaster:
                 q.put_nowait(msg)
             except asyncio.QueueFull:
                 pass
+
+    async def publish_replay(self, msg: dict[str, Any]) -> None:
+        """Publish from replay engine — always delivered, bypasses mute gate."""
+        await self.publish(msg, _replay=True)
