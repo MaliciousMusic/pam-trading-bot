@@ -1,30 +1,39 @@
-"""Chess projector — forward-simulate N ticks ahead.
+"""Chess projector — forward-simulate N ticks ahead via Agent-Based Recursion.
 
-At each virtual step:
+Each tribe is its own agent with a deterministic Behavioral DNA function
+(see `behavioral_dna.py`). At step h the tribe receives:
+    State_{i,h-1}, Delta_{i,h-1}, regime, perceived_shocks_{i,h}
+and returns Delta_{i,h} → State_{i,h} = State_{i,h-1} + Delta_{i,h}.
+
+Information Asymmetry — not Monte Carlo noise — is the source of
+divergence between paths:
+  • A sparse schedule of typed World Shocks (macro / micro / sentiment /
+    liquidity) is sampled once per projection from a regime-dependent
+    distribution.
+  • Each tribe category has a Latency (lag between shock firing and the
+    tribe perceiving it) and a Visibility map (per-kind multiplier).
+  • A liquidity shock hits MM at h=0 (immediate spread-widening spike),
+    arb at h=1 (begins fading toward fair value), TA at h=2-3 (only via
+    prev_delta-driven momentum), retail at h=5+ (panic threshold trips,
+    quadratic chase kicks in). This cascade is the alpha — the
+    "Microstructure Lead" lets MM gap before arb can reprice.
+
+Per-step:
   1. Advance the shadow clock by tick_seconds; stale window entries age out.
-  2. Each tribe re-votes against the projected state (strategies are pure
-     functions, so we bypass the live Tribe.vote() cooldown machinery).
-  3. Per-tribe horizon decay: every vote's conviction is multiplied by
-     exp(-step_seconds × i / hold_seconds) before aggregation, so scalpers
-     (60s) fade out within the first few steps while swing traders (3600s)
-     persist across the whole 10-minute projection.
-  4. Aggregated net_pressure → bps via linear kernel.
-  5. Ornstein-Uhlenbeck mean-reversion pulls cumulative drift back toward
-     zero — a counterweight to the scale-invariant projector that previously
-     produced smoothly-runaway curves.
-  6. Uncertainty fan + Monte Carlo: per-step sigma is interpolated from the
-     backscorer's horizon residuals; N stochastic realizations are drawn
-     around the expected curve so the UI can render a wiggly band instead
-     of a single stiff line.
+  2. DNA(prev_state, prev_delta, regime, perceived[h]) → step_bps.
+  3. Real scheduled events (`step_event_bps`) layered on top.
+  4. Depth-scaled by side-of-book liquidity.
+  5. Soft-Limit Anchor (mean_reversion_rate ρ) pulls cumulative drift
+     back toward zero — prevents the recursive paths from exploding.
 
-Expected move = depth-weighted sum of per-step bps (decay kernel damps
-later steps). Confidence = signal_quality × directional_consistency,
-both in [0,1].
+The decayed-vote shadow used for confidence math (`aggregate_votes`) is
+built from each tribe's *initial* vote at h=0 multiplied by the per-step
+horizon kernel, so scalpers still fade out within the first few steps
+and swing traders persist across the full 10 minutes — but the path
+shape is governed entirely by the DNA, not by per-step re-voting.
 
-What this projector intentionally does NOT simulate:
-  - Cascade-triggered liquidations (creates echo-chamber amplification).
-  - Synthetic taker flow (self-reinforcing, inflates confidence).
-  - Funding shifts.
+Adaptive Temporal Weighting (prediction ledger → per-(tribe, horizon)
+weight matrix) and the Regime-aware pool weight overlay are unchanged.
 """
 from __future__ import annotations
 
@@ -40,7 +49,63 @@ from ..aggregator.voting import aggregate_votes
 from ..core.types import Forecast
 from ..tribes.market_state import MarketState
 from ..tribes.tribe import Tribe
+from .behavioral_dna import (
+    DNAContext,
+    dna_for,
+    generate_shock_schedule,
+    perceive_for_tribe,
+    profile_for,
+)
 from .event_wave import step_event_bps
+
+
+# ── Regime-dependent pool weight overlay ─────────────────────────────────
+# ω_{i,(regime)} = ω_{i,(base)} · f(regime, category_i)
+# The static flow-share weight (`tribe.weight`) tells us how much capital a
+# tribe normally pushes around. But capital isn't regime-agnostic: market
+# makers *pull* liquidity in a cascade, arb desks *lean in*, retail panics,
+# TA traders stare at broken patterns. The multiplier below retunes each
+# tribe's voice in the consensus to reflect its observed behavior under
+# the current tape rather than its average-day footprint.
+_TRIBE_CATEGORY: dict[str, str] = {
+    "mm_algo": "mm",
+    "retail_grid_bot": "mm",  # grid bots post limit orders like passive MMs
+    "basis_arb": "arb",
+    "cross_venue_arb": "arb",
+    "contrarian_funding_fader": "arb",
+    "retail_degen_leveraged": "retail",
+    "retail_app_newbie": "retail",
+    "copy_trader": "retail",
+    "ta_day_trader": "ta",
+    "ta_day_trader_us": "ta",
+    "ta_day_trader_eu": "ta",
+    "ta_day_trader_asia": "ta",
+    "swing_trend_follower": "ta",
+    "liquidation_hunter": "event",
+    "news_fader": "event",
+    "options_hedger_proxy": "hedger",
+    "leverage_cycle": "hedger",
+    "microstructure_prober": "microstructure",
+}
+# Rows: regime label (see regime.classifier.RegimeLabel).
+# Columns: tribe category.
+# Design notes:
+#   - CASCADE: MM pull liquidity (0.35), arb desks lean hard into dislocation
+#     (1.60), retail panic-adds to the move (1.45), event tribes lit up (1.55),
+#     hedgers step in (1.30), TA largely irrelevant inside the shock (1.15).
+#   - TREND: MM less relevant (inventory pinned to one side), TA + retail
+#     ride the trend, hedgers keep steady.
+#   - CHOP: MM dominate (1.30), arb still present, retail fades, TA patterns
+#     are false-signal-heavy (0.75).
+#   - NORMAL: neutral baseline — every category at 1.0.
+_REGIME_CATEGORY_MULT: dict[str, dict[str, float]] = {
+    "normal":       {"mm": 1.00, "arb": 1.00, "retail": 1.00, "ta": 1.00, "event": 1.00, "hedger": 1.00, "microstructure": 1.15},
+    "chop":         {"mm": 1.30, "arb": 1.15, "retail": 0.70, "ta": 0.75, "event": 0.80, "hedger": 0.90, "microstructure": 1.40},
+    "trend_up":     {"mm": 0.85, "arb": 1.05, "retail": 1.25, "ta": 1.35, "event": 1.10, "hedger": 1.10, "microstructure": 0.95},
+    "trend_down":   {"mm": 0.85, "arb": 1.05, "retail": 1.25, "ta": 1.35, "event": 1.10, "hedger": 1.10, "microstructure": 0.95},
+    "cascade_up":   {"mm": 0.35, "arb": 1.60, "retail": 1.45, "ta": 1.15, "event": 1.55, "hedger": 1.30, "microstructure": 1.25},
+    "cascade_down": {"mm": 0.35, "arb": 1.60, "retail": 1.45, "ta": 1.15, "event": 1.55, "hedger": 1.30, "microstructure": 1.25},
+}
 
 
 class ChessProjector:
@@ -69,6 +134,9 @@ class ChessProjector:
         self.depth_ref_usd = depth_ref_usd
         self.depth_floor_usd = depth_floor_usd
         self.regime_multiplier: float = 1.0
+        # Regime label pushed in by the engine each tick. Drives the
+        # category-level pool-weight overlay below — see _REGIME_CATEGORY_MULT.
+        self.regime_label: str = "normal"
         # Per-tribe skill overlay. Set externally after construction (the
         # live wiring in run_bot_ui.py builds the calibrator after the
         # projector). When present, the projector scales each tribe's
@@ -89,14 +157,12 @@ class ChessProjector:
             params = getattr(getattr(t.spec, "strategy", None), "params", {}) or {}
             hs = float(params.get("hold_seconds", default_horizon_seconds))
             self._tribe_horizon_s[t.spec.id] = max(1.0, hs)
+        # RNG drives only the World Shock schedule sampling (a handful of
+        # draws per project() call), not per-tribe per-step noise — the
+        # ABM's wiggle comes from DNA × shock interaction, not from
+        # independent Gaussians.
         self._rng = random.Random(rng_seed)
         # ── Adaptive Temporal Weighting state ──────────────────────────
-        # Persistent shock buffer: per-tribe list of unit-variance Gaussian
-        # draws, length n_steps. On each project() call the buffer slides
-        # left (shocks[k] = shocks[k+1]) and only the last slot is redrawn
-        # — this is the "True Markov Slide". A prediction for T+50 stays
-        # coherent as it marches toward T+0.
-        self._shock_buffer: dict[str, list[float]] = {}
         # Prediction ledger — circular buffer of the last `steps` frames.
         # Each frame: {"price": float, "curves": {tribe_id: list[float]}}.
         # Used at every tick to backtest what each tribe predicted h steps
@@ -122,24 +188,29 @@ class ChessProjector:
         self._weight_max = 1.5
 
     def project(self, state: MarketState) -> Forecast:
-        """Per-tribe isolated projection with Adaptive Temporal Weighting.
+        """Agent-Based Recursive projection with Adaptive Temporal Weighting.
 
-        Three stateful mechanisms layered on top of the per-tribe isolated sim:
+        Each tribe's path is a deterministic execution of its category's
+        Behavioral DNA function (see `behavioral_dna.py`), driven by:
+          • its initial directional intent + base strength (locked at h=0
+            from `tribe.project_vote(start_ts, state)`),
+          • its perceived World Shock pipeline (latency- and visibility-
+            filtered from a single shared sparse schedule),
+          • the recursive prior step's (state, delta).
 
-          1. **Persistent shock buffer** — each tribe carries a length-N list
-             of unit-Gaussian draws that *slides* one slot per tick. A shock
-             used at step 49 this tick becomes step 48's shock next tick, so
-             a wiggle projected 50 ticks out in the future stays coherent as
-             it approaches T+0 (True Markov Slide).
-          2. **Prediction ledger** — a circular buffer of the last N frames.
-             At every tick we look back at what each tribe predicted h steps
-             ago for the current tick, score it against the actual price
-             move, and nudge that tribe's weight at horizon h up or down.
-          3. **Performance-weighted consensus** — the thick line is no
-             longer a simple sum but the weighted average of the 17 tribe
-             paths, with `W[tribe_id][h]` set by the tribe's track record
-             at that specific horizon. Tribe A can dominate the near future
-             while Tribe B dominates the far future.
+        Three stateful mechanisms layered on top of the recursive sim:
+
+          1. **Typed World Shocks** — sparse schedule sampled per call from
+             a regime-dependent kind distribution. Each tribe category
+             perceives them at its own latency and visibility, so the
+             same liquidity event hits MM at h=0 and retail at h=5+.
+          2. **Prediction ledger** — circular buffer of the last N frames.
+             At every tick we look back at what each tribe predicted h
+             steps ago, score it against the actual price move, and nudge
+             that tribe's weight at horizon h up or down.
+          3. **Performance-weighted consensus** — the thick line is the
+             weighted average of the per-tribe paths, with `W[tribe_id][h]`
+             set by the tribe's track record at that specific horizon.
         """
         start_ref = state.snapshot()
         start_ts = start_ref.last_update or datetime.now(timezone.utc)
@@ -232,86 +303,106 @@ class ChessProjector:
                                     v = self._weight_max
                                 row[h] = v
 
-        # ── 2. Slide each tribe's persistent shock buffer by one slot ──
-        # buffer stores unit-variance draws; multiplied by step_shock_sigma
-        # below to get the actual per-step bps kick.
-        for tribe in self.tribes:
-            tid = tribe.spec.id
-            buf = self._shock_buffer.get(tid)
-            if buf is None or len(buf) != n_steps:
-                buf = [self._rng.gauss(0.0, 1.0) for _ in range(n_steps)]
-            else:
-                # Slide left, redraw only the terminal slot.
-                buf = buf[1:] + [self._rng.gauss(0.0, 1.0)]
-            self._shock_buffer[tid] = buf
+        # ── 2. Generate the shared World Shock schedule ──
+        # A single sparse list of typed shocks for this projection. Each
+        # tribe will perceive its own filtered + delayed view of this
+        # schedule via `perceive_for_tribe` below. Shock magnitude scales
+        # with the projector's terminal sigma so cascades hit harder
+        # than calm regimes.
+        sigma_cum = self._sigma_per_step(n_steps)
+        sigma_terminal = sigma_cum[-1] if sigma_cum else self.default_sigma_bps
+        world_shocks = generate_shock_schedule(
+            n_steps,
+            regime=self.regime_label,
+            sigma_terminal_bps=sigma_terminal,
+            rng=self._rng,
+            target_count=4,
+        )
 
-        # Per-tribe cumulative bps curves. Each tribe projects in isolation —
-        # its simulated price trajectory reflects only its own contribution,
-        # breaking the echo-chamber feedback from the old aggregate-first
-        # projection.
+        # ── 3. Lock each tribe's initial directional intent at h=0 ──
+        # The tribe's "opening read" of the market — used as signed_intent
+        # and base_strength inputs to the DNA. We deliberately do NOT
+        # re-vote on the simulated future state at every step (that was
+        # the old "ball of yarn" feedback); the DNA is the response
+        # function that evolves the path from this opening read.
+        # `decayed_by_step` still receives a per-step horizon-decayed copy
+        # so the confidence aggregate keeps its meaning (scalpers fade,
+        # swing traders persist).
+        initial_votes: dict[str, tuple] = {}
+        for tribe in self.tribes:
+            v0 = tribe.project_vote(start_ts, state)
+            signed = (1.0 if v0.side.value == "buy" else
+                      -1.0 if v0.side.value == "sell" else 0.0)
+            sk0 = skill.get(tribe.spec.id, 1.0)
+            base_strength_pre = v0.conviction * sk0 * effective_gain
+            initial_votes[tribe.spec.id] = (v0, signed, base_strength_pre)
+
+        # ── 4. Pre-compute each tribe's perceived shock pipeline ──
+        # Latency shifts h_origin → h_origin + latency_steps; visibility
+        # multiplies magnitude per-kind (zero = blind to that kind).
+        # Result: perceived_per_tribe[tid][h] = list of WorldShock the
+        # tribe sees at horizon h, with `kind` preserved so DNA can react
+        # differently to e.g. a liquidity vs. macro shock.
+        perceived_per_tribe: dict[str, list[list]] = {}
+        for tribe in self.tribes:
+            cat = _TRIBE_CATEGORY.get(tribe.spec.id, "ta")
+            perceived_per_tribe[tribe.spec.id] = perceive_for_tribe(
+                world_shocks, profile_for(cat), n_steps=n_steps,
+            )
+
+        # ── 5. Per-tribe recursive walk via Behavioral DNA ──
         per_tribe_curves: list[list[float]] = []
         per_tribe_ids: list[str] = []
-        # Per-step stochastic shock sigma shared by every tribe. Derived from
-        # the backscorer's residual stddev (via `_sigma_per_step`), then
-        # converted to per-step increments. This is the ingredient that makes
-        # each tribe's forecast an actual wiggly curve rather than a straight
-        # line — the tribe's deterministic read is a drift, and the noise is
-        # that tribe's forecast uncertainty at each horizon. With it, the
-        # paths look like plausible futures; without it, they'd look like
-        # rulers.
-        sigma_cum = self._sigma_per_step(n_steps)
-        n_tribes = max(1, len(self.tribes))
-        step_shock_sigma: list[float] = []
-        prev_var = 0.0
-        for s in sigma_cum:
-            cur_var = float(s) ** 2
-            inc = max(0.0, cur_var - prev_var)
-            # Split variance evenly across tribes so the sum of 17
-            # independent per-tribe shocks reproduces the target horizon
-            # sigma instead of sqrt(N) × target.
-            step_shock_sigma.append(math.sqrt(inc / n_tribes))
-            prev_var = cur_var
-        # Decayed votes per step — collected from the isolated per-tribe walks
-        # so we still have an aggregate object per step for confidence math.
         decayed_by_step: list[list] = [[] for _ in range(n_steps)]
 
         for tribe in self.tribes:
-            sk = skill.get(tribe.spec.id, 1.0)
-            w = float(tribe.weight)
-            shock_buf = self._shock_buffer.get(tribe.spec.id, [0.0] * n_steps)
+            tid = tribe.spec.id
+            cat = _TRIBE_CATEGORY.get(tid, "ta")
+            dna_fn = dna_for(cat)
+            v0, signed, base_strength_pre = initial_votes[tid]
+            perceived = perceived_per_tribe[tid]
+            hs = self._tribe_horizon_s.get(tid, self.default_horizon_seconds)
             sim = state.snapshot()
             ts = start_ts
             prev_ts = ts
             cum_bps = 0.0
+            prev_delta = 0.0
             curve: list[float] = []
             for step_i in range(n_steps):
                 prev_ts = ts
                 ts = ts + timedelta(seconds=dt_s)
                 sim.advance_clock(ts)
                 elapsed_s = (step_i + 1) * dt_s
-                v = tribe.project_vote(ts, sim)
-                hs = self._tribe_horizon_s.get(v.tribe_id, self.default_horizon_seconds)
-                factor = math.exp(-elapsed_s / hs)
-                combo = factor * sk
-                new_conv = max(0.0, min(1.0, v.conviction * combo))
+                # Horizon decay — scalpers fade out fast, swing traders
+                # carry through the full window. Same kernel as before.
+                decay = math.exp(-elapsed_s / hs)
+                base_strength = base_strength_pre * decay
+                # Decayed-vote shadow for the confidence aggregate.
+                new_conv = max(0.0, min(1.0, v0.conviction * decay))
                 decayed_by_step[step_i].append(replace(
-                    v, conviction=new_conv,
-                    buy_frac=v.buy_frac * combo,
-                    sell_frac=v.sell_frac * combo,
+                    v0, conviction=new_conv,
+                    buy_frac=v0.buy_frac * decay,
+                    sell_frac=v0.sell_frac * decay,
                 ))
-                signed = (1.0 if v.side.value == "buy" else
-                          -1.0 if v.side.value == "sell" else 0.0)
-                # Each tribe's curve is a *scenario* — "if this tribe's read
-                # on the market dominated, here's where price goes". Pool
-                # weight is applied later via W[tid][h] in the consensus
-                # blend, not here, so small-weight tribes still produce
-                # legibly-sized paths for the UI to render.
-                vote_bps = signed * v.conviction * factor * sk * effective_gain
+                # ── DNA: deterministic recursive step ──
+                ctx = DNAContext(
+                    prev_state_bps=cum_bps,
+                    prev_delta_bps=prev_delta,
+                    regime=self.regime_label,
+                    perceived=perceived[step_i] if step_i < len(perceived) else [],
+                    signed_intent=signed,
+                    base_strength=base_strength,
+                    h=step_i,
+                )
+                dna_delta = dna_fn(ctx)
+                # Real scheduled events (separate from the random world
+                # shocks) — preserves the existing event-wave overlay.
                 event_bps = step_event_bps(
                     sim.pending_events, [tribe],
                     prev_ts.timestamp(), ts.timestamp(),
                 )
-                total_bps = vote_bps + event_bps
+                total_bps = dna_delta + event_bps
+                # Depth scaling — thin books amplify pushes.
                 side_depth = (
                     sim.ask_depth_5bps_usd if total_bps >= 0
                     else sim.bid_depth_5bps_usd
@@ -321,18 +412,13 @@ class ChessProjector:
                 else:
                     scale = 1.0
                 step_bps = total_bps * scale
-                # Stochastic shock — pulled from the persistent buffer, not
-                # redrawn each tick. The unit-variance slot for step_i
-                # slid in from slot step_i+1 last tick, so the wiggle
-                # projected N ticks ago stays visually stable as it marches
-                # toward now. Only the terminal slot is fresh each tick.
-                shock_sig = step_shock_sigma[step_i] if step_i < len(step_shock_sigma) else 0.0
-                if shock_sig > 0.0:
-                    unit = shock_buf[step_i] if step_i < len(shock_buf) else 0.0
-                    step_bps += unit * shock_sig
+                # Soft-Limit Anchor (ρ) — pulls the recursive path back
+                # toward zero so a runaway DNA + shock combination can't
+                # explode the simulation.
                 if self.mean_reversion_rate > 0.0 and cum_bps != 0.0:
                     step_bps -= self.mean_reversion_rate * cum_bps
                 cum_bps += step_bps
+                prev_delta = step_bps
                 curve.append(cum_bps)
                 if sim.last_price is not None and sim.last_price > 0:
                     sim.last_price = sim.last_price * (1 + step_bps / 10_000.0)
@@ -340,14 +426,25 @@ class ChessProjector:
                 if sim.last_funding_rate is not None:
                     sim.last_funding_rate *= 0.995
             per_tribe_curves.append(curve)
-            per_tribe_ids.append(tribe.spec.id)
+            per_tribe_ids.append(tid)
 
-        # ── 3. Performance-weighted consensus ──
+        # ── 6. Performance-weighted consensus ──
         # Consensus_h = Σ (Path_i,h · W_i,h · pool_weight_i) / Σ (W_i,h · pool_weight_i)
         # Pool weight gates flow share (a 1% tribe can't override a 20% tribe
         # just because its last few calls happened to land), while W_i,h is
         # the horizon-specific accuracy overlay the ledger is learning.
-        pool_w = {t.spec.id: float(t.weight) for t in self.tribes}
+        # Regime-aware pool weight: ω_i_eff = ω_i_base · f(regime, category_i).
+        # The base flow-share is what each tribe pushes around on an average
+        # day; the overlay retunes who gets amplified or throttled under the
+        # current tape. In a cascade, MM tribes drop to 0.35× while arb and
+        # event tribes rise to 1.55–1.60× — the consensus reflects who is
+        # *actually* trading, not who nominally holds inventory.
+        regime_tbl = _REGIME_CATEGORY_MULT.get(self.regime_label) \
+            or _REGIME_CATEGORY_MULT["normal"]
+        pool_w: dict[str, float] = {}
+        for t in self.tribes:
+            cat = _TRIBE_CATEGORY.get(t.spec.id, "ta")
+            pool_w[t.spec.id] = float(t.weight) * regime_tbl.get(cat, 1.0)
         steps_bps: list[float] = []
         for h in range(n_steps):
             num = 0.0
