@@ -27,6 +27,22 @@ risk:
   min_hold_seconds: 0           # disabled — each position has its own TP/SL
   max_hold_seconds: 600         # hard backstop if TP/SL never hit
 
+  # Drawdown circuit breaker (added 2026-04-19). Two independent halts —
+  # either trips and new entries are rejected; exits and mark-to-market
+  # continue so open risk is never trapped.
+  #
+  #   max_drawdown_from_peak_pct: halt when equity ≤ session_peak × (1−x/100).
+  #     Clears when equity recovers above the trigger (peak ratchets up,
+  #     so recovery is real, not a rounding flap).
+  #
+  #   max_daily_loss_pct: halt when equity ≤ day_open × (1−x/100).
+  #     Clears on UTC date roll (fresh anchor). Tight circuit on bad days.
+  #
+  # 8% peak + 5% daily is standard prop-desk — tripping either means pause,
+  # review logs, decide before overriding. Set 0.0 to disable.
+  max_drawdown_from_peak_pct: 8.0
+  max_daily_loss_pct: 5.0
+
 decision:
   # Council-driven entry AND exit. Every non-flat projection opens a trade;
   # each open position is re-evaluated every tick and closed the moment the
@@ -37,6 +53,30 @@ decision:
   # Prevents whipsaw when the forecast oscillates near zero.
   exit_dead_zone_bps: 3.0
   min_conf: 0.10                # council must agree before opening — below this is noise
+  # Sigma-aware sizing: scale position size by min(1.0, sigma_ref_bps / terminal_sigma).
+  # Wide forecast fans (chaotic regimes) shrink trades toward `sigma_shrink_floor`;
+  # tight fans leave sizing untouched. Terminal sigma = last step of the
+  # projector's sigma curve (~10min at defaults). 40bps ref reflects a
+  # "normal" realized-move range for the 10-min horizon.
+  sigma_ref_bps: 40.0
+  sigma_shrink_floor: 0.35
+
+# Higher-timeframe trend gate (added 2026-04-19). A 1h EMA-spread-over-ATR
+# score (tanh-squashed to [-1,+1]) is polled once per minute. The decision
+# engine shrinks counter-trend entry sizes by:
+#     mult = 1 - counter_strength * |score|
+# Aligned entries are untouched. This is a SOFT gate — the council still
+# fires; we just don't let a 10-min scalper steamroll a bet into the 1h
+# trend at full size. Set counter_strength=0 to disable.
+htf:
+  enabled: true
+  timeframe: "1h"
+  lookback_candles: 50
+  fast_ema: 8
+  slow_ema: 21
+  poll_seconds: 60
+  counter_strength: 0.6     # max shrink when full-opposition (|score|=1)
+  max_age_seconds: 7200     # treat polls older than 2h as stale → no shrink
 
 # Multi-layer exit overlay. The base rule (council sign-flip beyond the
 # dead zone) stays in place; these layers are ADDITIONAL early-exit triggers
@@ -59,8 +99,28 @@ exit_strategy:
   # Arms once peak unrealized P&L (in bps of notional) crosses arm_bps;
   # close when current drops to peak * (1 - retrace_frac).
   # Set arm_bps=0 OR retrace_frac>=1.0 to disable.
-  ratchet_arm_bps: 10.0          # arm once +10bps of notional is earned
-  ratchet_retrace_frac: 0.5      # close on retracing 50% of the peak
+  #
+  # Arm threshold MUST exceed round-trip fees (14 bps at 5/2 fee/slip) or the
+  # ratchet close books a net loss. Previous 10bps / 50%-retrace setting gave
+  # back 5 bps gross → −9 bps net after fees. Tightened to arm=20 / retrace=0.35
+  # so any ratcheted close locks in ≥13 bps gross ≈ −1 bps net worst case.
+  ratchet_arm_bps: 20.0          # arm once +20bps of notional is earned
+  ratchet_retrace_frac: 0.35     # close on retracing 35% of the peak
+
+  # --- Layer 2c: shape-aware exit ------------------------------------------
+  # Decision engine stamps each position with the step at which the forecast
+  # peaked in its favor. If still held `shape_grace_seconds` past that peak
+  # AND in the green, close — the forecast said this was the top; don't ride
+  # it back down. 0 = off.
+  shape_grace_seconds: 30
+
+  # --- Layer 2b: forecast-target take-profit -------------------------------
+  # Close when unrealized reaches the target the council forecasted at entry:
+  # abs(expected_move_bps) × confidence. Suppressed when that target is below
+  # round-trip fees (no net-profitable TP is reachable). Disable by setting
+  # factor=0; raise factor to require clearing the forecast by that much.
+  forecast_tp_factor: 1.0        # 1.0 = exactly the forecasted move × conf
+  forecast_tp_min_bps: 0.0       # optional floor; 0 = no extra floor
 
   # --- Layer 3a: regime-aware dead zone ------------------------------------
   # Scale `decision.exit_dead_zone_bps` by regime label. Missing keys → 1.0.
@@ -72,12 +132,13 @@ exit_strategy:
     cascade_up:   0.5            # thin book — close tighter before it runs
     cascade_down: 0.5
 
-  # --- Layer 3b: edge exhausted (optional, OFF by default) -----------------
+  # --- Layer 3b: edge exhausted --------------------------------------------
   # Close when the forecasted remaining move in the position's direction is
-  # less than `round_trip_fees_bps * edge_exhausted_factor`. Set factor=0
-  # to disable — enable once the projector's remaining-move estimate is
-  # reliable enough to trust for this kind of sub-tick profit-take.
-  edge_exhausted_factor: 0.0
+  # less than `round_trip_fees_bps * edge_exhausted_factor`. Enabled now
+  # that the projector carries per-tribe horizon decay + mean reversion +
+  # sigma fan, so its "remaining forward move" estimate is trustworthy
+  # enough to grade a graceful top-of-move close.
+  edge_exhausted_factor: 1.0
   edge_exhausted_min_age_s: 20
 
 # Confidence-weighted position sizing. At conf = 0 we inject `min_pct_equity`;
@@ -106,6 +167,27 @@ projector:
   # 200-step (10-min) projection — the far horizon still contributes meaningfully
   # while near steps still dominate.
   confidence_decay: 0.98
+  # Wiggly-path enrichments (added 2026-04-19). Each addresses one failure
+  # mode of the scalar-projection curve that shipped previously:
+  #   - per_tribe_horizon_decay: a scalper's vote no longer lasts 10min; it
+  #     decays on its own hold_seconds so the far horizon is dominated by
+  #     swing traders only. Implemented inside the projector regardless of
+  #     this flag (flag kept for future off-switch if needed).
+  #   - mean_reversion_rate: OU pull toward zero on cumulative drift. 0.02
+  #     means ~2% of the running total gets clawed back each step — keeps
+  #     persistent small pressures from compounding into unrealistic runs.
+  #     Set to 0 to disable.
+  #   - sample_paths_n: number of Monte Carlo realizations drawn around the
+  #     expected curve each tick. UI renders them as faint lines behind the
+  #     main forecast. 0 disables sampling.
+  #   - default_horizon_seconds: fallback hold_seconds when a tribe spec
+  #     omits it.
+  #   - default_sigma_bps: sigma used for sampling before the backscorer has
+  #     resolved `min_samples` anchors. Scales as √t across the horizon.
+  mean_reversion_rate: 0.02
+  sample_paths_n: 20
+  default_horizon_seconds: 600
+  default_sigma_bps: 8.0
 
 # Phase A — live projector-gain fitting. Each resolved backscore anchor
 # updates a running EWMA of `realized / predicted` bps; the correction is
@@ -122,6 +204,14 @@ projector_calibration:
 execution:
   fee_rate_bps: 5.0
   slippage_bps: 2.0
+  # Size-scaled slippage (added 2026-04-19). Stacked entries on the same
+  # directional bet aren't truly independent — real markets eat through
+  # the book. Model this as:
+  #     effective_bps = slippage_bps × (1 + k × size_usd / ref_notional)
+  # With k=0.5 and ref=100k, a $100k fill costs 2×1.5=3bps; a $300k fill
+  # costs 2×2.5=5bps. Set k=0 to collapse back to flat slippage.
+  slippage_size_k: 0.5
+  slippage_ref_notional_usd: 100000.0
 
 audit:
   horizon_seconds: 60           # forward-price window used to score each tribe vote
@@ -147,6 +237,14 @@ calibration:
   fast_halflife_resolved: 50   # fast EWMA halflife (~minutes within a busy session)
   fast_min_samples: 10         # fast floor — smaller because halflife is smaller
   regime_shift_threshold: 0.12 # |fast − slow| above this triggers fast-override
+  # Regime-conditional skill (added 2026-04-19). Tracks a separate EWMA per
+  # (tribe, regime) pair using the regime stamped at vote time. When a
+  # tribe has ≥ regime_min_samples resolutions in the CURRENT regime, that
+  # per-regime score takes priority over the global EWMA — resolves the
+  # "trend tribe bleeds conviction in chop" gap that the fast EWMA alone
+  # can't close fast enough. Disable by flipping enable_regime_conditional.
+  enable_regime_conditional: true
+  regime_min_samples: 15
 
 # Phase E — live regime overlay. Every tick the classifier labels the tape
 # from MarketState stats (realized vol, drift efficiency, recent liquidations)

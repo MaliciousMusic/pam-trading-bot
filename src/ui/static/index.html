@@ -246,15 +246,15 @@
     .chart-box.equity{height:64px}
     .chart-box.equity canvas{height:28px}
   }
-  /* Tablet: tighten columns */
+  /* Narrow: switch to 2-column scrollable layout. Breakpoint raised from
+     1100 → 1400px so mid-width viewports (split-screen IDE + browser,
+     docked panels) get the sidebar BELOW the chart at full width — the
+     cramped ~200px column wasn't readable for the portfolio/trade-history
+     stack. */
   @media (max-width:1400px){
-    main{grid-template-columns:minmax(140px,190px) 1fr minmax(175px,236px)}
     header{gap:10px;padding:6px 12px}
     .hdr-item .v{font-size:12px}
     .hdr-item .k{font-size:8px}
-  }
-  /* Narrow: switch to 2-column scrollable layout */
-  @media (max-width:1100px){
     body{overflow:auto;height:auto;min-height:100vh}
     header{flex-wrap:wrap;gap:6px 10px;padding:6px 10px}
     main{grid-template-columns:minmax(160px,210px) 1fr;
@@ -438,6 +438,9 @@
   let CFG={size_min_pct:1.0,size_max_pct:6.0,sizing_curve:'linear',
            bps_per_unit_pressure:8.0,projector_steps:200,tick_seconds:3};
   let lastForecastSteps=[];
+  let lastForecastBps=null;      // cumulative expected-move curve from projector
+  let lastForecastSigma=null;    // per-step sigma for the uncertainty fan
+  let lastForecastSamples=null;  // Monte Carlo sample paths in bps
   const TRAIL_COLORS={
     '15s':'#22d3ee','1m':'#60a5fa','5m':'#c084fc',
     '10m':'#fb923c','15m':'#fde047',
@@ -655,6 +658,9 @@
     spawnFlows(t.votes, np);
 
     lastForecastSteps=t.forecast_steps||[];
+    lastForecastBps=t.forecast_steps_bps||null;
+    lastForecastSigma=t.forecast_sigma_bps||null;
+    lastForecastSamples=t.forecast_sample_paths_bps||null;
     currentTick=t.tick;
 
     // Detect trade entries and exits by diffing position list
@@ -700,7 +706,8 @@
     }
 
     drawPriceWithProjection('price-c',priceHist,lastForecastSteps,t.price,
-      pd>=0?'#4dbb6e':'#d94f4f',predictionTrail,t.tick,tradeEvents);
+      pd>=0?'#4dbb6e':'#d94f4f',predictionTrail,t.tick,tradeEvents,
+      {stepsBps:lastForecastBps,sigmaBps:lastForecastSigma,samples:lastForecastSamples});
 
     const regEl=$('regime-chip');
     if(regEl){
@@ -845,7 +852,7 @@
     ctx.stroke();
   }
 
-  function drawPriceWithProjection(id,hist,steps,currentPrice,histColor,trail,tickNow,events){
+  function drawPriceWithProjection(id,hist,steps,currentPrice,histColor,trail,tickNow,events,extras){
     const c=$(id);const dpr=window.devicePixelRatio||1;
     const rect=c.getBoundingClientRect();
     const w=rect.width,h=rect.height;
@@ -854,17 +861,46 @@
     const ctx=c.getContext('2d');ctx.scale(dpr,dpr);ctx.clearRect(0,0,w,h);
     if(hist.length<2)return;
 
+    const stepsBps=extras&&extras.stepsBps;
+    const sigmaBps=extras&&extras.sigmaBps;
+    const samplesBps=extras&&extras.samples;
     const proj=VISIBLE.proj?[]:null;
-    let cumBps=0;
     if(VISIBLE.proj){
-      for(const s of steps){
-        cumBps+=(s.net_pressure||0)*CFG.bps_per_unit_pressure;
-        proj.push(currentPrice*(1+cumBps/10000));
+      if(stepsBps&&stepsBps.length){
+        // Authoritative server-side cumulative curve (per-tribe horizon
+        // decay + regime scaling + mean-reversion already baked in).
+        for(const b of stepsBps) proj.push(currentPrice*(1+b/10000));
+      }else{
+        let cumBps=0;
+        for(const s of steps){
+          cumBps+=(s.net_pressure||0)*CFG.bps_per_unit_pressure;
+          proj.push(currentPrice*(1+cumBps/10000));
+        }
       }
     }
     const projLen=proj?proj.length:0;
 
+    // Envelope extremes — include the sigma fan and sample paths in the
+    // y-range calculation so they don't clip the chart when price is
+    // otherwise quiet.
+    const envelope=[];
+    if(projLen && VISIBLE.proj){
+      if(sigmaBps&&sigmaBps.length===projLen && stepsBps){
+        for(let i=0;i<projLen;i++){
+          envelope.push(currentPrice*(1+(stepsBps[i]+2*sigmaBps[i])/10000));
+          envelope.push(currentPrice*(1+(stepsBps[i]-2*sigmaBps[i])/10000));
+        }
+      }
+      if(samplesBps&&samplesBps.length){
+        for(const path of samplesBps){
+          if(!path||!path.length) continue;
+          envelope.push(currentPrice*(1+path[0]/10000));
+          envelope.push(currentPrice*(1+path[path.length-1]/10000));
+        }
+      }
+    }
     const all=projLen?hist.concat(proj):hist.slice();
+    for(const v of envelope) all.push(v);
     if(trail&&trail.length){
       for(const e of trail){ if(VISIBLE[e.label]) all.push(e.predicted_price); }
     }
@@ -879,7 +915,45 @@
       ctx.strokeStyle='rgba(80,80,80,.3)';ctx.lineWidth=1;
       ctx.setLineDash([2,3]);ctx.beginPath();
       ctx.moveTo(nowX,2);ctx.lineTo(nowX,h-2);ctx.stroke();ctx.setLineDash([]);
-      ctx.strokeStyle='rgba(200,168,75,0.45)';ctx.lineWidth=1.2;ctx.beginPath();
+
+      // Uncertainty fan — ±2σ band first (wider, fainter), then ±1σ on top.
+      // Starts from the current price so the band is anchored to reality.
+      if(sigmaBps&&sigmaBps.length===projLen&&stepsBps){
+        const drawBand=(kSig,alpha)=>{
+          ctx.fillStyle=`rgba(200,168,75,${alpha})`;
+          ctx.beginPath();
+          ctx.moveTo(nowX,yAt(currentPrice));
+          for(let i=0;i<projLen;i++){
+            const up=currentPrice*(1+(stepsBps[i]+kSig*sigmaBps[i])/10000);
+            ctx.lineTo(xAt(hist.length+i),yAt(up));
+          }
+          for(let i=projLen-1;i>=0;i--){
+            const dn=currentPrice*(1+(stepsBps[i]-kSig*sigmaBps[i])/10000);
+            ctx.lineTo(xAt(hist.length+i),yAt(dn));
+          }
+          ctx.closePath();ctx.fill();
+        };
+        drawBand(2, 0.06);
+        drawBand(1, 0.10);
+      }
+
+      // Monte Carlo sample paths — thin, faint, drawn behind the expected
+      // curve so the "wiggly path" is visible without dominating the chart.
+      if(samplesBps&&samplesBps.length){
+        ctx.strokeStyle='rgba(200,168,75,0.12)';ctx.lineWidth=0.7;
+        for(const path of samplesBps){
+          if(!path||path.length!==projLen) continue;
+          ctx.beginPath();
+          ctx.moveTo(nowX,yAt(currentPrice));
+          for(let i=0;i<projLen;i++){
+            const v=currentPrice*(1+path[i]/10000);
+            ctx.lineTo(xAt(hist.length+i),yAt(v));
+          }
+          ctx.stroke();
+        }
+      }
+
+      ctx.strokeStyle='rgba(200,168,75,0.75)';ctx.lineWidth=1.4;ctx.beginPath();
       ctx.moveTo(nowX,yAt(hist[hist.length-1]));
       proj.forEach((v,i)=>{ctx.lineTo(xAt(hist.length+i),yAt(v));});
       ctx.stroke();
@@ -1064,7 +1138,8 @@
       const last=priceHist[priceHist.length-1];
       const pd=p0?((last-p0)/p0)*100:0;
       drawPriceWithProjection('price-c',priceHist,lastForecastSteps,last,
-        pd>=0?'#4dbb6e':'#d94f4f',predictionTrail,currentTick,tradeEvents);
+        pd>=0?'#4dbb6e':'#d94f4f',predictionTrail,currentTick,tradeEvents,
+        {stepsBps:lastForecastBps,sigmaBps:lastForecastSigma,samples:lastForecastSamples});
     }
     if(eqHist.length>=2){
       const ed=e0?((eqHist[eqHist.length-1]-e0)/e0)*100:0;

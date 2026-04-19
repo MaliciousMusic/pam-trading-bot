@@ -146,18 +146,23 @@ class TradingEngine:
         mark = self.state.last_price
         if mark is None or mark <= 0 or not forecast.steps:
             return []
-        bps_per_unit = float(getattr(self.projector, "bps_per_unit_pressure", 0.0))
-        # Phase E — regime overlay. Projector used this scalar to generate
-        # the step pressures; anchors must apply the same scaling or the
-        # "predicted price" line on the chart disagrees with the forecast.
-        bps_per_unit *= float(getattr(self.projector, "regime_multiplier", 1.0))
-        out: list[dict] = []
-        cum_bps = 0.0
         price = mark
-        cumulative_by_step: list[float] = []
-        for s in forecast.steps:
-            cum_bps += float(s.net_pressure) * bps_per_unit
-            cumulative_by_step.append(cum_bps)
+        # Prefer the projector's own cumulative curve when present — it
+        # already includes regime scaling, per-tribe horizon decay, and
+        # mean-reversion, so anchors on the chart match what the projector
+        # actually expected. Fall back to the prior scalar reconstruction
+        # when the forecast doesn't carry the enriched field.
+        if forecast.steps_bps:
+            cumulative_by_step = list(forecast.steps_bps)
+        else:
+            bps_per_unit = float(getattr(self.projector, "bps_per_unit_pressure", 0.0))
+            bps_per_unit *= float(getattr(self.projector, "regime_multiplier", 1.0))
+            cumulative_by_step = []
+            cum_bps = 0.0
+            for s in forecast.steps:
+                cum_bps += float(s.net_pressure) * bps_per_unit
+                cumulative_by_step.append(cum_bps)
+        out: list[dict] = []
         for label, step_idx in self._anchor_specs:
             if step_idx < 1 or step_idx > len(cumulative_by_step):
                 continue
@@ -181,6 +186,20 @@ class TradingEngine:
         # 1) Collect votes + forecast first — exits are council-driven so
         #    we need the forecast before deciding what to close.
         raw_votes = [t.vote(ts, self.state) for t in self.tribes]
+
+        # Regime must be classified BEFORE skill-multiplier and record_votes
+        # so the calibrator can key its per-regime EWMA on the label that
+        # applied at vote time (not at resolution time — the regime at
+        # resolution is a different concept, and what we want to score is
+        # "this tribe voted correctly given the regime it was voting IN").
+        regime_snapshot: dict | None = None
+        regime_label_now: str | None = None
+        if self.regime_classifier is not None:
+            regime = self.regime_classifier.classify(self.state)
+            self.projector.regime_multiplier = regime.multiplier
+            regime_snapshot = regime.to_dict()
+            regime_label_now = regime_snapshot.get("label")
+
         # Skill overlay: scale each tribe's conviction by its measured
         # skill multiplier before aggregation. Multiplier is 1.0 when the
         # overlay is disabled or the tribe has too few resolved samples,
@@ -188,7 +207,7 @@ class TradingEngine:
         if self.calibrator is not None:
             votes = []
             for v in raw_votes:
-                m = self.calibrator.skill_multiplier(v.tribe_id)
+                m = self.calibrator.skill_multiplier(v.tribe_id, regime_label_now)
                 if m != 1.0 and v.side is not Side.ABSTAIN:
                     new_conv = max(0.0, min(1.0, v.conviction * m))
                     # Recompute internal distribution fractions so they stay
@@ -211,20 +230,13 @@ class TradingEngine:
                     votes.append(v)
             # Record the RAW vote (pre-multiplier) as the skill signal —
             # the multiplier is the policy, the raw vote is the data.
-            self.calibrator.record_votes(ts.timestamp(), raw_votes)
+            # Regime is stamped so the per-regime EWMA can update.
+            self.calibrator.record_votes(
+                ts.timestamp(), raw_votes, regime_label=regime_label_now,
+            )
         else:
             votes = raw_votes
         agg = aggregate_votes(votes, ts)
-
-        # Phase E — regime overlay. Classify the tape, push the multiplier
-        # onto the projector so this tick's forecast (and anchors) use the
-        # regime-adjusted gain. `regime_snapshot` piggybacks on the broadcast
-        # payload for UI consumption.
-        regime_snapshot: dict | None = None
-        if self.regime_classifier is not None:
-            regime = self.regime_classifier.classify(self.state)
-            self.projector.regime_multiplier = regime.multiplier
-            regime_snapshot = regime.to_dict()
 
         forecast = self.projector.project(self.state)
 
@@ -349,6 +361,15 @@ class TradingEngine:
                     {"net_pressure": s.net_pressure, "uncertainty": s.uncertainty}
                     for s in forecast.steps
                 ],
+                # Wiggly-path enrichments. `forecast_steps_bps` is the
+                # projector's own cumulative-drift curve (authoritative);
+                # `forecast_sigma_bps` is the per-step stddev for the
+                # uncertainty fan; `forecast_sample_paths_bps` is a bundle
+                # of Monte Carlo realizations for the UI to render behind
+                # the expected curve.
+                "forecast_steps_bps": forecast.steps_bps,
+                "forecast_sigma_bps": forecast.steps_sigma_bps,
+                "forecast_sample_paths_bps": forecast.sample_paths_bps,
                 "votes": [
                     {"tribe_id": v.tribe_id, "side": v.side.value,
                      "conviction": v.conviction, "weight": v.weight, "reason": v.reason}

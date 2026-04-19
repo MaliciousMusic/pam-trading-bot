@@ -3,14 +3,20 @@ of simultaneously-open positions.
 
 Exit model: every tick the council's live forecast is evaluated against every
 open position via `evaluate_exits()`. The base rule is a sign-flip beyond the
-configured dead-zone; three optional layers stack on top:
+configured dead-zone; four optional layers stack on top:
 
   1. **Conviction-magnitude** — weak flips (conf < strong_flip_conf) must
      persist for `weak_flip_confirm_ticks` before closing; strong flips close
      immediately. Streaks reset when the council realigns.
   2. **Profit ratchet** — once a position's peak unrealized reaches
      `ratchet_arm_bps`, it closes on a retrace of `ratchet_retrace_frac` of
-     that peak. Pure trailing protection — no static TP.
+     that peak. Arm threshold must clear round-trip fees or the close books
+     a net loss.
+  2b. **Forecast-target TP** — close when unrealized reaches the move the
+     council promised at entry (|emove| × conf × forecast_tp_factor).
+     Suppressed when the target is below round-trip fees. This is the only
+     layer that takes profit at the top; the ratchet just protects the way
+     down.
   3. **Regime-aware dead zone + edge exhaustion** — dead zone scales by
      regime (cascade tighter, chop wider); if remaining forecasted move in
      the position's direction no longer covers fees, close.
@@ -45,12 +51,18 @@ class PaperExecutor(Executor):
         ledger: Ledger | None = None,
         *,
         exit_strategy: dict | None = None,
+        max_drawdown_from_peak_pct: float = 0.0,
+        max_daily_loss_pct: float = 0.0,
+        slippage_size_k: float = 0.0,
+        slippage_ref_notional_usd: float = 100_000.0,
     ) -> None:
         self._equity = starting_equity_usd
         self._start_equity = starting_equity_usd
         self._positions: list[Position] = []
         self.fee_rate_bps = fee_rate_bps
         self.slippage_bps = slippage_bps
+        self.slippage_size_k = max(0.0, float(slippage_size_k))
+        self.slippage_ref_notional_usd = max(1.0, float(slippage_ref_notional_usd))
         self.max_concurrent_positions = max_concurrent_positions
         self.max_total_notional_pct = max_total_notional_pct
         self.max_hold_seconds = max_hold_seconds
@@ -60,6 +72,22 @@ class PaperExecutor(Executor):
         self.wins = 0
         self._next_id = 1
         self._recent_trades: list[dict] = []   # last 60 closed, newest last
+
+        # Drawdown circuit breaker. Two halts, either trips:
+        #   1. equity <= session_peak × (1 - max_drawdown_from_peak_pct/100)
+        #   2. equity <= day_anchor × (1 - max_daily_loss_pct/100)
+        # While halted, `_capacity_check` rejects new entries; exits and
+        # mark-to-market continue unaffected so we don't trap open risk.
+        # Daily halt clears on UTC date roll (anchor re-captured). Peak
+        # halt stays until equity recovers back to the halt level — any
+        # recovery is authentic, not a rounding flap.
+        # Both thresholds default to 0.0 = disabled.
+        self.max_drawdown_from_peak_pct = max(0.0, float(max_drawdown_from_peak_pct))
+        self.max_daily_loss_pct = max(0.0, float(max_daily_loss_pct))
+        self._peak_equity = starting_equity_usd
+        self._day_anchor_date = None       # type: ignore[assignment]
+        self._day_anchor_equity = starting_equity_usd
+        self._halt_reason: str | None = None
 
         # Multi-layer exit overlay. All layers opt-in via settings; neutral
         # defaults preserve the sign-flip-only behavior.
@@ -73,6 +101,12 @@ class PaperExecutor(Executor):
         )
         self.edge_exhausted_factor = float(es.get("edge_exhausted_factor", 0.0))
         self.edge_exhausted_min_age_s = float(es.get("edge_exhausted_min_age_s", 20.0))
+        self.forecast_tp_factor = float(es.get("forecast_tp_factor", 0.0))
+        self.forecast_tp_min_bps = float(es.get("forecast_tp_min_bps", 0.0))
+        # Shape-aware exit — close if the position has been held past the
+        # forecasted favorable-peak step by `shape_grace_seconds`, but only
+        # once it's in the green (never turn this into a stop-loss). 0 = off.
+        self.shape_grace_seconds = float(es.get("shape_grace_seconds", 0.0))
         # Per-position state for layered exits. Keyed by Position.id; purged
         # on close. Dict lookups are O(1) and we never have more than
         # max_concurrent_positions entries, so the memory story is bounded.
@@ -178,6 +212,29 @@ class PaperExecutor(Executor):
                     return (f"ratchet retrace peak={peak:+.1f}bps "
                             f"now={unreal_bps:+.1f}bps")
 
+        # Layer 2b — forecast-target take-profit. Close when the position
+        # reaches the move the council promised at entry (|emove| × conf),
+        # gated below fees so we never TP into a net loss. This turns a
+        # realized forecast into a clean profit-take instead of letting the
+        # ratchet give half of it back on the way down.
+        if self.forecast_tp_factor > 0.0 and p.expected_move_bps != 0.0:
+            target = abs(p.expected_move_bps) * p.confidence * self.forecast_tp_factor
+            target = max(target, self.forecast_tp_min_bps)
+            if target >= rt_fees_bps and unreal_bps >= target:
+                return (f"forecast target hit unreal={unreal_bps:+.1f}bps "
+                        f"target={target:.1f}bps")
+
+        # Layer 2c — shape-aware exit. The decision engine stamped each
+        # position with the step at which the forecast peaked in its favor;
+        # once we've been held past that peak by a grace window AND are in
+        # the green, scalp the move instead of riding it back down the hill.
+        if (self.shape_grace_seconds > 0.0 and p.peak_favorable_s > 0
+                and unreal_bps > 0):
+            held_s = (ts - p.entry_ts).total_seconds() if p.entry_ts else 0.0
+            if held_s >= p.peak_favorable_s + self.shape_grace_seconds:
+                return (f"past forecast peak held={held_s:.0f}s "
+                        f"peak@{p.peak_favorable_s}s unreal={unreal_bps:+.1f}bps")
+
         # Layer 3b — edge exhausted. If the remaining forecasted move in the
         # position's favor can't cover fees, close even though the council is
         # nominally still aligned. Aged-in check avoids killing fresh entries.
@@ -213,6 +270,7 @@ class PaperExecutor(Executor):
                 "FUNDING  net=${:+.4f}  rate={:.6f}  open={}",
                 total_paid, funding_rate, len(self._positions),
             )
+        self._refresh_risk_state()
 
     def mark_to_market(self, ts: datetime, price: float) -> None:
         """Hard backstop: close positions that exceeded max_hold_seconds."""
@@ -244,14 +302,79 @@ class PaperExecutor(Executor):
 
     # -- internals -------------------------------------------------------
 
-    def _fill_price(self, mark: float, taker_side: Side) -> float:
+    def _fill_price(self, mark: float, taker_side: Side, size_usd: float = 0.0) -> float:
+        """Size-scaled slippage. Baseline is `slippage_bps`; each increment of
+        `slippage_ref_notional_usd` adds another `slippage_bps × slippage_size_k`
+        of adverse slippage. With `slippage_size_k=0` this collapses to the
+        flat-bps model for backward compat."""
         sign = 1 if taker_side is Side.BUY else -1
-        return mark * (1 + sign * self.slippage_bps / 10_000.0)
+        eff_bps = self.slippage_bps
+        if self.slippage_size_k > 0 and size_usd > 0:
+            eff_bps *= 1.0 + self.slippage_size_k * (size_usd / self.slippage_ref_notional_usd)
+        return mark * (1 + sign * eff_bps / 10_000.0)
 
     def _fee(self, notional_usd: float) -> float:
         return notional_usd * self.fee_rate_bps / 10_000.0
 
+    def _refresh_risk_state(self, ts: datetime | None = None) -> None:
+        """Update session peak + daily anchor, evaluate halts.
+
+        Called before every capacity check and on every equity-changing
+        event (open fee deduction, close PnL, funding). Cheap — three
+        comparisons and a date check.
+        """
+        # Ratchet session peak.
+        if self._equity > self._peak_equity:
+            self._peak_equity = self._equity
+        # Daily anchor — set on first call, reset when UTC date changes.
+        try:
+            today = (ts or datetime.utcnow()).date()
+        except Exception:
+            today = None
+        if today is not None and today != self._day_anchor_date:
+            self._day_anchor_date = today
+            self._day_anchor_equity = self._equity
+            # Daily halts clear with the day. Peak halts survive unless
+            # equity has recovered; re-evaluate below.
+            if self._halt_reason and self._halt_reason.startswith("daily"):
+                self._halt_reason = None
+
+        # Peak-drawdown halt. Arm once equity falls below the trigger;
+        # stay halted until equity recovers back above the trigger (no
+        # hysteresis band — the peak itself ratchets, so "above the old
+        # trigger" is a genuine recovery).
+        if self.max_drawdown_from_peak_pct > 0:
+            trigger = self._peak_equity * (1.0 - self.max_drawdown_from_peak_pct / 100.0)
+            if self._equity <= trigger:
+                self._halt_reason = (
+                    f"peak drawdown ${self._equity:,.2f} <= "
+                    f"${trigger:,.2f} (peak ${self._peak_equity:,.2f} "
+                    f"- {self.max_drawdown_from_peak_pct:.1f}%)"
+                )
+            elif self._halt_reason and self._halt_reason.startswith("peak"):
+                self._halt_reason = None
+
+        # Daily-loss halt evaluated after peak so a same-tick recovery
+        # on the peak halt doesn't mask an independent daily breach.
+        if self.max_daily_loss_pct > 0 and self._day_anchor_equity > 0:
+            trigger = self._day_anchor_equity * (1.0 - self.max_daily_loss_pct / 100.0)
+            if self._equity <= trigger and (
+                self._halt_reason is None or self._halt_reason.startswith("peak")
+            ):
+                self._halt_reason = (
+                    f"daily loss ${self._equity:,.2f} <= ${trigger:,.2f} "
+                    f"(open ${self._day_anchor_equity:,.2f} "
+                    f"- {self.max_daily_loss_pct:.1f}%)"
+                )
+
+    @property
+    def halt_reason(self) -> str | None:
+        return self._halt_reason
+
     def _capacity_check(self, size_usd: float) -> str | None:
+        self._refresh_risk_state()
+        if self._halt_reason is not None:
+            return f"halted: {self._halt_reason}"
         if len(self._positions) >= self.max_concurrent_positions:
             return f"portfolio full ({len(self._positions)}/{self.max_concurrent_positions})"
         cap = self._equity * self.max_total_notional_pct / 100.0
@@ -270,9 +393,10 @@ class PaperExecutor(Executor):
                 "size_usd": intent.size_usd, "reason": reject,
             })
             return
-        fill = self._fill_price(mark, side)
+        fill = self._fill_price(mark, side, intent.size_usd)
         fee = self._fee(intent.size_usd)
         self._equity -= fee
+        self._refresh_risk_state(intent.ts)
         pid = f"t{self._next_id:04d}"
         self._next_id += 1
         pos = Position(
@@ -286,6 +410,7 @@ class PaperExecutor(Executor):
             horizon_seconds=intent.horizon_seconds,
             expected_move_bps=intent.expected_move_bps,
             confidence=intent.confidence,
+            peak_favorable_s=intent.peak_favorable_s,
         )
         self._positions.append(pos)
         logger.info(
@@ -309,13 +434,14 @@ class PaperExecutor(Executor):
         self._flip_streak.pop(p.id, None)
         self._peak_bps.pop(p.id, None)
         exit_side = Side.SELL if p.side is Side.BUY else Side.BUY
-        fill = self._fill_price(mark, exit_side)
+        fill = self._fill_price(mark, exit_side, p.size_usd)
         if p.side is Side.BUY:
             pnl_usd = p.size_usd * (fill - p.entry_price) / p.entry_price
         else:
             pnl_usd = p.size_usd * (p.entry_price - fill) / p.entry_price
         fee = self._fee(p.size_usd)
         self._equity += pnl_usd - fee
+        self._refresh_risk_state(ts)
         self.trades_completed += 1
         net = pnl_usd - fee
         held_s = (ts - p.entry_ts).total_seconds() if p.entry_ts else 0

@@ -172,6 +172,13 @@ class MarketState:
         # venue's actual felt pressure) stays distinguishable from external
         # venues. Lets cross_venue_arb tribes detect divergence.
         self.cross_flow: dict[str, RollingSeries] = {}
+        # Higher-timeframe trend bias from the 1h kline poller. Score is
+        # tanh((ema_fast - ema_slow) / atr) → [-1, +1]. 0 until the first
+        # poll lands. `htf_trend_ts` is kept so stale scores can be
+        # detected (poller down, last update > 1h ago = treat as 0).
+        self.htf_trend_score: float = 0.0
+        self.htf_trend_tf: str = ""
+        self.htf_trend_ts: datetime | None = None
 
     # -- ingest ---------------------------------------------------------
 
@@ -229,6 +236,12 @@ class MarketState:
                 series = self.oi.setdefault(venue, RollingSeries(3600.0))
                 series.add(ev.ts, usd)
                 self.last_oi_usd[venue] = usd
+        elif ev.kind == "htf_trend":
+            sc = ev.payload.get("score")
+            if isinstance(sc, (int, float)):
+                self.htf_trend_score = max(-1.0, min(1.0, float(sc)))
+                self.htf_trend_tf = str(ev.payload.get("timeframe") or "")
+                self.htf_trend_ts = ev.ts
         elif ev.kind == "cross_trade":
             # Cross-venue taker flow. Store signed notional per venue.
             venue = str(ev.payload.get("venue") or ev.source.split(".", 1)[0])
@@ -428,6 +441,9 @@ class MarketState:
             ns._data = deque(series._data)
             s.cross_flow[venue] = ns
         s.last_oi_usd = dict(self.last_oi_usd)
+        s.htf_trend_score = self.htf_trend_score
+        s.htf_trend_tf = self.htf_trend_tf
+        s.htf_trend_ts = self.htf_trend_ts
         return s
 
     def advance_clock(self, ts: datetime) -> None:

@@ -24,6 +24,7 @@ from src.ingress.binance_ws import BinancePerpsWS
 from src.ingress.bybit_ws import BybitPublicWS
 from src.ingress.event_recorder import EventRecorder
 from src.ingress.fgi import FGIPoller
+from src.ingress.htf_trend_poller import HTFTrendPoller
 from src.ingress.oi_poller import OIPoller
 from src.ingress.okx_ws import OKXPublicWS
 from src.ingress.reddit_rss import RedditRSSPoller
@@ -68,26 +69,38 @@ async def main() -> None:
     ledger = Ledger()
     broadcaster = UIBroadcaster()
 
+    exec_cfg = cfg.get("execution", {}) or {}
+    risk_cfg = cfg.get("risk", {}) or {}
     executor = PaperExecutor(
         starting_equity_usd=float(cfg.get("base_capital_usd", 5000)),
-        fee_rate_bps=float(cfg["execution"]["fee_rate_bps"]),
-        slippage_bps=float(cfg["execution"]["slippage_bps"]),
-        max_concurrent_positions=int(cfg["risk"]["max_concurrent_positions"]),
-        max_total_notional_pct=float(cfg["risk"]["max_total_notional_pct"]),
-        max_hold_seconds=int(cfg["risk"]["max_hold_seconds"]),
+        fee_rate_bps=float(exec_cfg["fee_rate_bps"]),
+        slippage_bps=float(exec_cfg["slippage_bps"]),
+        max_concurrent_positions=int(risk_cfg["max_concurrent_positions"]),
+        max_total_notional_pct=float(risk_cfg["max_total_notional_pct"]),
+        max_hold_seconds=int(risk_cfg["max_hold_seconds"]),
         exit_dead_zone_bps=float(cfg["decision"].get("exit_dead_zone_bps", 0.5)),
         ledger=ledger,
         exit_strategy=cfg.get("exit_strategy", {}) or {},
+        max_drawdown_from_peak_pct=float(risk_cfg.get("max_drawdown_from_peak_pct", 0.0)),
+        max_daily_loss_pct=float(risk_cfg.get("max_daily_loss_pct", 0.0)),
+        slippage_size_k=float(exec_cfg.get("slippage_size_k", 0.0)),
+        slippage_ref_notional_usd=float(exec_cfg.get("slippage_ref_notional_usd", 100_000.0)),
     )
+    auditor = ForecastAuditor()
+    proj_cfg = cfg.get("projector", {}) or {}
     projector = ChessProjector(
         tribes=tribes,
         steps=int(cfg["clock"]["projector_steps"]),
         tick_seconds=int(cfg["clock"]["tick_seconds"]),
-        bps_per_unit_pressure=float(cfg["projector"]["bps_per_unit_pressure"]),
-        confidence_decay=float(cfg["projector"]["confidence_decay"]),
+        bps_per_unit_pressure=float(proj_cfg["bps_per_unit_pressure"]),
+        confidence_decay=float(proj_cfg["confidence_decay"]),
+        auditor=auditor,
+        mean_reversion_rate=float(proj_cfg.get("mean_reversion_rate", 0.0)),
+        sample_paths_n=int(proj_cfg.get("sample_paths_n", 0)),
+        default_horizon_seconds=float(proj_cfg.get("default_horizon_seconds", 600.0)),
+        default_sigma_bps=float(proj_cfg.get("default_sigma_bps", 8.0)),
     )
     decision = DecisionEngine(cfg)
-    auditor = ForecastAuditor()
     # Audit→calibration closed loop. `apply=False` by default: measure
     # per-tribe skill from resolved anchors, surface it via /api/calibration,
     # but don't scale votes yet. Flip the yaml flag once there's enough
@@ -102,6 +115,8 @@ async def main() -> None:
         fast_halflife_resolved=int(cal_cfg.get("fast_halflife_resolved", 50)),
         fast_min_samples=int(cal_cfg.get("fast_min_samples", 10)),
         regime_shift_threshold=float(cal_cfg.get("regime_shift_threshold", 0.12)),
+        enable_regime_conditional=bool(cal_cfg.get("enable_regime_conditional", False)),
+        regime_min_samples=int(cal_cfg.get("regime_min_samples", 15)),
     )
     # Phase A — projector gain calibration. Feeds on the same resolved
     # anchors the tribe calibrator consumes; nudges `bps_per_unit_pressure`
@@ -179,6 +194,21 @@ async def main() -> None:
 
     # Phase F — cross-venue public trade streams. Events land as
     # kind="cross_trade" so the execution venue's own flow stays isolated.
+    # Higher-timeframe trend poller (1h by default). Feeds the counter-trend
+    # shrink in DecisionEngine so the 10-min council doesn't stack shorts
+    # into a ripping 4h uptrend. Cheap — one kline pull per poll_seconds.
+    htf_cfg = cfg.get("htf", {}) or {}
+    if htf_cfg.get("enabled", True):
+        coros.append(HTFTrendPoller(
+            bus,
+            symbol=cfg.get("symbol", "BTCUSDT"),
+            timeframe=str(htf_cfg.get("timeframe", "1h")),
+            lookback_candles=int(htf_cfg.get("lookback_candles", 50)),
+            fast_ema=int(htf_cfg.get("fast_ema", 8)),
+            slow_ema=int(htf_cfg.get("slow_ema", 21)),
+            poll_seconds=int(htf_cfg.get("poll_seconds", 60)),
+        ).run())
+
     if sources_cfg.get("bybit_ws", {}).get("enabled"):
         coros.append(BybitPublicWS(bus, symbol=cfg.get("symbol", "BTCUSDT")).run())
     if sources_cfg.get("okx_ws", {}).get("enabled"):
