@@ -170,6 +170,7 @@ def _build_stack(
     cfg: dict,
     ledger_dir: Path,
     rng_seed: int,
+    starting_equity_usd: float | None = None,
 ) -> tuple[list[Tribe], MarketState, ChessProjector, DecisionEngine,
            PaperExecutor, RegimeClassifier]:
     tribes = load_all(rng_seed=rng_seed)
@@ -186,8 +187,10 @@ def _build_stack(
     )
     decision = DecisionEngine(cfg)
     ledger = Ledger(directory=ledger_dir)
+    _start_eq = (starting_equity_usd if starting_equity_usd is not None
+                 else float(cfg.get("base_capital_usd", 5000)))
     executor = PaperExecutor(
-        starting_equity_usd=float(cfg.get("base_capital_usd", 5000)),
+        starting_equity_usd=_start_eq,
         fee_rate_bps=float(cfg["execution"]["fee_rate_bps"]),
         slippage_bps=float(cfg["execution"]["slippage_bps"]),
         max_concurrent_positions=int(cfg["risk"]["max_concurrent_positions"]),
@@ -215,6 +218,7 @@ async def run_sprint(
     symbol: str = "BTCUSDT",
     bars: list[dict] | None = None,
     funding: list[dict] | None = None,
+    starting_equity_usd: float | None = None,
 ) -> SprintResult:
     """Run one sprint-mode replay of `day` at the given `synth_rate`.
 
@@ -255,6 +259,7 @@ async def run_sprint(
 
     tribes, state, projector, decision, executor, regime_classifier = _build_stack(
         cfg, ledger_dir=ledger_dir, rng_seed=seed,
+        starting_equity_usd=starting_equity_usd,
     )
     logger.info("[sprint] loaded {} tribes (seed={})", len(tribes), seed)
 
@@ -312,3 +317,59 @@ async def run_sprint(
         result.ticks, result.trades, result.equity_delta_usd, decisions_path,
     )
     return result
+
+
+async def run_watch(
+    *,
+    day: date,
+    broadcaster,
+    speed: float = 10.0,
+    synth_rate: int = 60,
+    seed: int = 42,
+    symbol: str = "BTCUSDT",
+    run_id: str | None = None,
+    cache_root: Path | None = None,
+    bars: list[dict] | None = None,
+    funding: list[dict] | None = None,
+) -> None:
+    """Run a watch-mode replay, broadcasting each tick to `broadcaster`.
+
+    Equivalent to run_sprint but paced at `speed × real-time` instead of
+    maximum throughput. Use WatchController.start() for server integration
+    (handles lifecycle + cancellation); call this directly for scripted
+    sessions."""
+    from .watch_engine import WatchEngine
+
+    cfg = settings()
+    repl = cfg.get("replay", {}) or {}
+    if run_id is None:
+        run_id = f"watch_{day.isoformat()}_{datetime.utcnow().strftime('%H%M%S')}"
+
+    if bars is None or funding is None:
+        cache_dir = cache_root if cache_root is not None else (
+            PROJECT_ROOT / repl.get("cache_dir", "data")
+        )
+        client = CachedHistoricalClient(cache_root=cache_dir, symbol=symbol)
+        if bars is None:
+            bars = await client.get_day_klines(day)
+        if funding is None:
+            funding = await client.get_day_funding(day)
+
+    ledger_dir = PROJECT_ROOT / "data" / "replays" / run_id / "ledger"
+    tribes, state, projector, decision, executor, regime_classifier = _build_stack(
+        cfg, ledger_dir=ledger_dir, rng_seed=seed,
+    )
+    tick_seconds = int(cfg["clock"]["tick_seconds"])
+    total_ticks_est = len(bars) * 60 // tick_seconds
+
+    engine = WatchEngine(
+        tribes=tribes, state=state, projector=projector,
+        decision=decision, executor=executor,
+        regime_classifier=regime_classifier,
+        tick_seconds=tick_seconds,
+        broadcaster=broadcaster,
+        run_id=run_id, day=day.isoformat(),
+        speed=speed, total_ticks_est=total_ticks_est,
+    )
+    events = build_event_stream(bars, funding, synth_rate=synth_rate, symbol=symbol)
+    await engine.run(events)

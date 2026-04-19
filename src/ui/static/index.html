@@ -289,6 +289,129 @@
     .chart-box.equity{height:56px}
     .council-meta .metrics{grid-template-columns:1fr 1fr}
   }
+
+  /* ── Replay amber banner ─────────────────────────────────────── */
+  #replay-banner{
+    display:none;position:sticky;top:0;z-index:200;
+    background:rgba(200,168,75,.13);border-bottom:1px solid var(--accent);
+    padding:5px 14px;font-size:11px;color:var(--accent);
+    align-items:center;gap:12px;flex-wrap:wrap;
+  }
+  #replay-banner.active{display:flex}
+  .rb-label{font-weight:700;letter-spacing:.08em;white-space:nowrap}
+  .rb-day{opacity:.8}
+  .rb-speed{opacity:.8}
+  .rb-paused{font-weight:700;color:#d94f4f;display:none}
+  #replay-banner.paused .rb-paused{display:inline}
+  .rb-progress-wrap{flex:1;min-width:100px;max-width:260px;
+    height:4px;background:rgba(200,168,75,.2);border-radius:2px;overflow:hidden}
+  .rb-progress-fill{height:100%;background:var(--accent);width:0%;
+    transition:width .4s linear;border-radius:2px}
+  .rb-pct{min-width:30px;text-align:right;opacity:.8}
+  .rb-controls{display:flex;gap:6px;margin-left:auto}
+  .rb-btn{
+    background:rgba(200,168,75,.15);border:1px solid rgba(200,168,75,.35);
+    color:var(--accent);padding:2px 8px;border-radius:2px;font-size:10px;
+    cursor:pointer;letter-spacing:.05em;
+  }
+  .rb-btn:hover{background:rgba(200,168,75,.28)}
+
+  /* ── Tick inspect modal (Phase 8) ───────────────────────────── */
+  #tick-inspect{
+    display:none;position:fixed;inset:0;z-index:600;
+    background:rgba(0,0,0,.65);align-items:center;justify-content:center;
+  }
+  #tick-inspect.active{display:flex}
+  .ti-box{
+    background:var(--bg2);border:1px solid var(--accent);border-radius:4px;
+    width:min(480px,94vw);max-height:80vh;display:flex;flex-direction:column;
+    font-size:11px;color:var(--fg);
+  }
+  .ti-hdr{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:8px 14px;border-bottom:1px solid var(--bg3);flex-shrink:0;
+    color:var(--accent);font-size:12px;letter-spacing:.08em;font-weight:700;
+  }
+  .ti-close{background:none;border:none;color:var(--accent);cursor:pointer;font-size:16px;padding:0 4px;line-height:1}
+  .ti-body{overflow-y:auto;padding:10px 14px;display:flex;flex-direction:column;gap:8px}
+  .ti-meta{display:grid;grid-template-columns:1fr 1fr;gap:3px 12px}
+  .ti-row{display:flex;align-items:baseline;gap:6px;font-size:10px}
+  .ti-k{opacity:.5;min-width:90px;letter-spacing:.05em}
+  .ti-action-badge{padding:1px 7px;border-radius:2px;font-size:9px;letter-spacing:.07em;font-weight:700}
+  .ti-action-badge.pos{background:rgba(77,187,110,.2);color:#4dbb6e}
+  .ti-action-badge.neg{background:rgba(217,79,79,.2);color:#d94f4f}
+  .ti-action-badge.neutral{background:rgba(200,168,75,.1);color:var(--accent)}
+  .ti-reason{opacity:.7;font-size:9px;word-break:break-word}
+  .ti-votes-title{font-size:9px;letter-spacing:.09em;color:var(--accent);opacity:.7;
+    padding-top:4px;border-top:1px solid var(--bg3)}
+  .ti-votes{display:flex;flex-direction:column;gap:4px}
+  .ti-vote{display:flex;align-items:center;gap:6px;font-size:9px}
+  .ti-vtid{min-width:130px;opacity:.75;text-transform:capitalize}
+  .ti-vbar-wrap{flex:1;height:6px;background:var(--bg3);border-radius:3px;overflow:hidden}
+  .ti-vbar{height:100%;border-radius:3px;transition:width .2s}
+  .ti-vscore{min-width:65px;text-align:right;opacity:.6}
+
+  /* ── Variant comparison panes (Phase 7) ─────────────────────── */
+  #variant-panes{
+    display:none;position:fixed;bottom:0;left:0;right:0;z-index:150;
+    background:var(--bg1);border-top:2px solid var(--accent);
+    flex-direction:column;
+  }
+  #variant-panes.active{display:flex}
+  .vp-header{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:3px 12px;font-size:10px;color:var(--accent);letter-spacing:.1em;
+    border-bottom:1px solid var(--bg3);flex-shrink:0;
+  }
+  .vp-close{background:none;border:none;color:var(--accent);cursor:pointer;font-size:13px;padding:0 4px}
+  #vp-grid{display:flex;overflow-x:auto;height:130px}
+  .vp-pane{
+    min-width:190px;flex:1;padding:6px 10px;border-right:1px solid var(--bg3);
+    display:flex;flex-direction:column;gap:3px;font-size:10px;
+  }
+  .vp-hdr{display:flex;align-items:center;gap:6px}
+  .vp-id{color:var(--accent);font-weight:700;letter-spacing:.06em;flex:1}
+  .vp-price{opacity:.75}
+  .vp-action{font-size:9px;padding:1px 5px;border-radius:2px;letter-spacing:.05em}
+  .vp-action.long{background:rgba(77,187,110,.2);color:#4dbb6e}
+  .vp-action.short{background:rgba(217,79,79,.2);color:#d94f4f}
+  .vp-action.hold,.vp-action.close{background:rgba(200,168,75,.1);color:var(--accent);opacity:.55}
+  .vp-charts{display:flex;gap:10px;flex:1;align-items:flex-end}
+  .vp-chart-wrap{display:flex;flex-direction:column;gap:1px}
+  .vp-chart-lbl{font-size:8px;opacity:.45;letter-spacing:.05em}
+  .vp-eq-row{display:flex;align-items:center;gap:6px;font-size:9px}
+  .vp-eq-delta{font-weight:600}
+  .vp-eq-delta.pos{color:#4dbb6e}.vp-eq-delta.neg{color:#d94f4f}
+  .vp-regime{font-size:9px;opacity:.5;letter-spacing:.04em}
+
+  /* ── Replay start form (shown at /replay) ───────────────────── */
+  #replay-start{
+    display:none;position:fixed;inset:0;z-index:500;
+    background:rgba(0,0,0,.7);align-items:center;justify-content:center;
+  }
+  #replay-start.visible{display:flex}
+  .rs-box{
+    background:var(--bg2);border:1px solid var(--accent);border-radius:4px;
+    padding:24px 28px;min-width:320px;color:var(--fg);font-size:12px;
+  }
+  .rs-box h2{margin:0 0 16px;color:var(--accent);font-size:14px;letter-spacing:.1em}
+  .rs-row{display:flex;flex-direction:column;gap:3px;margin-bottom:12px}
+  .rs-row label{opacity:.7;font-size:10px;letter-spacing:.06em}
+  .rs-row input,.rs-row select{
+    background:var(--bg3);border:1px solid var(--bg3);color:var(--fg);
+    padding:4px 8px;border-radius:2px;font-size:12px;font-family:inherit;
+  }
+  .rs-actions{display:flex;gap:8px;margin-top:16px;justify-content:flex-end}
+  .rs-btn-go{
+    background:rgba(200,168,75,.2);border:1px solid var(--accent);
+    color:var(--accent);padding:5px 16px;border-radius:2px;cursor:pointer;
+    font-size:11px;letter-spacing:.08em;
+  }
+  .rs-btn-go:hover{background:rgba(200,168,75,.35)}
+  .rs-btn-cancel{
+    background:transparent;border:1px solid var(--bg3);color:var(--fg);
+    padding:5px 12px;border-radius:2px;cursor:pointer;font-size:11px;opacity:.6;
+  }
 </style>
 </head>
 <body>
@@ -304,6 +427,51 @@
   <button id="btn-export" onclick="exportReport()" title="Download session audit report">⬇ REPORT</button>
   <span id="conn">connecting</span>
 </header>
+
+<!-- Replay amber banner — driven solely by replay_state messages -->
+<div id="replay-banner">
+  <span class="rb-label">▶ REPLAY</span>
+  <span class="rb-day" id="rb-day">—</span>
+  <span class="rb-speed" id="rb-speed">—</span>
+  <span class="rb-paused">PAUSED</span>
+  <div class="rb-progress-wrap"><div class="rb-progress-fill" id="rb-fill"></div></div>
+  <span class="rb-pct" id="rb-pct">0%</span>
+  <div class="rb-controls">
+    <button class="rb-btn" id="rb-pause-btn" onclick="replayPause()">⏸ PAUSE</button>
+    <button class="rb-btn" onclick="replayStop()">■ STOP</button>
+    <button class="rb-btn" id="rb-speed-up" onclick="replaySpeed(2)">2×</button>
+    <button class="rb-btn" id="rb-speed-10" onclick="replaySpeed(10)">10×</button>
+    <button class="rb-btn" id="rb-speed-50" onclick="replaySpeed(50)">50×</button>
+  </div>
+</div>
+
+<!-- Replay start modal — shown only at /replay path -->
+<div id="replay-start">
+  <div class="rs-box">
+    <h2>START REPLAY</h2>
+    <div class="rs-row"><label>DATE (YYYY-MM-DD)</label>
+      <input id="rs-day" type="date" value="2024-01-15"></div>
+    <div class="rs-row"><label>SYMBOL</label>
+      <input id="rs-symbol" type="text" value="BTCUSDT"></div>
+    <div class="rs-row"><label>SPEED (×real-time)</label>
+      <input id="rs-speed" type="number" value="10" min="0.1" max="1000" step="1"></div>
+    <div class="rs-row"><label>SYNTH RATES — check multiple to compare variants</label>
+      <div style="display:flex;gap:12px;margin-top:2px">
+        <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer">
+          <input type="checkbox" class="sr-chk" value="6"> 6/bar</label>
+        <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer">
+          <input type="checkbox" class="sr-chk" value="60" checked> 60/bar</label>
+        <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer">
+          <input type="checkbox" class="sr-chk" value="600"> 600/bar</label>
+      </div></div>
+    <div class="rs-row"><label>SEED</label>
+      <input id="rs-seed" type="number" value="42" min="0"></div>
+    <div class="rs-actions">
+      <button class="rs-btn-cancel" onclick="$('replay-start').classList.remove('visible')">Cancel</button>
+      <button class="rs-btn-go" onclick="replayStart()">▶ START</button>
+    </div>
+  </div>
+</div>
 
 <main>
   <!-- Left: Council (passive, compact) -->
@@ -1112,13 +1280,256 @@
     while(feed.children.length>3)feed.removeChild(feed.lastChild);
   }
 
+  /* ── Tick inspect modal — Phase 8 ───────────────────────────── */
+  let _replayRunId = null;
+
+  function _xToTick(x, w, histLen) {
+    const frac = Math.max(0, Math.min(1, x / w));
+    return currentTick - histLen + 1 + Math.round(frac * (histLen - 1));
+  }
+
+  function _renderInspect(d) {
+    const action = d.action || 'hold';
+    const cls = action === 'long' ? 'pos' : action === 'short' ? 'neg' : 'neutral';
+    const ts = d.ts ? d.ts.replace('T',' ').replace('+00:00','').replace('Z','') + ' UTC' : '—';
+    const metaRows = [
+      ['Time', ts],
+      ['Price', d.price != null ? `$${d.price.toFixed(2)}` : '—'],
+      ['Regime', d.regime || '—'],
+      ['Action', `<span class="ti-action-badge ${cls}">${action.toUpperCase()}</span>`],
+      ['Reason', `<span class="ti-reason">${d.action_reason || '—'}</span>`],
+      ['Equity', d.equity_usd != null ? `$${d.equity_usd.toFixed(2)}` : '—'],
+      ['Positions', d.positions_open ?? '—'],
+      ['Net pressure', d.net_pressure != null ? d.net_pressure.toFixed(4) : '—'],
+      ['Uncertainty', d.uncertainty != null ? `${(d.uncertainty*100).toFixed(1)}%` : '—'],
+      ['Exp. move', d.expected_move_bps != null ? `${d.expected_move_bps.toFixed(2)} bps` : '—'],
+      ['Disagreement', d.tribe_disagreement != null ? d.tribe_disagreement.toFixed(3) : '—'],
+    ].map(([k,v]) => `<div class="ti-row"><span class="ti-k">${k}</span><span>${v}</span></div>`).join('');
+
+    const votesHtml = (d.votes || []).map(v => {
+      const w = Math.round((v.conviction || 0) * 100);
+      const color = v.side === 'buy' ? '#4dbb6e' : v.side === 'sell' ? '#d94f4f' : '#888';
+      const label = `${v.side} ${w}%`;
+      return `<div class="ti-vote">
+        <span class="ti-vtid">${(v.tribe_id||'').replace(/_/g,' ')}</span>
+        <div class="ti-vbar-wrap"><div class="ti-vbar" style="width:${w}%;background:${color}"></div></div>
+        <span class="ti-vscore">${label}</span>
+      </div>`;
+    }).join('');
+
+    return `<div class="ti-meta">${metaRows}</div>
+      <div class="ti-votes-title">COUNCIL VOTES</div>
+      <div class="ti-votes">${votesHtml || '<span style="opacity:.4">no votes</span>'}</div>`;
+  }
+
+  async function showTickInspect(run_id, tick, variant_id) {
+    if (!run_id || tick < 1) return;
+    $('ti-title').textContent = `TICK #${tick}${variant_id ? ' · ' + variant_id : ''}`;
+    $('ti-body').innerHTML = '<span style="opacity:.5">Loading…</span>';
+    $('tick-inspect').classList.add('active');
+    const params = new URLSearchParams({run_id, tick: String(tick)});
+    if (variant_id) params.set('variant_id', variant_id);
+    try {
+      const r = await fetch(`/api/replay/tick?${params}`);
+      if (!r.ok) { $('ti-body').textContent = `Not found (tick ${tick})`; return; }
+      $('ti-body').innerHTML = _renderInspect(await r.json());
+    } catch(err) { $('ti-body').textContent = `Error: ${err.message}`; }
+  }
+
+  function _initInspectHandlers() {
+    const priceCanvas = $('price-c');
+    if (priceCanvas) {
+      priceCanvas.style.cursor = 'crosshair';
+      priceCanvas.addEventListener('click', e => {
+        if (!_replayRunId || priceHist.length === 0) return;
+        const rect = priceCanvas.getBoundingClientRect();
+        showTickInspect(_replayRunId, _xToTick(e.clientX - rect.left, rect.width, priceHist.length), null);
+      });
+    }
+    const eqCanvas = $('eq-c');
+    if (eqCanvas) {
+      eqCanvas.style.cursor = 'crosshair';
+      eqCanvas.addEventListener('click', e => {
+        if (!_replayRunId || eqHist.length === 0) return;
+        const rect = eqCanvas.getBoundingClientRect();
+        showTickInspect(_replayRunId, _xToTick(e.clientX - rect.left, rect.width, eqHist.length), null);
+      });
+    }
+  }
+
+  /* ── Variant panes — Phase 7 ─────────────────────────────────── */
+  const _variantState = {};  // variant_id → {priceHist, eqHist, startEq}
+
+  function _sparklineSvg(data, color, w=120, h=32) {
+    if (data.length < 2) return `<svg width="${w}" height="${h}"></svg>`;
+    const mn = Math.min(...data), mx = Math.max(...data);
+    const rng = mx - mn || 1;
+    const pts = data.map((v, i) => {
+      const x = (i / (data.length - 1)) * w;
+      const y = h - ((v - mn) / rng) * (h - 2) - 1;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(' ');
+    return `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" style="display:block">` +
+      `<polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
+  }
+
+  function _ensureVariantPane(vid) {
+    if (document.getElementById(`vp-${vid}`)) return;
+    const grid = $('vp-grid');
+    const pane = document.createElement('div');
+    pane.className = 'vp-pane'; pane.id = `vp-${vid}`;
+    pane.innerHTML = `
+      <div class="vp-hdr">
+        <span class="vp-id">${vid}</span>
+        <span class="vp-price" id="vpp-${vid}">—</span>
+        <span class="vp-action hold" id="vpa-${vid}">HOLD</span>
+      </div>
+      <div class="vp-charts">
+        <div class="vp-chart-wrap">
+          <div class="vp-chart-lbl">PRICE</div>
+          <div id="vpc-price-${vid}"></div>
+        </div>
+        <div class="vp-chart-wrap">
+          <div class="vp-chart-lbl">EQUITY</div>
+          <div id="vpc-eq-${vid}"></div>
+        </div>
+      </div>
+      <div class="vp-eq-row">
+        <span class="vp-eq-delta" id="vpd-${vid}">$0.00</span>
+        <span class="vp-regime" id="vpr-${vid}"></span>
+      </div>`;
+    grid.appendChild(pane);
+    $('variant-panes').classList.add('active');
+    // Click on price sparkline → inspect that variant's tick
+    const priceWrap = document.getElementById(`vpc-price-${vid}`);
+    if (priceWrap) {
+      priceWrap.style.cursor = 'crosshair';
+      priceWrap.addEventListener('click', e => {
+        const vs = _variantState[vid];
+        if (!_replayRunId || !vs || vs.priceHist.length === 0) return;
+        const rect = priceWrap.getBoundingClientRect();
+        const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+        const histLen = vs.priceHist.length;
+        const tickOffset = Math.round(frac * (histLen - 1));
+        // vs.priceHist grows from tick 1; last entry = current tick for this variant
+        const engine_tick = vs.lastTick || histLen;
+        const tick = engine_tick - histLen + 1 + tickOffset;
+        showTickInspect(_replayRunId, tick, vid);
+      });
+    }
+  }
+
+  function onVariantTick(vid, m) {
+    _ensureVariantPane(vid);
+    if (!_variantState[vid]) _variantState[vid] = {priceHist:[], eqHist:[], startEq: m.equity_usd, lastTick: 0};
+    const vs = _variantState[vid];
+    vs.lastTick = m.tick || vs.lastTick;
+    const MAX_V = 300;
+    vs.priceHist.push(m.price); if (vs.priceHist.length > MAX_V) vs.priceHist.shift();
+    vs.eqHist.push(m.equity_usd); if (vs.eqHist.length > MAX_V) vs.eqHist.shift();
+
+    const priceEl = document.getElementById(`vpp-${vid}`);
+    if (priceEl) priceEl.textContent = m.price ? `$${m.price.toFixed(0)}` : '—';
+
+    const actEl = document.getElementById(`vpa-${vid}`);
+    if (actEl) { actEl.textContent = (m.action||'hold').toUpperCase(); actEl.className = `vp-action ${m.action||'hold'}`; }
+
+    const priceChart = document.getElementById(`vpc-price-${vid}`);
+    if (priceChart) priceChart.innerHTML = _sparklineSvg(vs.priceHist, '#60a5fa');
+
+    const eqChart = document.getElementById(`vpc-eq-${vid}`);
+    if (eqChart) eqChart.innerHTML = _sparklineSvg(vs.eqHist, '#4dbb6e');
+
+    const delta = m.equity_usd - vs.startEq;
+    const deltaEl = document.getElementById(`vpd-${vid}`);
+    if (deltaEl) {
+      deltaEl.textContent = `${delta >= 0 ? '+' : ''}$${delta.toFixed(2)}`;
+      deltaEl.className = `vp-eq-delta ${delta >= 0 ? 'pos' : 'neg'}`;
+    }
+
+    const regEl = document.getElementById(`vpr-${vid}`);
+    if (regEl && m.regime) regEl.textContent = m.regime.label || '';
+  }
+
+  /* ── Replay banner — ONLY function that touches #replay-banner ── */
+  function onReplayState(m){
+    const banner=$('replay-banner');
+    if(!m.active){banner.classList.remove('active','paused');return}
+    // Track run_id for tick inspect (keep after end so charts stay inspectable)
+    if(m.run_id) _replayRunId=m.run_id;
+    // Close start modal if a replay just became active
+    $('replay-start').classList.remove('visible');
+    banner.classList.add('active');
+    banner.classList.toggle('paused',!!m.paused);
+    $('rb-day').textContent=m.day||'—';
+    $('rb-speed').textContent=`${m.speed}× · tick ${m.tick||0}`;
+    const pct=Math.min(m.progress_pct||0,100);
+    $('rb-fill').style.width=pct+'%';
+    $('rb-pct').textContent=pct.toFixed(0)+'%';
+    const pb=$('rb-pause-btn');
+    if(pb) pb.textContent=m.paused?'▶ RESUME':'⏸ PAUSE';
+  }
+
+  async function replayPause(){
+    await fetch('/api/replay/pause',{method:'POST'}).catch(()=>{});
+  }
+  async function replayStop(){
+    await fetch('/api/replay/stop',{method:'POST'}).catch(()=>{});
+  }
+  async function replaySpeed(s){
+    await fetch('/api/replay/speed',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({speed:s})}).catch(()=>{});
+  }
+  function resetChartState(){
+    priceHist.length=0; eqHist.length=0;
+    predictionTrail.length=0; tradeEvents.length=0;
+    p0=null; e0=null; currentTick=0; posTrackingInit=false;
+    lastForecastSteps=[]; lastForecastBps=null;
+    lastForecastSigma=null; lastForecastSamples=null;
+    knownPositions.clear();
+    ['h-price','h-equity','h-fitness','h-trades','h-tick'].forEach(
+      id=>{const el=$(id);if(el)el.textContent='—'});
+    // Clear variant panes
+    Object.keys(_variantState).forEach(k=>delete _variantState[k]);
+    const grid=$('vp-grid');if(grid)grid.innerHTML='';
+    $('variant-panes').classList.remove('active');
+  }
+
+  async function replayStart(){
+    const day=$('rs-day').value;
+    const symbol=$('rs-symbol').value||'BTCUSDT';
+    const speed=parseFloat($('rs-speed').value)||10;
+    const seed=parseInt($('rs-seed').value)||42;
+    const checked=[...document.querySelectorAll('.sr-chk:checked')].map(el=>parseInt(el.value));
+    const rates=checked.length>0?checked:[60];
+    $('replay-start').classList.remove('visible');
+    resetChartState();
+    const body=rates.length>1
+      ?{day,symbol,speed,seed,variants:rates.map(r=>({synth_rate:r,seed}))}
+      :{day,symbol,speed,seed,synth_rate:rates[0]};
+    await fetch('/api/replay/start',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(body)}).catch(()=>{});
+  }
+
+  /* Show start modal when at /replay and no replay is active */
+  function maybeShowReplayForm(){
+    if(location.pathname==='/replay'){
+      $('replay-start').classList.add('visible');
+    }
+  }
+
   let ws=null;
   function connect(){
     const proto=location.protocol==='https:'?'wss:':'ws:';
     ws=new WebSocket(`${proto}//${location.host}/ws`);
     ws.onopen=()=>{const c=$('conn');c.textContent='live';c.className='live'};
     ws.onmessage=e=>{const m=JSON.parse(e.data);
-      if(m.type==='tick')onTick(m);else if(m.type==='event')onEvent(m)};
+      if(m.type==='tick'){
+        if(m.variant_id!=null)onVariantTick(m.variant_id,m);else onTick(m);
+      }else if(m.type==='event')onEvent(m);
+      else if(m.type==='replay_state')onReplayState(m)};
     ws.onclose=()=>{const c=$('conn');c.textContent='disconnected';c.className='dead';
       setTimeout(connect,2000)};
     ws.onerror=()=>ws.close();
@@ -1165,6 +1576,8 @@
   window.addEventListener('resize',()=>requestAnimationFrame(redrawCharts));
 
   Promise.all([loadConfig(),loadTribes()]).then(connect);
+  maybeShowReplayForm();
+  _initInspectHandlers();
 })();
 
 async function exportReport(){
@@ -1186,5 +1599,25 @@ async function exportReport(){
   finally { btn.textContent = '⬇ REPORT'; btn.disabled = false; }
 }
 </script>
+<!-- Tick inspect modal — opened by clicking price or equity chart during replay -->
+<div id="tick-inspect">
+  <div class="ti-box">
+    <div class="ti-hdr">
+      <span id="ti-title">TICK —</span>
+      <button class="ti-close" onclick="$('tick-inspect').classList.remove('active')" title="Close">✕</button>
+    </div>
+    <div class="ti-body" id="ti-body">Select a tick to inspect.</div>
+  </div>
+</div>
+
+<!-- Variant comparison panes — shown during multi-variant replay -->
+<div id="variant-panes">
+  <div class="vp-header">
+    <span>VARIANT COMPARISON</span>
+    <button class="vp-close" onclick="$('variant-panes').classList.remove('active')" title="Collapse">✕</button>
+  </div>
+  <div id="vp-grid"></div>
+</div>
+
 </body>
 </html>

@@ -15,7 +15,7 @@ from src.audit.backscore import ForecastAuditor
 from src.audit.calibrator import TribeCalibrator
 from src.audit.scheduler import DailyAuditScheduler
 from src.core.bus import EventBus
-from src.core.config import data_sources, settings
+from src.core.config import PROJECT_ROOT, data_sources, settings
 from src.core.engine import TradingEngine
 from src.decision.engine import DecisionEngine
 from src.execution.ledger import Ledger
@@ -36,6 +36,7 @@ from src.tribes.loader import load_all
 from src.tribes.market_state import MarketState
 from src.ui.broadcaster import UIBroadcaster
 from src.ui.server import create_app
+from src.replay.watch_engine import WatchController
 
 
 def _tribe_meta(tribes):
@@ -68,6 +69,9 @@ async def main() -> None:
     state = MarketState()
     ledger = Ledger()
     broadcaster = UIBroadcaster()
+    repl_cfg = cfg.get("replay", {}) or {}
+    cache_root = PROJECT_ROOT / repl_cfg.get("cache_dir", "data")
+    watch_controller = WatchController(broadcaster=broadcaster, cache_root=cache_root)
 
     exec_cfg = cfg.get("execution", {}) or {}
     risk_cfg = cfg.get("risk", {}) or {}
@@ -165,7 +169,8 @@ async def main() -> None:
     app = create_app(broadcaster, _tribe_meta(tribes), ui_cfg,
                      auditor=auditor, calibrator=calibrator,
                      kernel_calibrator=kernel_calibrator,
-                     regime_classifier=regime_classifier, state=state)
+                     regime_classifier=regime_classifier, state=state,
+                     watch_controller=watch_controller)
 
     host = cfg.get("ui", {}).get("host", "127.0.0.1")
     port = int(cfg.get("ui", {}).get("port", 8765))
