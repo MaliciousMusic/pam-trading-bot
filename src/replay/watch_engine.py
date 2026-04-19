@@ -41,6 +41,7 @@ from ..regime.classifier import RegimeClassifier
 from ..tribes.market_state import MarketState
 from ..tribes.tribe import Tribe
 from ..ui.broadcaster import UIBroadcaster
+from .decision_log import DecisionLogWriter
 from .feed import build_event_stream
 
 _REPLAY_STATE_EVERY = 50   # broadcast replay_state every N ticks
@@ -70,6 +71,7 @@ class WatchEngine:
         total_ticks_est: int = 28_800,
         variant_id: str | None = None,
         emit_replay_state: bool = True,
+        decisions_path: Path | None = None,
     ) -> None:
         self.tribes = tribes
         self.state = state
@@ -85,6 +87,8 @@ class WatchEngine:
         self.total_ticks_est = total_ticks_est
         self.variant_id = variant_id
         self._emit_replay_state = emit_replay_state
+        self._decisions_path = decisions_path
+        self._log_writer: DecisionLogWriter | None = None
 
         self._paused = False
         self._ticks = 0
@@ -97,6 +101,16 @@ class WatchEngine:
         return self._paused
 
     async def run(self, events: Iterable[Event]) -> dict:
+        if self._decisions_path is not None:
+            self._log_writer = DecisionLogWriter(self._decisions_path)
+        try:
+            return await self._run_inner(events)
+        finally:
+            if self._log_writer is not None:
+                self._log_writer.close()
+                self._log_writer = None
+
+    async def _run_inner(self, events: Iterable[Event]) -> dict:
         if self._emit_replay_state:
             await self.broadcaster.publish(self._replay_state_msg())
 
@@ -166,6 +180,17 @@ class WatchEngine:
         )
         if intent.action != "hold":
             self.executor.execute(intent, self.state)
+
+        if self._log_writer is not None:
+            self._log_writer.write_tick(
+                tick=self._ticks, ts=ts, price=self.state.last_price,
+                regime_label=regime.label.value if regime.label else None,
+                votes=raw_votes, net_pressure=agg.net_pressure,
+                uncertainty=agg.uncertainty, forecast=forecast,
+                action=intent.action, action_reason=intent.reason,
+                equity_usd=self.executor.equity_usd,
+                positions_open=len(self.executor.positions),
+            )
 
         positions = self.executor.positions
         recent_trades = list(getattr(self.executor, "recent_trades", []))
@@ -341,11 +366,14 @@ class WatchController:
             vrate = int(v.get("synth_rate", synth_rate))
             vseed = int(v.get("seed", seed))
             vid = str(v.get("variant_id", f"synth_{vrate}_seed_{vseed}"))
-            ledger_dir = (
-                PROJECT_ROOT / "data" / "replays" / run_id / "ledger" / vid
-                if multi else
-                PROJECT_ROOT / "data" / "replays" / run_id / "ledger"
-            )
+            run_root = PROJECT_ROOT / "data" / "replays" / run_id
+            if multi:
+                ledger_dir = run_root / "ledger" / vid
+                decisions_path = run_root / "variants" / vid / "decisions.jsonl"
+            else:
+                ledger_dir = run_root / "ledger"
+                decisions_path = run_root / "decisions.jsonl"
+            decisions_path.parent.mkdir(parents=True, exist_ok=True)
             tribes, state, projector, decision, executor, regime_clf = _build_stack(
                 cfg, ledger_dir=ledger_dir, rng_seed=vseed,
             )
@@ -359,6 +387,7 @@ class WatchController:
                 speed=speed, total_ticks_est=total_ticks_est,
                 variant_id=vid if multi else None,
                 emit_replay_state=not multi,
+                decisions_path=decisions_path,
             )
             evs = build_event_stream(bars, funding, synth_rate=vrate, symbol=symbol)
             engines_events.append((engine, evs))

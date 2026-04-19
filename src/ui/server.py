@@ -14,6 +14,7 @@ from pathlib import Path
 
 from datetime import datetime, timezone
 
+import orjson
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel
@@ -185,6 +186,71 @@ def create_app(
         if kernel_calibrator is None:
             return JSONResponse({"enabled": False})
         return JSONResponse({"enabled": True, **kernel_calibrator.snapshot()})
+
+    @app.get("/api/replay/runs")
+    async def replay_runs():
+        """List recent replay run directories (newest first, cap 50)."""
+        from ..core.config import PROJECT_ROOT
+        replay_dir = PROJECT_ROOT / "data" / "replays"
+        if not replay_dir.exists():
+            return JSONResponse([])
+        runs = []
+        for d in sorted(replay_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+            if not d.is_dir():
+                continue
+            meta: dict = {"run_id": d.name}
+            for manifest_name in ("multi_manifest.json", "manifest.json"):
+                mp = d / manifest_name
+                if mp.exists():
+                    try:
+                        m = orjson.loads(mp.read_bytes())
+                        meta.update({k: m.get(k) for k in ("day", "symbol") if m.get(k)})
+                        meta["type"] = "multi" if manifest_name == "multi_manifest.json" else "single"
+                    except Exception:
+                        pass
+                    break
+            runs.append(meta)
+            if len(runs) >= 50:
+                break
+        return JSONResponse(runs)
+
+    @app.get("/api/replay/tick")
+    async def replay_tick(run_id: str, tick: int, variant_id: str | None = None):
+        """Return the decisions.jsonl row for a specific tick in a completed run.
+
+        Searches: variants/{variant_id}/decisions.jsonl if variant_id given,
+        otherwise decisions.jsonl at run root, then any variant subdirectory."""
+        from ..core.config import PROJECT_ROOT
+        repl_dir = PROJECT_ROOT / "data" / "replays" / run_id
+        if not repl_dir.exists():
+            return JSONResponse({"error": "run not found", "run_id": run_id}, status_code=404)
+
+        candidates: list[Path] = []
+        if variant_id:
+            candidates.append(repl_dir / "variants" / variant_id / "decisions.jsonl")
+        else:
+            candidates.append(repl_dir / "decisions.jsonl")
+            vdir = repl_dir / "variants"
+            if vdir.exists():
+                candidates.extend(
+                    p / "decisions.jsonl"
+                    for p in sorted(vdir.iterdir())
+                    if p.is_dir()
+                )
+
+        jsonl = next((p for p in candidates if p.exists()), None)
+        if jsonl is None:
+            return JSONResponse({"error": "decisions not found", "run_id": run_id}, status_code=404)
+
+        with jsonl.open("rb") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                row = orjson.loads(line)
+                if row.get("tick") == tick:
+                    return JSONResponse(row)
+
+        return JSONResponse({"error": "tick not found", "tick": tick}, status_code=404)
 
     @app.get("/api/regime")
     async def regime():

@@ -92,18 +92,19 @@
 
 ---
 
-## Phase 8 — Click-a-bar inspect modal (NEXT)
+## ✅ Phase 8 — Click-a-bar inspect modal
 
 **Goal:** Clicking any bar in the equity or price chart opens a modal showing the tick-level detail for that time window: council votes, regime, forecast, positions, action.
 
-**Design:**
-- The decisions JSONL is already on disk; an endpoint `GET /api/replay/tick?run_id=X&tick=N` streams the relevant row
-- Modal is a new HTML component; no existing chart or tick handler changes
-- Only available after a replay completes (run_id known client-side from `replay_state`)
+- `WatchEngine`: `decisions_path` param — opens `DecisionLogWriter` in `run()`, writes per tick alongside broadcasting; `WatchController` computes path per variant and passes it in
+- `GET /api/replay/tick?run_id=X&tick=N&variant_id=Y` — scans decisions.jsonl, resolves variant subdirs automatically
+- `GET /api/replay/runs` — lists recent run directories with day/symbol metadata (cap 50)
+- `index.html`: `_replayRunId` tracked from `replay_state`; price+equity canvases get crosshair cursor + click handler → `showTickInspect()`; variant sparklines also clickable; `#tick-inspect` modal renders tick detail + per-tribe conviction bars
+- `test_replay_phase8.py`: 4 tests (endpoint tick lookup, variant path, 404s, WatchEngine decisions write) all green
 
 ---
 
-## Phase 9 — Week-unit experiment (persistent across day boundary)
+## Phase 9 — Week-unit experiment (persistent across day boundary) (NEXT)
 
 **Goal:** Run M consecutive days as a single experiment. Equity carries over between days (end equity of day N = start equity of day N+1). Results aggregated into a weekly report alongside per-day variant breakdowns.
 

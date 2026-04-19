@@ -316,6 +316,41 @@
   }
   .rb-btn:hover{background:rgba(200,168,75,.28)}
 
+  /* ── Tick inspect modal (Phase 8) ───────────────────────────── */
+  #tick-inspect{
+    display:none;position:fixed;inset:0;z-index:600;
+    background:rgba(0,0,0,.65);align-items:center;justify-content:center;
+  }
+  #tick-inspect.active{display:flex}
+  .ti-box{
+    background:var(--bg2);border:1px solid var(--accent);border-radius:4px;
+    width:min(480px,94vw);max-height:80vh;display:flex;flex-direction:column;
+    font-size:11px;color:var(--fg);
+  }
+  .ti-hdr{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:8px 14px;border-bottom:1px solid var(--bg3);flex-shrink:0;
+    color:var(--accent);font-size:12px;letter-spacing:.08em;font-weight:700;
+  }
+  .ti-close{background:none;border:none;color:var(--accent);cursor:pointer;font-size:16px;padding:0 4px;line-height:1}
+  .ti-body{overflow-y:auto;padding:10px 14px;display:flex;flex-direction:column;gap:8px}
+  .ti-meta{display:grid;grid-template-columns:1fr 1fr;gap:3px 12px}
+  .ti-row{display:flex;align-items:baseline;gap:6px;font-size:10px}
+  .ti-k{opacity:.5;min-width:90px;letter-spacing:.05em}
+  .ti-action-badge{padding:1px 7px;border-radius:2px;font-size:9px;letter-spacing:.07em;font-weight:700}
+  .ti-action-badge.pos{background:rgba(77,187,110,.2);color:#4dbb6e}
+  .ti-action-badge.neg{background:rgba(217,79,79,.2);color:#d94f4f}
+  .ti-action-badge.neutral{background:rgba(200,168,75,.1);color:var(--accent)}
+  .ti-reason{opacity:.7;font-size:9px;word-break:break-word}
+  .ti-votes-title{font-size:9px;letter-spacing:.09em;color:var(--accent);opacity:.7;
+    padding-top:4px;border-top:1px solid var(--bg3)}
+  .ti-votes{display:flex;flex-direction:column;gap:4px}
+  .ti-vote{display:flex;align-items:center;gap:6px;font-size:9px}
+  .ti-vtid{min-width:130px;opacity:.75;text-transform:capitalize}
+  .ti-vbar-wrap{flex:1;height:6px;background:var(--bg3);border-radius:3px;overflow:hidden}
+  .ti-vbar{height:100%;border-radius:3px;transition:width .2s}
+  .ti-vscore{min-width:65px;text-align:right;opacity:.6}
+
   /* ── Variant comparison panes (Phase 7) ─────────────────────── */
   #variant-panes{
     display:none;position:fixed;bottom:0;left:0;right:0;z-index:150;
@@ -1245,6 +1280,83 @@
     while(feed.children.length>3)feed.removeChild(feed.lastChild);
   }
 
+  /* ── Tick inspect modal — Phase 8 ───────────────────────────── */
+  let _replayRunId = null;
+
+  function _xToTick(x, w, histLen) {
+    const frac = Math.max(0, Math.min(1, x / w));
+    return currentTick - histLen + 1 + Math.round(frac * (histLen - 1));
+  }
+
+  function _renderInspect(d) {
+    const action = d.action || 'hold';
+    const cls = action === 'long' ? 'pos' : action === 'short' ? 'neg' : 'neutral';
+    const ts = d.ts ? d.ts.replace('T',' ').replace('+00:00','').replace('Z','') + ' UTC' : '—';
+    const metaRows = [
+      ['Time', ts],
+      ['Price', d.price != null ? `$${d.price.toFixed(2)}` : '—'],
+      ['Regime', d.regime || '—'],
+      ['Action', `<span class="ti-action-badge ${cls}">${action.toUpperCase()}</span>`],
+      ['Reason', `<span class="ti-reason">${d.action_reason || '—'}</span>`],
+      ['Equity', d.equity_usd != null ? `$${d.equity_usd.toFixed(2)}` : '—'],
+      ['Positions', d.positions_open ?? '—'],
+      ['Net pressure', d.net_pressure != null ? d.net_pressure.toFixed(4) : '—'],
+      ['Uncertainty', d.uncertainty != null ? `${(d.uncertainty*100).toFixed(1)}%` : '—'],
+      ['Exp. move', d.expected_move_bps != null ? `${d.expected_move_bps.toFixed(2)} bps` : '—'],
+      ['Disagreement', d.tribe_disagreement != null ? d.tribe_disagreement.toFixed(3) : '—'],
+    ].map(([k,v]) => `<div class="ti-row"><span class="ti-k">${k}</span><span>${v}</span></div>`).join('');
+
+    const votesHtml = (d.votes || []).map(v => {
+      const w = Math.round((v.conviction || 0) * 100);
+      const color = v.side === 'buy' ? '#4dbb6e' : v.side === 'sell' ? '#d94f4f' : '#888';
+      const label = `${v.side} ${w}%`;
+      return `<div class="ti-vote">
+        <span class="ti-vtid">${(v.tribe_id||'').replace(/_/g,' ')}</span>
+        <div class="ti-vbar-wrap"><div class="ti-vbar" style="width:${w}%;background:${color}"></div></div>
+        <span class="ti-vscore">${label}</span>
+      </div>`;
+    }).join('');
+
+    return `<div class="ti-meta">${metaRows}</div>
+      <div class="ti-votes-title">COUNCIL VOTES</div>
+      <div class="ti-votes">${votesHtml || '<span style="opacity:.4">no votes</span>'}</div>`;
+  }
+
+  async function showTickInspect(run_id, tick, variant_id) {
+    if (!run_id || tick < 1) return;
+    $('ti-title').textContent = `TICK #${tick}${variant_id ? ' · ' + variant_id : ''}`;
+    $('ti-body').innerHTML = '<span style="opacity:.5">Loading…</span>';
+    $('tick-inspect').classList.add('active');
+    const params = new URLSearchParams({run_id, tick: String(tick)});
+    if (variant_id) params.set('variant_id', variant_id);
+    try {
+      const r = await fetch(`/api/replay/tick?${params}`);
+      if (!r.ok) { $('ti-body').textContent = `Not found (tick ${tick})`; return; }
+      $('ti-body').innerHTML = _renderInspect(await r.json());
+    } catch(err) { $('ti-body').textContent = `Error: ${err.message}`; }
+  }
+
+  function _initInspectHandlers() {
+    const priceCanvas = $('price-c');
+    if (priceCanvas) {
+      priceCanvas.style.cursor = 'crosshair';
+      priceCanvas.addEventListener('click', e => {
+        if (!_replayRunId || priceHist.length === 0) return;
+        const rect = priceCanvas.getBoundingClientRect();
+        showTickInspect(_replayRunId, _xToTick(e.clientX - rect.left, rect.width, priceHist.length), null);
+      });
+    }
+    const eqCanvas = $('eq-c');
+    if (eqCanvas) {
+      eqCanvas.style.cursor = 'crosshair';
+      eqCanvas.addEventListener('click', e => {
+        if (!_replayRunId || eqHist.length === 0) return;
+        const rect = eqCanvas.getBoundingClientRect();
+        showTickInspect(_replayRunId, _xToTick(e.clientX - rect.left, rect.width, eqHist.length), null);
+      });
+    }
+  }
+
   /* ── Variant panes — Phase 7 ─────────────────────────────────── */
   const _variantState = {};  // variant_id → {priceHist, eqHist, startEq}
 
@@ -1288,12 +1400,30 @@
       </div>`;
     grid.appendChild(pane);
     $('variant-panes').classList.add('active');
+    // Click on price sparkline → inspect that variant's tick
+    const priceWrap = document.getElementById(`vpc-price-${vid}`);
+    if (priceWrap) {
+      priceWrap.style.cursor = 'crosshair';
+      priceWrap.addEventListener('click', e => {
+        const vs = _variantState[vid];
+        if (!_replayRunId || !vs || vs.priceHist.length === 0) return;
+        const rect = priceWrap.getBoundingClientRect();
+        const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+        const histLen = vs.priceHist.length;
+        const tickOffset = Math.round(frac * (histLen - 1));
+        // vs.priceHist grows from tick 1; last entry = current tick for this variant
+        const engine_tick = vs.lastTick || histLen;
+        const tick = engine_tick - histLen + 1 + tickOffset;
+        showTickInspect(_replayRunId, tick, vid);
+      });
+    }
   }
 
   function onVariantTick(vid, m) {
     _ensureVariantPane(vid);
-    if (!_variantState[vid]) _variantState[vid] = {priceHist:[], eqHist:[], startEq: m.equity_usd};
+    if (!_variantState[vid]) _variantState[vid] = {priceHist:[], eqHist:[], startEq: m.equity_usd, lastTick: 0};
     const vs = _variantState[vid];
+    vs.lastTick = m.tick || vs.lastTick;
     const MAX_V = 300;
     vs.priceHist.push(m.price); if (vs.priceHist.length > MAX_V) vs.priceHist.shift();
     vs.eqHist.push(m.equity_usd); if (vs.eqHist.length > MAX_V) vs.eqHist.shift();
@@ -1325,6 +1455,8 @@
   function onReplayState(m){
     const banner=$('replay-banner');
     if(!m.active){banner.classList.remove('active','paused');return}
+    // Track run_id for tick inspect (keep after end so charts stay inspectable)
+    if(m.run_id) _replayRunId=m.run_id;
     // Close start modal if a replay just became active
     $('replay-start').classList.remove('visible');
     banner.classList.add('active');
@@ -1445,6 +1577,7 @@
 
   Promise.all([loadConfig(),loadTribes()]).then(connect);
   maybeShowReplayForm();
+  _initInspectHandlers();
 })();
 
 async function exportReport(){
@@ -1466,6 +1599,17 @@ async function exportReport(){
   finally { btn.textContent = '⬇ REPORT'; btn.disabled = false; }
 }
 </script>
+<!-- Tick inspect modal — opened by clicking price or equity chart during replay -->
+<div id="tick-inspect">
+  <div class="ti-box">
+    <div class="ti-hdr">
+      <span id="ti-title">TICK —</span>
+      <button class="ti-close" onclick="$('tick-inspect').classList.remove('active')" title="Close">✕</button>
+    </div>
+    <div class="ti-body" id="ti-body">Select a tick to inspect.</div>
+  </div>
+</div>
+
 <!-- Variant comparison panes — shown during multi-variant replay -->
 <div id="variant-panes">
   <div class="vp-header">
