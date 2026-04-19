@@ -60,6 +60,9 @@ def main() -> None:
                          "Primary use: tests and custom stress scenarios.")
     ap.add_argument("--funding-fixture", default=None, type=Path,
                     help="JSON array of funding dicts; bypasses cache/network.")
+    ap.add_argument("--starting-equity", type=float, default=None,
+                    help="starting equity USD (overrides config base_capital_usd). "
+                         "Used by week orchestrator to carry equity across days.")
     args = ap.parse_args()
 
     bars = funding = None
@@ -84,6 +87,7 @@ def main() -> None:
         cache_root=args.cache_root,
         bars=bars,
         funding=funding,
+        starting_equity_usd=args.starting_equity,
     ))
 
     print()

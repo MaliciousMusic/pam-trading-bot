@@ -92,6 +92,7 @@ def _worker_cmd(
     *, day: date, spec: VariantSpec, run_id: str, outputs_root: Path,
     cache_root: Path, symbol: str,
     bars_fixture_path: Path | None, funding_fixture_path: Path | None,
+    starting_equity: float | None = None,
 ) -> list[str]:
     cmd = [
         sys.executable, "-u", "-m", "scripts.run_replay",
@@ -108,6 +109,8 @@ def _worker_cmd(
         cmd += ["--bars-fixture", str(bars_fixture_path)]
     if funding_fixture_path is not None:
         cmd += ["--funding-fixture", str(funding_fixture_path)]
+    if starting_equity is not None:
+        cmd += ["--starting-equity", str(starting_equity)]
     return cmd
 
 
@@ -116,6 +119,7 @@ async def _run_worker(
     cache_root: Path, symbol: str, sem: asyncio.Semaphore,
     env: dict[str, str],
     bars_fixture_path: Path | None, funding_fixture_path: Path | None,
+    starting_equity: float | None = None,
 ) -> VariantOutcome:
     async with sem:
         variant_dir = outputs_root / run_id / "variants" / spec.variant_id
@@ -127,6 +131,7 @@ async def _run_worker(
             cache_root=cache_root, symbol=symbol,
             bars_fixture_path=bars_fixture_path,
             funding_fixture_path=funding_fixture_path,
+            starting_equity=starting_equity,
         )
         started = time.monotonic()
         logger.info("[orch] spawn {}  cmd={}", spec.variant_id, " ".join(cmd))
@@ -181,6 +186,7 @@ async def run_multi_variant(
     bars_fixture_path: Path | None = None,
     funding_fixture_path: Path | None = None,
     emit_report: bool = True,
+    starting_equities: dict[str, float] | None = None,
 ) -> MultiVariantResult:
     """Spawn one subprocess per variant and wait for all to finish.
 
@@ -243,6 +249,7 @@ async def run_multi_variant(
             cache_root=cache_root, symbol=symbol, sem=sem, env=env,
             bars_fixture_path=bars_fixture_path,
             funding_fixture_path=funding_fixture_path,
+            starting_equity=(starting_equities or {}).get(v.variant_id),
         )
         for v in variants
     ])
@@ -282,7 +289,8 @@ async def run_multi_variant(
     )
 
     zip_path: str | None = None
-    if emit_report and all_ok := all(o.exit_code == 0 for o in outcomes):
+    all_ok = all(o.exit_code == 0 for o in outcomes)
+    if emit_report and all_ok:
         try:
             from .report_zip import build_zip
             zp = build_zip(rollup_path.parent)

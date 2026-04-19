@@ -104,14 +104,16 @@
 
 ---
 
-## Phase 9 — Week-unit experiment (persistent across day boundary) (NEXT)
+## ✅ Phase 9 — Week-unit experiment (persistent across day boundary)
 
 **Goal:** Run M consecutive days as a single experiment. Equity carries over between days (end equity of day N = start equity of day N+1). Results aggregated into a weekly report alongside per-day variant breakdowns.
 
-**Design:**
-- `run_week()` in `orchestrator.py`: loop over `day in week`, call `run_multi_variant()` sequentially, thread `end_equity_usd` as `starting_equity_usd` into next day's `_build_stack`
-- `PaperExecutor` already supports `starting_equity_usd` param — no change needed
-- Weekly report: extend `RunMetrics` / `report_html.py` with a day-axis equity curve
+- `src/replay/harness.py` — `_build_stack()` + `run_sprint()` accept `starting_equity_usd`; `scripts/run_replay.py` exposes `--starting-equity` CLI arg
+- `src/replay/orchestrator.py` — `_worker_cmd()` + `_run_worker()` accept `starting_equity`; `run_multi_variant()` accepts `starting_equities: dict[str, float] | None` and passes per-variant equity to each worker
+- `src/replay/week_orchestrator.py` — `run_week()`: loops days sequentially, calls `run_multi_variant()` with per-variant `starting_equities` from previous day; `WeekResult` + `DayResult` dataclasses; writes `week_manifest.json`; auto-calls `build_week_zip()` when all ok
+- `src/replay/report_week.py` — `render_week_html()` (cross-day equity SVG + per-day table), `render_week_md()`, `build_week_zip()`
+- `scripts/run_week.py` — CLI (`--start`, `--days N`, `--synth-rates`, `--seed`)
+- `scripts/test_replay_phase9.py` — 2 tests (single-variant + multi-variant carry-over), all green
 
 ---
 
@@ -129,7 +131,9 @@ src/
     report_html.py       — server-side SVG HTML report (Phase 4)
     report_md.py         — Markdown summary (Phase 4)
     report_zip.py        — zip packager (Phase 4)
+    report_week.py       — week HTML/MD/zip reports (Phase 9)
     watch_engine.py      — WatchEngine + WatchController (Phase 5)
+    week_orchestrator.py — run_week + equity carry-over (Phase 9)
   ui/
     server.py            — FastAPI app + replay routes (Phase 5)
     broadcaster.py       — UIBroadcaster (subscribe/publish/buffer)
@@ -139,5 +143,6 @@ scripts/
   run_replay.py          — sprint CLI
   run_multi_variant.py   — orchestrator CLI
   build_report.py        — report zip CLI
+  run_week.py            — week experiment CLI (Phase 9)
   test_replay_phase*.py  — per-phase test suites
 ```
