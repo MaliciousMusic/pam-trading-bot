@@ -77,6 +77,7 @@ async def main() -> None:
         max_hold_seconds=int(cfg["risk"]["max_hold_seconds"]),
         exit_dead_zone_bps=float(cfg["decision"].get("exit_dead_zone_bps", 0.5)),
         ledger=ledger,
+        exit_strategy=cfg.get("exit_strategy", {}) or {},
     )
     projector = ChessProjector(
         tribes=tribes,

@@ -239,7 +239,10 @@ class TradingEngine:
         # 2b) Council-driven exits: close positions whose direction no longer
         #     matches the current forecast. Must happen BEFORE the entry
         #     decision so equity/notional caps reflect this tick's reality.
-        self.executor.evaluate_exits(ts, self.state.last_price, forecast)
+        regime_label = regime_snapshot["label"] if regime_snapshot else None
+        self.executor.evaluate_exits(
+            ts, self.state.last_price, forecast, regime_label=regime_label,
+        )
 
         # 3) Max-hold backstop (time-based hard cap, independent of forecast).
         self.executor.mark_to_market(ts, self.state.last_price)

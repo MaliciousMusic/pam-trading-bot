@@ -38,6 +38,48 @@ decision:
   exit_dead_zone_bps: 3.0
   min_conf: 0.10                # council must agree before opening — below this is noise
 
+# Multi-layer exit overlay. The base rule (council sign-flip beyond the
+# dead zone) stays in place; these layers are ADDITIONAL early-exit triggers
+# that fire when any one is satisfied. Collectively they do three things:
+#   1. Distinguish strong council flips (close now) from weak, noisy flips
+#      (confirm across N ticks) so whipsaw doesn't eat winning positions.
+#   2. Protect winners: once a position earns `ratchet_arm_bps`, lock in
+#      the bulk of the move by closing on a fractional retrace of the peak.
+#   3. Make the dead zone regime-aware — cascade closes tighter (thin book,
+#      moves cascade), chop wider (noise should not trigger exits).
+exit_strategy:
+  # --- Layer 1: conviction-magnitude-aware flip -----------------------------
+  # Any flip with confidence >= this closes immediately.
+  strong_flip_conf: 0.25
+  # Weak flips need this many consecutive flipped ticks before closing.
+  # 1 = disabled (all flips close immediately). 2 = one confirmation tick.
+  weak_flip_confirm_ticks: 2
+
+  # --- Layer 2: profit ratchet ---------------------------------------------
+  # Arms once peak unrealized P&L (in bps of notional) crosses arm_bps;
+  # close when current drops to peak * (1 - retrace_frac).
+  # Set arm_bps=0 OR retrace_frac>=1.0 to disable.
+  ratchet_arm_bps: 10.0          # arm once +10bps of notional is earned
+  ratchet_retrace_frac: 0.5      # close on retracing 50% of the peak
+
+  # --- Layer 3a: regime-aware dead zone ------------------------------------
+  # Scale `decision.exit_dead_zone_bps` by regime label. Missing keys → 1.0.
+  dead_zone_regime_mult:
+    chop:         1.5            # noisy regime — require wider flip to close
+    normal:       1.0
+    trend_up:     1.0
+    trend_down:   1.0
+    cascade_up:   0.5            # thin book — close tighter before it runs
+    cascade_down: 0.5
+
+  # --- Layer 3b: edge exhausted (optional, OFF by default) -----------------
+  # Close when the forecasted remaining move in the position's direction is
+  # less than `round_trip_fees_bps * edge_exhausted_factor`. Set factor=0
+  # to disable — enable once the projector's remaining-move estimate is
+  # reliable enough to trust for this kind of sub-tick profit-take.
+  edge_exhausted_factor: 0.0
+  edge_exhausted_min_age_s: 20
+
 # Confidence-weighted position sizing. At conf = 0 we inject `min_pct_equity`;
 # at conf = 1.0 we inject `max_pct_equity`. Every non-flat council projection
 # opens a trade; the council's own conf folds in agreement — noisy regimes
