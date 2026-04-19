@@ -371,6 +371,13 @@ class TradingEngine:
                 "forecast_sigma_bps": forecast.steps_sigma_bps,
                 "forecast_sample_paths_bps": forecast.sample_paths_bps,
                 "forecast_sample_paths_tribe_ids": forecast.sample_paths_tribe_ids,
+                # Per-(tribe, horizon) performance weights — the Adaptive
+                # Temporal Weighting matrix the projector ledger is learning.
+                # Shape: { tribe_id: [w_h0, w_h1, ..., w_hN] }. Values are
+                # bounded in [0.1, 3.0] with 1.0 meaning "neutral". UI uses
+                # this to render a 17 × N heatmap so the user can watch each
+                # tribe's horizon-specialist profile emerge over time.
+                "projector_weights": dict(getattr(self.projector, "_weights", {}) or {}),
                 "votes": [
                     {"tribe_id": v.tribe_id, "side": v.side.value,
                      "conviction": v.conviction, "weight": v.weight, "reason": v.reason}

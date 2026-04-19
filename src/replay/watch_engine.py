@@ -236,6 +236,7 @@ class WatchEngine:
             "forecast_sigma_bps": forecast.steps_sigma_bps,
             "forecast_sample_paths_bps": forecast.sample_paths_bps,
             "forecast_sample_paths_tribe_ids": forecast.sample_paths_tribe_ids,
+            "projector_weights": dict(getattr(self.projector, "_weights", {}) or {}),
             "votes": [
                 {"tribe_id": v.tribe_id, "side": v.side.value,
                  "conviction": v.conviction, "weight": v.weight, "reason": v.reason}
