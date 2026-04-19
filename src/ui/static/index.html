@@ -289,6 +289,61 @@
     .chart-box.equity{height:56px}
     .council-meta .metrics{grid-template-columns:1fr 1fr}
   }
+
+  /* ── Replay amber banner ─────────────────────────────────────── */
+  #replay-banner{
+    display:none;position:sticky;top:0;z-index:200;
+    background:rgba(200,168,75,.13);border-bottom:1px solid var(--accent);
+    padding:5px 14px;font-size:11px;color:var(--accent);
+    align-items:center;gap:12px;flex-wrap:wrap;
+  }
+  #replay-banner.active{display:flex}
+  .rb-label{font-weight:700;letter-spacing:.08em;white-space:nowrap}
+  .rb-day{opacity:.8}
+  .rb-speed{opacity:.8}
+  .rb-paused{font-weight:700;color:#d94f4f;display:none}
+  #replay-banner.paused .rb-paused{display:inline}
+  .rb-progress-wrap{flex:1;min-width:100px;max-width:260px;
+    height:4px;background:rgba(200,168,75,.2);border-radius:2px;overflow:hidden}
+  .rb-progress-fill{height:100%;background:var(--accent);width:0%;
+    transition:width .4s linear;border-radius:2px}
+  .rb-pct{min-width:30px;text-align:right;opacity:.8}
+  .rb-controls{display:flex;gap:6px;margin-left:auto}
+  .rb-btn{
+    background:rgba(200,168,75,.15);border:1px solid rgba(200,168,75,.35);
+    color:var(--accent);padding:2px 8px;border-radius:2px;font-size:10px;
+    cursor:pointer;letter-spacing:.05em;
+  }
+  .rb-btn:hover{background:rgba(200,168,75,.28)}
+
+  /* ── Replay start form (shown at /replay) ───────────────────── */
+  #replay-start{
+    display:none;position:fixed;inset:0;z-index:500;
+    background:rgba(0,0,0,.7);align-items:center;justify-content:center;
+  }
+  #replay-start.visible{display:flex}
+  .rs-box{
+    background:var(--bg2);border:1px solid var(--accent);border-radius:4px;
+    padding:24px 28px;min-width:320px;color:var(--fg);font-size:12px;
+  }
+  .rs-box h2{margin:0 0 16px;color:var(--accent);font-size:14px;letter-spacing:.1em}
+  .rs-row{display:flex;flex-direction:column;gap:3px;margin-bottom:12px}
+  .rs-row label{opacity:.7;font-size:10px;letter-spacing:.06em}
+  .rs-row input,.rs-row select{
+    background:var(--bg3);border:1px solid var(--bg3);color:var(--fg);
+    padding:4px 8px;border-radius:2px;font-size:12px;font-family:inherit;
+  }
+  .rs-actions{display:flex;gap:8px;margin-top:16px;justify-content:flex-end}
+  .rs-btn-go{
+    background:rgba(200,168,75,.2);border:1px solid var(--accent);
+    color:var(--accent);padding:5px 16px;border-radius:2px;cursor:pointer;
+    font-size:11px;letter-spacing:.08em;
+  }
+  .rs-btn-go:hover{background:rgba(200,168,75,.35)}
+  .rs-btn-cancel{
+    background:transparent;border:1px solid var(--bg3);color:var(--fg);
+    padding:5px 12px;border-radius:2px;cursor:pointer;font-size:11px;opacity:.6;
+  }
 </style>
 </head>
 <body>
@@ -304,6 +359,48 @@
   <button id="btn-export" onclick="exportReport()" title="Download session audit report">⬇ REPORT</button>
   <span id="conn">connecting</span>
 </header>
+
+<!-- Replay amber banner — driven solely by replay_state messages -->
+<div id="replay-banner">
+  <span class="rb-label">▶ REPLAY</span>
+  <span class="rb-day" id="rb-day">—</span>
+  <span class="rb-speed" id="rb-speed">—</span>
+  <span class="rb-paused">PAUSED</span>
+  <div class="rb-progress-wrap"><div class="rb-progress-fill" id="rb-fill"></div></div>
+  <span class="rb-pct" id="rb-pct">0%</span>
+  <div class="rb-controls">
+    <button class="rb-btn" id="rb-pause-btn" onclick="replayPause()">⏸ PAUSE</button>
+    <button class="rb-btn" onclick="replayStop()">■ STOP</button>
+    <button class="rb-btn" id="rb-speed-up" onclick="replaySpeed(2)">2×</button>
+    <button class="rb-btn" id="rb-speed-10" onclick="replaySpeed(10)">10×</button>
+    <button class="rb-btn" id="rb-speed-50" onclick="replaySpeed(50)">50×</button>
+  </div>
+</div>
+
+<!-- Replay start modal — shown only at /replay path -->
+<div id="replay-start">
+  <div class="rs-box">
+    <h2>START REPLAY</h2>
+    <div class="rs-row"><label>DATE (YYYY-MM-DD)</label>
+      <input id="rs-day" type="date" value="2024-01-15"></div>
+    <div class="rs-row"><label>SYMBOL</label>
+      <input id="rs-symbol" type="text" value="BTCUSDT"></div>
+    <div class="rs-row"><label>SPEED (×real-time)</label>
+      <input id="rs-speed" type="number" value="10" min="0.1" max="1000" step="1"></div>
+    <div class="rs-row"><label>SYNTH RATE (ticks/bar)</label>
+      <select id="rs-synth">
+        <option value="6">6</option>
+        <option value="60" selected>60</option>
+        <option value="600">600</option>
+      </select></div>
+    <div class="rs-row"><label>SEED</label>
+      <input id="rs-seed" type="number" value="42" min="0"></div>
+    <div class="rs-actions">
+      <button class="rs-btn-cancel" onclick="$('replay-start').classList.remove('visible')">Cancel</button>
+      <button class="rs-btn-go" onclick="replayStart()">▶ START</button>
+    </div>
+  </div>
+</div>
 
 <main>
   <!-- Left: Council (passive, compact) -->
@@ -1112,13 +1209,74 @@
     while(feed.children.length>3)feed.removeChild(feed.lastChild);
   }
 
+  /* ── Replay banner — ONLY function that touches #replay-banner ── */
+  function onReplayState(m){
+    const banner=$('replay-banner');
+    if(!m.active){banner.classList.remove('active','paused');return}
+    // Close start modal if a replay just became active
+    $('replay-start').classList.remove('visible');
+    banner.classList.add('active');
+    banner.classList.toggle('paused',!!m.paused);
+    $('rb-day').textContent=m.day||'—';
+    $('rb-speed').textContent=`${m.speed}× · tick ${m.tick||0}`;
+    const pct=Math.min(m.progress_pct||0,100);
+    $('rb-fill').style.width=pct+'%';
+    $('rb-pct').textContent=pct.toFixed(0)+'%';
+    const pb=$('rb-pause-btn');
+    if(pb) pb.textContent=m.paused?'▶ RESUME':'⏸ PAUSE';
+  }
+
+  async function replayPause(){
+    await fetch('/api/replay/pause',{method:'POST'}).catch(()=>{});
+  }
+  async function replayStop(){
+    await fetch('/api/replay/stop',{method:'POST'}).catch(()=>{});
+  }
+  async function replaySpeed(s){
+    await fetch('/api/replay/speed',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({speed:s})}).catch(()=>{});
+  }
+  function resetChartState(){
+    priceHist.length=0; eqHist.length=0;
+    predictionTrail.length=0; tradeEvents.length=0;
+    p0=null; e0=null; currentTick=0; posTrackingInit=false;
+    lastForecastSteps=[]; lastForecastBps=null;
+    lastForecastSigma=null; lastForecastSamples=null;
+    knownPositions.clear();
+    // Reset header displays
+    ['h-price','h-equity','h-fitness','h-trades','h-tick'].forEach(
+      id=>{const el=$( id);if(el)el.textContent='—'});
+  }
+
+  async function replayStart(){
+    const day=$('rs-day').value;
+    const symbol=$('rs-symbol').value||'BTCUSDT';
+    const speed=parseFloat($('rs-speed').value)||10;
+    const synth_rate=parseInt($('rs-synth').value)||60;
+    const seed=parseInt($('rs-seed').value)||42;
+    $('replay-start').classList.remove('visible');
+    resetChartState();
+    await fetch('/api/replay/start',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({day,symbol,speed,synth_rate,seed})}).catch(()=>{});
+  }
+
+  /* Show start modal when at /replay and no replay is active */
+  function maybeShowReplayForm(){
+    if(location.pathname==='/replay'){
+      $('replay-start').classList.add('visible');
+    }
+  }
+
   let ws=null;
   function connect(){
     const proto=location.protocol==='https:'?'wss:':'ws:';
     ws=new WebSocket(`${proto}//${location.host}/ws`);
     ws.onopen=()=>{const c=$('conn');c.textContent='live';c.className='live'};
     ws.onmessage=e=>{const m=JSON.parse(e.data);
-      if(m.type==='tick')onTick(m);else if(m.type==='event')onEvent(m)};
+      if(m.type==='tick')onTick(m);else if(m.type==='event')onEvent(m);
+      else if(m.type==='replay_state')onReplayState(m)};
     ws.onclose=()=>{const c=$('conn');c.textContent='disconnected';c.className='dead';
       setTimeout(connect,2000)};
     ws.onerror=()=>ws.close();
@@ -1165,6 +1323,7 @@
   window.addEventListener('resize',()=>requestAnimationFrame(redrawCharts));
 
   Promise.all([loadConfig(),loadTribes()]).then(connect);
+  maybeShowReplayForm();
 })();
 
 async function exportReport(){
