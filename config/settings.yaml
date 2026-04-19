@@ -9,11 +9,13 @@ base_capital_usd: 50000       # paper-only; bumped so per-trade P&L is visible
 leverage: 15
 
 clock:
-  tick_seconds: 3             # voting cadence — fast enough to act on micro-moves
-  # 200 × 3s = 10-minute forward horizon. The UI pins prediction anchors at
+  tick_seconds: 5             # voting cadence — 5s keeps the event loop responsive
+  # 50 × 5s = ~4-minute forward horizon. The UI pins prediction anchors at
   # +15s, +1min, +5min, +10min and colors them; over time you get a
   # dot-trail you can compare against actual price. (+15m dropped; beyond horizon.)
-  projector_steps: 200
+  # Projector error compounds per step — 50 steps keeps the forecast tight
+  # and the tick cadence holding without CPU starvation.
+  projector_steps: 50
 
 risk:
   # Portfolio caps. Every tick that passes entry gates opens a NEW trade
@@ -184,7 +186,7 @@ projector:
   #     omits it.
   #   - default_sigma_bps: sigma used for sampling before the backscorer has
   #     resolved `min_samples` anchors. Scales as √t across the horizon.
-  mean_reversion_rate: 0.02
+  mean_reversion_rate: 0.005   # lowered from 0.02 — was erasing consensus too hard
   sample_paths_n: 20
   default_horizon_seconds: 600
   default_sigma_bps: 8.0
