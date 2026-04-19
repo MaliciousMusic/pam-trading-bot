@@ -1,0 +1,137 @@
+id: ta_day_trader
+name: TA Day Trader
+description: "Screen-trader with TradingView premium + Binance pro or Bybit. Mid-size\
+  \ capital, disciplined setups \u2014 waits for range breaks, retests, volume confirmation.\
+  \ Not glued to every tick; reacts when a clean setup prints."
+demographics:
+  capital_band_usd:
+  - 2000.0
+  - 50000.0
+  count_estimate: 80000
+  experience_years:
+  - 1.0
+  - 8.0
+  jurisdiction:
+  - global
+hardware:
+  tier: workstation
+  typical_latency_ms: 200
+  uptime: continuous
+  specs:
+    screens: 2-4
+    connectivity: fiber
+software:
+  platforms:
+  - binance_pro
+  - bybit
+  - okx
+  tools:
+  - tradingview_premium
+  - tradingview_alerts
+  - tradelocker
+  charting: advanced
+  order_types_used:
+  - limit
+  - stop_limit
+  - oco
+  data_feeds:
+  - ohlcv
+  - orderbook
+  - funding
+  - oi_snapshot
+strategy:
+  family: breakout_trader
+  params:
+    range_window_seconds: 300
+    break_buffer_bps: 6
+    hold_seconds: 240
+  style_notes: ''
+attention:
+  kinds:
+  - trade
+  - funding
+  tags:
+  - price
+  - taker_buy
+  - taker_sell
+  - mark_price
+  ignored_tags:
+  - liq_long
+  - liq_short
+  min_severity: 0.2
+personality:
+  risk_tolerance: 0.55
+  fomo: 0.35
+  panic: 0.3
+  patience: 0.65
+  herding: 0.35
+  reaction_mu_seconds: 60.0
+  reaction_sigma_seconds: 120.0
+flow:
+  weight: 0.061346384281706696
+  activation_rate: 0.25
+  typical_hold_seconds:
+  - 300
+  - 3600
+  default_conviction: 0.65
+  cooldown_seconds: 60
+  strong_vote_conviction: 0.3
+disposition:
+  idle_bias: 0.0
+  idle_conviction: 0.05
+circadian:
+  timezone_label: EU+US
+  presence_by_hour_utc:
+  - 0.3
+  - 0.25
+  - 0.28
+  - 0.35
+  - 0.4
+  - 0.5
+  - 0.7
+  - 0.85
+  - 0.95
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 0.95
+  - 0.85
+  - 0.7
+  - 0.55
+  - 0.45
+  - 0.4
+  - 0.35
+  - 0.3
+indicators:
+  rsi:
+    window_s: 300
+    overbought: 72
+    oversold: 28
+    action: follow
+    weight: 0.8
+  price_momentum:
+    window_s: 120
+    ref_bps: 15
+    action: follow
+    weight: 0.7
+  taker_imbalance:
+    window_s: 120
+    reference_usd: 800000
+    action: follow
+    weight: 0.6
+  volatility_regime:
+    window_s: 600
+    low_bps: 10
+    high_bps: 60
+    prefer: high
+    weight: 0.4
+indicator_weight: 0.5
+indicator_regime_range: 0.3
+indicator_regime_low_bps: 12.0
+indicator_regime_high_bps: 70.0
+indicator_regime_prefer: high
+indicator_regime_window_s: 600.0

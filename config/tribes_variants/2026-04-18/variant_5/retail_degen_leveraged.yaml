@@ -1,0 +1,134 @@
+id: retail_degen_leveraged
+name: Retail Degen (Leveraged Perps)
+description: "Active retail running 10x\u201350x perps on Binance/Bybit/BitMEX. Piles\
+  \ onto whatever is ripping, doubles down into moves, gets liquidated often. Short\
+  \ attention, short holds, responds to print flow and especially to liquidation cascades."
+demographics:
+  capital_band_usd:
+  - 100.0
+  - 5000.0
+  count_estimate: 400000
+  experience_years:
+  - 0.5
+  - 4.0
+  jurisdiction:
+  - APAC
+  - CIS
+  - LATAM
+  - EU
+hardware:
+  tier: laptop
+  typical_latency_ms: 500
+  uptime: intermittent
+  specs:
+    screens: 1-2
+    connectivity: home_broadband
+software:
+  platforms:
+  - binance_pro
+  - bybit
+  - bitmex
+  - blofin
+  tools:
+  - tradingview_free
+  - telegram_signal_groups
+  charting: basic
+  order_types_used:
+  - market
+  - limit
+  - stop_market
+  data_feeds:
+  - price_ticker
+  - liquidation_feed
+  - telegram_groups
+strategy:
+  family: momentum_chaser
+  params:
+    flow_window_seconds: 60
+    min_net_flow_usd: 250000
+    liq_amplifier: 1.8
+    hold_seconds: 120
+  style_notes: "Chases short-window taker flow. Liquidation prints amplify signal\
+    \ strongly \u2014 a long-liq cascade pulls them strongly into shorts (\"the flush\"\
+    )."
+attention:
+  kinds:
+  - trade
+  - liquidation
+  tags:
+  - taker_buy
+  - taker_sell
+  - liq_long
+  - liq_short
+  ignored_tags:
+  - funding
+  min_severity: 0.2
+personality:
+  risk_tolerance: 0.95
+  fomo: 0.8
+  panic: 0.6
+  patience: 0.15
+  herding: 0.8
+  reaction_mu_seconds: 90.0
+  reaction_sigma_seconds: 180.0
+flow:
+  weight: 0.021689222163435322
+  activation_rate: 0.15
+  typical_hold_seconds:
+  - 60
+  - 600
+  default_conviction: 0.7
+  cooldown_seconds: 30
+  strong_vote_conviction: 0.3
+disposition:
+  idle_bias: 0.1
+  idle_conviction: 0.08
+circadian:
+  timezone_label: APAC
+  presence_by_hour_utc:
+  - 0.75
+  - 0.9
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 0.95
+  - 0.9
+  - 0.85
+  - 0.8
+  - 0.7
+  - 0.6
+  - 0.5
+  - 0.45
+  - 0.4
+  - 0.4
+  - 0.4
+  - 0.45
+  - 0.5
+  - 0.55
+  - 0.6
+  - 0.65
+  - 0.7
+  - 0.75
+indicators:
+  taker_imbalance:
+    window_s: 60
+    reference_usd: 500000
+    action: follow
+    weight: 1.0
+  liq_imbalance:
+    window_s: 90
+    reference_usd: 500000
+    action: follow
+    weight: 0.9
+  price_momentum:
+    window_s: 60
+    ref_bps: 20
+    action: follow
+    weight: 0.6
+indicator_weight: 0.45
+indicator_regime_range: 0.25
+indicator_regime_low_bps: 15.0
+indicator_regime_high_bps: 80.0
+indicator_regime_prefer: high
+indicator_regime_window_s: 180.0

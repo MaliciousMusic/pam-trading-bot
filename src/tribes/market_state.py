@@ -154,6 +154,15 @@ class MarketState:
         self.last_spread_bps: float | None = None
         self.bid_depth_5bps_usd: float | None = None
         self.ask_depth_5bps_usd: float | None = None
+        # Phase 12 — short rolling histories for the silent microstructure
+        # tribe. Depth deltas (queue-position decay) and per-trade notionals
+        # (trade-size clustering / iceberg detection) are window-derived.
+        self.bid_depth_series = RollingSeries(120.0)
+        self.ask_depth_series = RollingSeries(120.0)
+        # Per-trade signed notionals (positive = taker buy, negative = taker
+        # sell). Distinct from `taker_flow` — this preserves individual
+        # prints so we can compute a Shannon-style size-bucket entropy.
+        self.trade_sizes = RollingSeries(120.0)
         # Pending classified events (news with event_type != "none"). Each is
         # {"ts": epoch_s, "side": +/-1, "impact_bps": float, "event_type": str}.
         # Trimmed on ingest/advance_clock to items younger than `MAX_AGE_S`.
@@ -189,6 +198,9 @@ class MarketState:
             n = ev.payload.get("notional_usd", 0.0)
             signed = -n if ev.payload.get("is_sell_aggressor") else n
             self.taker_flow.add(ev.ts, signed)
+            # Phase 12 — keep raw signed notional per print so the silent
+            # tribe can probe the trade-size distribution (iceberg / clustering).
+            self.trade_sizes.add(ev.ts, signed)
             if p is not None:
                 self.last_price = p
                 self.prices.add(ev.ts, p)
@@ -227,6 +239,15 @@ class MarketState:
                 self.last_spread_bps = p.get("spread_bps")
                 self.bid_depth_5bps_usd = p.get("bid_depth_5bps_usd")
                 self.ask_depth_5bps_usd = p.get("ask_depth_5bps_usd")
+                # Phase 12 — feed rolling depth so the silent tribe can
+                # measure queue-position decay (depth dropping fast = the
+                # resting side is being burnt away → continuation).
+                if self.bid_depth_5bps_usd:
+                    self.bid_depth_series.add(ev.ts,
+                                              float(self.bid_depth_5bps_usd))
+                if self.ask_depth_5bps_usd:
+                    self.ask_depth_series.add(ev.ts,
+                                              float(self.ask_depth_5bps_usd))
         elif ev.kind == "oi":
             # Per-venue OI snapshot. Persist both the USD series (for
             # delta queries) and the last value (for "sum across venues").
@@ -429,6 +450,10 @@ class MarketState:
         s.last_spread_bps = self.last_spread_bps
         s.bid_depth_5bps_usd = self.bid_depth_5bps_usd
         s.ask_depth_5bps_usd = self.ask_depth_5bps_usd
+        # Phase 12 — copy microstructure series so projector forks see them.
+        s.bid_depth_series._data = deque(self.bid_depth_series._data)
+        s.ask_depth_series._data = deque(self.ask_depth_series._data)
+        s.trade_sizes._data = deque(self.trade_sizes._data)
         s.pending_events = list(self.pending_events)  # shallow copy of dicts
         # Phase F — deep-copy per-venue series so the projector's virtual
         # clock can trim them independently.
@@ -453,6 +478,10 @@ class MarketState:
         self.prices.advance_clock(ts)
         self.social.advance_clock(ts)
         self.news.advance_clock(ts)
+        # Phase 12 — keep silent-tribe series in sync with the virtual clock.
+        self.bid_depth_series.advance_clock(ts)
+        self.ask_depth_series.advance_clock(ts)
+        self.trade_sizes.advance_clock(ts)
         for series in self.oi.values():
             series.advance_clock(ts)
         for series in self.cross_flow.values():

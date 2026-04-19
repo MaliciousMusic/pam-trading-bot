@@ -1,0 +1,119 @@
+id: contrarian_funding_fader
+name: Contrarian Funding Fader
+description: "Capital that patiently fades extreme perps funding. When longs are paying\
+  \ heavy funding (crowded-long tax), they short; when shorts are paying, they long.\
+  \ Long holds, slow cadence \u2014 a structural tribe, not a scalper."
+demographics:
+  capital_band_usd:
+  - 5000.0
+  - 250000.0
+  count_estimate: 15000
+  experience_years:
+  - 2.0
+  - 12.0
+  jurisdiction:
+  - NA
+  - EU
+  - APAC
+hardware:
+  tier: laptop
+  typical_latency_ms: 400
+  uptime: continuous
+  specs: {}
+software:
+  platforms:
+  - binance_pro
+  - bybit
+  - okx
+  tools:
+  - custom_py_scanner
+  - coinglass_free
+  - funding_arb_sheet
+  charting: basic
+  order_types_used:
+  - limit
+  - post_only_limit
+  data_feeds:
+  - funding
+  - mark_price
+  - oi
+strategy:
+  family: funding_fader
+  params:
+    extreme_funding_rate: 0.000375
+    hold_seconds: 3600
+  style_notes: ''
+attention:
+  kinds:
+  - funding
+  tags:
+  - funding
+  - mark_price
+  ignored_tags:
+  - trade
+  - liq_long
+  - liq_short
+  min_severity: 0.0
+personality:
+  risk_tolerance: 0.5
+  fomo: 0.1
+  panic: 0.15
+  patience: 0.9
+  herding: 0.15
+  reaction_mu_seconds: 1800.0
+  reaction_sigma_seconds: 3600.0
+flow:
+  weight: 0.04066729155644123
+  activation_rate: 0.04
+  typical_hold_seconds:
+  - 1800
+  - 28800
+  default_conviction: 0.6
+  cooldown_seconds: 600
+  strong_vote_conviction: 0.3
+disposition:
+  idle_bias: 0.0
+  idle_conviction: 0.05
+circadian:
+  timezone_label: 24/7 (arb bot)
+  presence_by_hour_utc:
+  - 0.9
+  - 0.9
+  - 0.9
+  - 0.9
+  - 0.9
+  - 0.9
+  - 0.9
+  - 0.9
+  - 0.9
+  - 0.9
+  - 0.9
+  - 0.9
+  - 0.9
+  - 0.9
+  - 0.9
+  - 0.9
+  - 0.9
+  - 0.9
+  - 0.9
+  - 0.9
+  - 0.9
+  - 0.9
+  - 0.9
+  - 0.9
+indicators:
+  funding_extreme:
+    extreme: 0.0005
+    action: fade
+    weight: 1.0
+  price_zscore:
+    window_s: 1800
+    extreme: 2.0
+    action: fade
+    weight: 0.6
+indicator_weight: 0.6
+indicator_regime_range: 0.0
+indicator_regime_low_bps: 15.0
+indicator_regime_high_bps: 60.0
+indicator_regime_prefer: high
+indicator_regime_window_s: 300.0

@@ -1,0 +1,122 @@
+id: microstructure_prober
+name: Microstructure Prober
+description: >-
+  The silent tribe. Reads order-book microstructure that the rest of the
+  council ignores: persistent L2 imbalance, queue-position decay, iceberg
+  refills, and trade-size entropy. None of the other tribes touch the depth
+  series or per-trade notional distribution, so its vote is genuinely
+  orthogonal — when 16 tribes agree on momentum but the prober sees the
+  opposite ask wall melting and a hidden iceberg restocking it, that's the
+  signal a herd-following council was structurally blind to.
+
+demographics:
+  # Sources: HFT shop disclosures (Hudson River, Tower Research, XTX), academic
+  # papers on order-book toxicity prediction (Cont/Stoikov/Kissell), public
+  # disclosures from Binance institutional MM tier. Cohort is small but
+  # capital-heavy — the people who *can* see the queue are the ones who
+  # built or paid for direct L2 feeds and depth recorders.
+  capital_band_usd: [10000000, 250000000]
+  count_estimate: 30
+  experience_years: [4, 25]
+  jurisdiction: [NA, EU, APAC]
+
+hardware:
+  tier: colo
+  typical_latency_ms: 1
+  uptime: continuous
+  specs:
+    placement: exchange_colo_or_peered
+    nics: kernel_bypass
+    feed: full_depth_l2
+
+software:
+  platforms: [custom_c++_oms, kdb_tickdb]
+  tools: [l2_orderbook_recorder, queue_position_estimator, iceberg_classifier]
+  charting: custom
+  order_types_used: [post_only_limit, iceberg, ioc]
+  data_feeds: [orderbook_full, trades, funding]
+
+strategy:
+  family: microstructure_prober
+  params:
+    # Window for L2 imbalance read (instantaneous bid_d / total).
+    imb_window_s: 15
+    # Window for queue-position decay (depth %change).
+    decay_window_s: 15
+    # Window for iceberg detection (max single trade vs median).
+    iceberg_window_s: 30
+    # Multiplier on median trade size that flags an iceberg refill.
+    iceberg_mult: 4.0
+    # Threshold for L2 imbalance to register as a directional bid.
+    # 0.55 = "55% of top-of-book depth on one side".
+    imbalance_threshold: 0.55
+    hold_seconds: 90
+  style_notes: >-
+    Microstructure-only. Doesn't look at price, doesn't read funding, ignores
+    news. Operates on depth + trade prints exclusively.
+
+attention:
+  kinds: [trade, orderbook_tick]
+  tags: [taker_buy, taker_sell, depth_change]
+  ignored_tags: [news, social, funding, liquidation]
+  min_severity: 0.0
+
+personality:
+  # Quiet, patient, uncorrelated to herd. No FOMO (won't chase prints) and
+  # no panic (an L2 read is the same in chop as in cascade — the threshold
+  # just doesn't trigger as often).
+  risk_tolerance: 0.45
+  fomo: 0.0
+  panic: 0.0
+  patience: 0.7
+  herding: 0.0
+  reaction_mu_seconds: 0.5
+  reaction_sigma_seconds: 1.0
+
+flow:
+  # weight is OVERRIDDEN at load time by derive.py. Value below documents
+  # the pre-derivation hand-tune.
+  weight: 0.05
+  # Constantly scanning depth — but only acts when one of the four sub-
+  # signals crosses threshold. Empirically that's roughly every 5-8 ticks
+  # in a healthy book → ~15% activation.
+  activation_rate: 0.15
+  typical_hold_seconds: [30, 240]
+  default_conviction: 0.55
+  cooldown_seconds: 0
+
+disposition:
+  # No resting bias — the prober is genuinely neutral when the book is
+  # balanced and trades are well-distributed.
+  idle_bias: 0.0
+  idle_conviction: 0.04
+
+circadian:
+  # Colo'd algos. Always on.
+  timezone_label: "24/7"
+  presence_by_hour_utc:
+    [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+     1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+     1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+
+# The strategy function does almost all the work via depth + trade-size
+# series. The indicator block here is a lightweight overlay only — used
+# for the indicator_regime gate, not as the primary signal.
+indicators:
+  taker_imbalance:
+    window_s: 15
+    reference_usd: 800000
+    action: follow
+    weight: 0.4
+  volatility_regime:
+    window_s: 300
+    low_bps: 10
+    high_bps: 60
+    prefer: low                # iceberg/queue reads are cleanest in low vol
+    weight: 0.4
+indicator_weight: 0.15        # microstructure math is the vote; indicators add minor color
+indicator_regime_range: 0.20
+indicator_regime_low_bps: 10
+indicator_regime_high_bps: 60
+indicator_regime_prefer: low
+indicator_regime_window_s: 300

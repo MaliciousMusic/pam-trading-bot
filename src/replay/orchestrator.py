@@ -44,10 +44,17 @@ class VariantSpec:
     `seed` is separate from `variant_id` so the same name can re-run under
     a different seed without output-path collision — the orchestrator
     composes the directory from `variant_id` only, so pick unique ids
-    (e.g. `synth_60_seed_42` vs `synth_60_seed_99`)."""
+    (e.g. `synth_60_seed_42` vs `synth_60_seed_99`).
+
+    `tribes_dir` (Phase 13) points the worker at a per-variant council.
+    None → use the canonical `config/tribes/` baseline. Phase 9 variants
+    that only differ in synth_rate/seed leave it None; evolved generations
+    set it to `config/tribes_variants/<gen>/<variant_id>/`.
+    """
     variant_id: str
     synth_rate: int
     seed: int = 42
+    tribes_dir: Path | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -111,6 +118,8 @@ def _worker_cmd(
         cmd += ["--funding-fixture", str(funding_fixture_path)]
     if starting_equity is not None:
         cmd += ["--starting-equity", str(starting_equity)]
+    if spec.tribes_dir is not None:
+        cmd += ["--tribes-dir", str(spec.tribes_dir)]
     return cmd
 
 

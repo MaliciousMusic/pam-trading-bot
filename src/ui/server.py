@@ -56,6 +56,7 @@ def create_app(
     regime_classifier: RegimeClassifier | None = None,
     state: MarketState | None = None,
     watch_controller=None,
+    executor=None,
 ) -> FastAPI:
     app = FastAPI(title="PAM Council", docs_url=None, redoc_url=None)
 
@@ -102,6 +103,26 @@ def create_app(
             return JSONResponse({"error": "replay not available"}, status_code=503)
         await watch_controller.stop()
         return JSONResponse({"status": "stopped"})
+
+    @app.post("/api/risk/unlock")
+    async def risk_unlock():
+        """Phase 10 — operator-driven clear of the session-DD halt. Black-
+        swan and peak-DD halts auto-clear; only session-DD requires this."""
+        if executor is None or not hasattr(executor, "manual_unlock"):
+            return JSONResponse({"error": "executor not available"}, status_code=503)
+        was_halted = bool(getattr(executor, "session_halted", False))
+        executor.manual_unlock()
+        return JSONResponse({
+            "status": "unlocked",
+            "was_halted": was_halted,
+            "session_halted": bool(getattr(executor, "session_halted", False)),
+        })
+
+    @app.get("/api/risk/snapshot")
+    async def risk_snapshot():
+        if executor is None or not hasattr(executor, "risk_snapshot"):
+            return JSONResponse({"enabled": False})
+        return JSONResponse({"enabled": True, "snapshot": executor.risk_snapshot()})
 
     @app.get("/api/tribes")
     async def tribes():

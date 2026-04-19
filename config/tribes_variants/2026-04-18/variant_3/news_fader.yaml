@@ -1,0 +1,145 @@
+id: news_fader
+name: News Fader
+description: 'Fast-response pros who fade the initial overreaction to high-severity
+  headlines. Live-wired: regulation/macro items get followed (regime signal), crypto-press/influencer
+  items get faded (overreaction). RSS feed set lives in src/ingress/rss_feeds.py:CURATED_FEEDS
+  (SEC, Fed, CFTC, Coindesk/Cointelegraph/etc, Substack, Nitter mirrors).'
+demographics:
+  capital_band_usd:
+  - 50000.0
+  - 1000000.0
+  count_estimate: 2000
+  experience_years:
+  - 3.0
+  - 15.0
+  jurisdiction:
+  - NA
+  - EU
+  - APAC
+hardware:
+  tier: workstation
+  typical_latency_ms: 150
+  uptime: continuous
+  specs:
+    screens: 2-4
+    connectivity: fiber
+software:
+  platforms:
+  - binance_pro
+  - bybit
+  - deribit
+  tools:
+  - news_wire_api
+  - tree_of_alpha_equivalent
+  - custom_event_sniper
+  charting: advanced
+  order_types_used:
+  - market
+  - ioc_limit
+  data_feeds:
+  - cryptopanic
+  - news_api
+  - tree_of_alpha
+  - exchange_announcements
+strategy:
+  family: news_reactor
+  params:
+    hold_seconds: 300
+    social_window_s: 900
+    min_social_volume: 3
+    extreme_social_score: 2.5
+    fgi_extreme: 0.5
+  style_notes: 'Live-wired: fades the crowd when reddit pulse or FGI goes extreme.'
+attention:
+  kinds:
+  - news
+  tags:
+  - headline
+  - macro
+  - regulatory
+  - hack
+  - exchange_announcement
+  ignored_tags:
+  - orderbook_tick
+  min_severity: 0.6
+personality:
+  risk_tolerance: 0.65
+  fomo: 0.2
+  panic: 0.2
+  patience: 0.5
+  herding: 0.25
+  reaction_mu_seconds: 15.0
+  reaction_sigma_seconds: 30.0
+flow:
+  weight: 0.0342936713569302
+  activation_rate: 0.06
+  typical_hold_seconds:
+  - 120
+  - 1200
+  default_conviction: 0.7
+  cooldown_seconds: 60
+  strong_vote_conviction: 0.3
+disposition:
+  idle_bias: 0.0
+  idle_conviction: 0.05
+circadian:
+  timezone_label: EU+US (pro)
+  presence_by_hour_utc:
+  - 0.4
+  - 0.35
+  - 0.35
+  - 0.4
+  - 0.45
+  - 0.55
+  - 0.65
+  - 0.8
+  - 0.9
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 0.95
+  - 0.85
+  - 0.75
+  - 0.65
+  - 0.55
+  - 0.5
+  - 0.45
+  - 0.4
+indicators:
+  news_pulse:regulation:
+    window_s: 3600
+    tag: regulation
+    reference: 0.5
+    action: follow
+    weight: 1.0
+  news_pulse:macro:
+    window_s: 3600
+    tag: macro
+    reference: 0.5
+    action: follow
+    weight: 0.8
+  news_pulse:news:
+    window_s: 1800
+    tag: news
+    reference: 0.6
+    action: fade
+    weight: 0.8
+  news_pulse:influencer:
+    window_s: 1800
+    tag: influencer
+    reference: 0.6
+    action: fade
+    weight: 0.6
+  fgi_bias:
+    action: fade
+    weight: 0.4
+indicator_weight: 0.65
+indicator_regime_range: 0.0
+indicator_regime_low_bps: 15.0
+indicator_regime_high_bps: 60.0
+indicator_regime_prefer: high
+indicator_regime_window_s: 300.0

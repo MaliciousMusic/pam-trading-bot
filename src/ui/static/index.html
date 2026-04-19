@@ -330,6 +330,26 @@
   }
   .rb-btn:hover{background:rgba(200,168,75,.28)}
 
+  /* ── Risk halt banner (Phase 10) ─────────────────────────────── */
+  #risk-banner{
+    display:none;position:sticky;top:0;z-index:210;
+    background:rgba(217,79,79,.18);border-bottom:1px solid #d94f4f;
+    padding:6px 14px;font-size:11px;color:#ff7b7b;
+    align-items:center;gap:14px;flex-wrap:wrap;
+  }
+  #risk-banner.active{display:flex}
+  .risk-label{font-weight:700;letter-spacing:.12em;white-space:nowrap;
+    background:rgba(217,79,79,.35);padding:2px 8px;border-radius:2px;color:#fff}
+  .risk-reason{opacity:.95;flex:1;min-width:140px}
+  .risk-meta{opacity:.75;font-size:10px;letter-spacing:.04em}
+  .risk-controls{display:flex;gap:6px;margin-left:auto}
+  .risk-btn{
+    background:rgba(217,79,79,.2);border:1px solid rgba(217,79,79,.55);
+    color:#ff7b7b;padding:2px 9px;border-radius:2px;font-size:10px;
+    cursor:pointer;letter-spacing:.05em;
+  }
+  .risk-btn:hover{background:rgba(217,79,79,.35)}
+
   /* ── Tick inspect modal (Phase 8) ───────────────────────────── */
   #tick-inspect{
     display:none;position:fixed;inset:0;z-index:600;
@@ -450,6 +470,16 @@
   <button id="btn-export" onclick="exportReport()" title="Download session audit report">⬇ REPORT</button>
   <span id="conn">connecting</span>
 </header>
+
+<!-- Risk halt banner — driven by tick.risk -->
+<div id="risk-banner">
+  <span class="risk-label">⛔ HALTED</span>
+  <span class="risk-reason" id="risk-reason">—</span>
+  <span class="risk-meta" id="risk-meta">—</span>
+  <div class="risk-controls">
+    <button class="risk-btn" id="risk-unlock-btn" onclick="riskManualUnlock()">UNLOCK SESSION</button>
+  </div>
+</div>
 
 <!-- Replay amber banner — driven solely by replay_state messages -->
 <div id="replay-banner">
@@ -1000,6 +1030,42 @@
 
     renderPortfolio(t.positions||[], t.total_notional_usd||0, t.equity_usd, t.price, t.ts);
     renderTradeHistory(t.recent_trades||[]);
+    updateRiskBanner(t.risk);
+  }
+
+  // Phase 10 — risk halt banner. Driven by tick.risk; visible iff the
+  // executor has tripped a peak-DD halt, a session-DD halt (manual unlock
+  // required), or armed a black-swan cooldown. Distinct from the amber
+  // replay banner — sits above it in the DOM and shows red when active.
+  function updateRiskBanner(r){
+    const el=$('risk-banner'); if(!el) return;
+    if(!r || !r.halted){ el.classList.remove('active'); return; }
+    el.classList.add('active');
+    const reasons=[];
+    if(r.session_halted) reasons.push('SESSION-DD: '+(r.session_halt_reason||'?'));
+    if(r.peak_halt_reason) reasons.push('PEAK-DD: '+r.peak_halt_reason);
+    if(r.black_swan_cooldown_until){
+      const until=new Date(r.black_swan_cooldown_until);
+      const remS=Math.max(0,Math.round((until-new Date())/1000));
+      reasons.push('BLACK-SWAN: cooldown '+remS+'s');
+    }
+    $('risk-reason').textContent=reasons.join(' · ')||'halted';
+    const dd=r.dd_pct_from_peak||0;
+    const slip=r.slippage_usd_total||0;
+    const fee=r.fee_usd_total||0;
+    $('risk-meta').textContent=
+      `dd=${dd.toFixed(2)}% · cap=${(r.max_session_dd_pct||0).toFixed(1)}% · `+
+      `slip=$${slip.toFixed(2)} · fee=$${fee.toFixed(2)}`;
+    const btn=$('risk-unlock-btn');
+    if(btn) btn.style.display=r.session_halted?'inline-block':'none';
+  }
+
+  async function riskManualUnlock(){
+    if(!confirm('Manually unlock the session DD halt?\nMake sure you have done a post-mortem.')) return;
+    try{
+      const res=await fetch('/api/risk/unlock',{method:'POST'});
+      if(!res.ok) alert('unlock failed: '+res.status);
+    }catch(e){ alert('unlock error: '+e.message); }
   }
 
   // Adaptive Temporal Weighting heatmap: rows = 17 tribes + a top "Global"
@@ -1139,8 +1205,21 @@
       // Shorten reason: strip leading "council " prefix for space
       const reason=(tr.reason||'').replace(/^council /,'').replace(/emove=[^\s]+ ?/,'').slice(0,28);
       const emoveStr=tr.expected_move_bps!=null?`entry emove ${tr.expected_move_bps>=0?'+':''}${tr.expected_move_bps.toFixed(1)}bps · conf ${(tr.confidence*100).toFixed(0)}%`:'';
+      // Phase 11 — slippage / fee / intended-vs-realized in the row tooltip
+      // so the per-trade friction story is one hover away.
+      const ib=tr.intended_bps??null, rb=tr.realized_bps??null;
+      const drag=(ib!=null&&rb!=null)?(ib-rb).toFixed(1):'?';
+      const slipUsd=tr.total_slip_usd??0, feeUsd=tr.total_fee_usd??tr.fee_usd??0;
+      const clipBadge=tr.capacity_clipped?' <span class="th-fee-badge" style="background:rgba(200,168,75,.15);color:var(--accent)">CLIP</span>':'';
+      const tt=`reason: ${tr.reason||''}\n`+
+        `intended ${ib!=null?ib.toFixed(1):'?'}bps · realized ${rb!=null?rb.toFixed(1):'?'}bps · drag ${drag}bps\n`+
+        `slip $${(+slipUsd).toFixed(2)} (entry ${(tr.entry_slip_bps??0).toFixed(1)}bps + exit ${(tr.exit_slip_bps??0).toFixed(1)}bps)\n`+
+        `fee $${(+feeUsd).toFixed(2)}`+
+        (tr.frictionless_pnl_usd!=null?`\nfrictionless pnl $${(+tr.frictionless_pnl_usd).toFixed(2)}`:'')+
+        (tr.capacity_clipped?'\ncapacity clipped at entry':'');
       const row=document.createElement('div');
       row.className='th-row '+(isLong?'long':'short');
+      row.title=tt;
       row.innerHTML=
         `<span class="th-badge">${isLong?'L':'S'}</span>`+
         `<span class="th-body">`+
@@ -1154,7 +1233,7 @@
             `<span class="th-emove">${emoveStr}</span>`+
           `</span>`+
         `</span>`+
-        `<span class="th-net ${netPos?'pos':'neg'}">${netStr}${feeStr}</span>`;
+        `<span class="th-net ${netPos?'pos':'neg'}">${netStr}${feeStr}${clipBadge}</span>`;
       root.appendChild(row);
     }
   }
@@ -1779,6 +1858,7 @@
   window.replayPause  = replayPause;
   window.replayStop   = replayStop;
   window.replaySpeed  = replaySpeed;
+  window.riskManualUnlock = riskManualUnlock;
 })();
 
 async function exportReport(){

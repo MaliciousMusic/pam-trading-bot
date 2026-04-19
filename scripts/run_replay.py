@@ -63,6 +63,10 @@ def main() -> None:
     ap.add_argument("--starting-equity", type=float, default=None,
                     help="starting equity USD (overrides config base_capital_usd). "
                          "Used by week orchestrator to carry equity across days.")
+    ap.add_argument("--tribes-dir", default=None, type=Path,
+                    help="path to tribe YAMLs for this variant; defaults to "
+                         "config/tribes/. Phase 13 evolutionary loop points "
+                         "this at config/tribes_variants/<gen>/variant_<id>/.")
     args = ap.parse_args()
 
     bars = funding = None
@@ -88,6 +92,7 @@ def main() -> None:
         bars=bars,
         funding=funding,
         starting_equity_usd=args.starting_equity,
+        tribes_dir=args.tribes_dir,
     ))
 
     print()

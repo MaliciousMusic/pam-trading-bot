@@ -89,6 +89,15 @@ async def main() -> None:
         max_daily_loss_pct=float(risk_cfg.get("max_daily_loss_pct", 0.0)),
         slippage_size_k=float(exec_cfg.get("slippage_size_k", 0.0)),
         slippage_ref_notional_usd=float(exec_cfg.get("slippage_ref_notional_usd", 100_000.0)),
+        max_session_dd_pct=float(risk_cfg.get("max_session_dd_pct", 0.0)),
+        max_position_loss_pct=float(risk_cfg.get("max_position_loss_pct", 0.0)),
+        black_swan_sigma=float(risk_cfg.get("black_swan_sigma", 0.0)),
+        black_swan_window_s=float(risk_cfg.get("black_swan_window_s", 30.0)),
+        black_swan_sigma_window_s=float(risk_cfg.get("black_swan_sigma_window_s", 300.0)),
+        black_swan_cooldown_s=float(risk_cfg.get("black_swan_cooldown_s", 600.0)),
+        slippage_cap_bps=float(exec_cfg.get("slippage_cap_bps", 30.0)),
+        book_depth_frac_cap=float(exec_cfg.get("book_depth_frac_cap", 0.25)),
+        half_spread_bps=float(exec_cfg.get("half_spread_bps", 0.5)),
     )
     auditor = ForecastAuditor()
     proj_cfg = cfg.get("projector", {}) or {}
@@ -174,7 +183,8 @@ async def main() -> None:
                      auditor=auditor, calibrator=calibrator,
                      kernel_calibrator=kernel_calibrator,
                      regime_classifier=regime_classifier, state=state,
-                     watch_controller=watch_controller)
+                     watch_controller=watch_controller,
+                     executor=executor)
 
     host = cfg.get("ui", {}).get("host", "127.0.0.1")
     port = int(cfg.get("ui", {}).get("port", 8765))

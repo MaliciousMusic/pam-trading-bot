@@ -181,6 +181,9 @@ class WatchEngine:
             await asyncio.sleep(0)
         regime = self.regime_classifier.classify(self.state)
         self.projector.regime_multiplier = regime.multiplier
+        self.projector.regime_label = (
+            regime.label.value if regime.label else "normal"
+        )
         agg = aggregate_votes(raw_votes, ts)
         await asyncio.sleep(0)
         forecast = self.projector.project(self.state)
@@ -191,6 +194,10 @@ class WatchEngine:
                 self.state.last_funding_rate or 0.0,
                 float(self.tick_seconds),
             )
+        # Phase 10 — black-swan detonation stop (must precede forecast exits
+        # because a 5σ move outpaces the projector's reaction window).
+        if hasattr(self.executor, "check_black_swan"):
+            self.executor.check_black_swan(ts, self.state)
         self.executor.evaluate_exits(
             ts, self.state.last_price, forecast, regime_label=regime.label,
         )
@@ -268,6 +275,8 @@ class WatchEngine:
             "calibration": None,
             "kernel": None,
             "regime": {"label": regime.label.value, "multiplier": regime.multiplier},
+            "risk": (self.executor.risk_snapshot()
+                     if hasattr(self.executor, "risk_snapshot") else None),
         })
 
         if self._emit_replay_state and self._ticks % _REPLAY_STATE_EVERY == 0:

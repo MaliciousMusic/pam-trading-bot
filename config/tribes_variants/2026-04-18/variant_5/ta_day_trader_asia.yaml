@@ -1,0 +1,140 @@
+id: ta_day_trader_asia
+name: TA Day Trader (Asia desk)
+description: "Regional sub-archetype of the generic TA day trader, concentrated in\
+  \ Asian trading hours (UTC 23-08). Tokyo/Seoul/Singapore/HK screen traders \u2014\
+  \ faster rhythm, shorter range windows than their EU/US counterparts (Nikkei/Hang\
+  \ Seng-influenced shorter trading cadence). Represents the regional-specialist subset\
+  \ that trades BTCUSDT purely during Asia hours, in addition to the global ta_day_trader\
+  \ cohort."
+demographics:
+  capital_band_usd:
+  - 2000.0
+  - 30000.0
+  count_estimate: 15000
+  experience_years:
+  - 1.0
+  - 8.0
+  jurisdiction:
+  - APAC
+hardware:
+  tier: workstation
+  typical_latency_ms: 250
+  uptime: continuous
+  specs:
+    screens: 2-3
+    connectivity: fiber
+software:
+  platforms:
+  - binance_pro
+  - bybit
+  - okx
+  - bitget
+  tools:
+  - tradingview_premium
+  - tradingview_alerts
+  - custom_jp_indicators
+  charting: advanced
+  order_types_used:
+  - limit
+  - stop_limit
+  - oco
+  data_feeds:
+  - ohlcv
+  - orderbook
+  - funding
+strategy:
+  family: breakout_trader
+  params:
+    range_window_seconds: 240
+    break_buffer_bps: 5
+    hold_seconds: 180
+  style_notes: ''
+attention:
+  kinds:
+  - trade
+  - funding
+  tags:
+  - price
+  - taker_buy
+  - taker_sell
+  - mark_price
+  ignored_tags:
+  - liq_long
+  - liq_short
+  min_severity: 0.2
+personality:
+  risk_tolerance: 0.55
+  fomo: 0.4
+  panic: 0.3
+  patience: 0.55
+  herding: 0.4
+  reaction_mu_seconds: 90.0
+  reaction_sigma_seconds: 150.0
+flow:
+  weight: 0.008909757175240894
+  activation_rate: 0.22
+  typical_hold_seconds:
+  - 240
+  - 2400
+  default_conviction: 0.6
+  cooldown_seconds: 60
+  strong_vote_conviction: 0.3
+disposition:
+  idle_bias: 0.0
+  idle_conviction: 0.05
+circadian:
+  timezone_label: APAC (Tokyo/Seoul/HK/SG)
+  presence_by_hour_utc:
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 0.95
+  - 0.9
+  - 0.8
+  - 0.6
+  - 0.35
+  - 0.2
+  - 0.15
+  - 0.15
+  - 0.15
+  - 0.15
+  - 0.15
+  - 0.15
+  - 0.15
+  - 0.2
+  - 0.25
+  - 0.35
+  - 0.5
+  - 0.75
+  - 0.9
+indicators:
+  rsi:
+    window_s: 240
+    overbought: 72
+    oversold: 28
+    action: follow
+    weight: 0.8
+  price_momentum:
+    window_s: 120
+    ref_bps: 15
+    action: follow
+    weight: 0.7
+  taker_imbalance:
+    window_s: 120
+    reference_usd: 500000
+    action: follow
+    weight: 0.6
+  volatility_regime:
+    window_s: 480
+    low_bps: 10
+    high_bps: 60
+    prefer: high
+    weight: 0.4
+indicator_weight: 0.5
+indicator_regime_range: 0.3
+indicator_regime_low_bps: 12.0
+indicator_regime_high_bps: 70.0
+indicator_regime_prefer: high
+indicator_regime_window_s: 480.0

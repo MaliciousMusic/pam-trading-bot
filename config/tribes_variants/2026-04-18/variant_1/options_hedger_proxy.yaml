@@ -1,0 +1,132 @@
+id: options_hedger_proxy
+name: Options Dealer Hedge Proxy
+description: "Synthetic proxy for options-dealer hedge flow. Without Deribit book\
+  \ access on the free tier, this archetype reads realized-vol regime + time-of-day\
+  \ as a proxy for the dominant hedging pattern: in calm tape dealers are assumed\
+  \ LONG gamma (fade moves), in violent tape they're assumed SHORT gamma (amplify\
+  \ moves). Weighted by daily hedge windows \u2014 Asia open (UTC 23-02) and US open\
+  \ (UTC 13-15). Explicitly a PROXY \u2014 treated as one voice in the council, not\
+  \ truth."
+demographics:
+  capital_band_usd:
+  - 100000.0
+  - 10000000.0
+  count_estimate: 100
+  experience_years:
+  - 5.0
+  - 25.0
+  jurisdiction:
+  - NA
+  - EU
+  - APAC
+hardware:
+  tier: colo
+  typical_latency_ms: 5
+  uptime: continuous
+  specs:
+    screens: 4-8
+    connectivity: colo
+software:
+  platforms:
+  - deribit
+  - binance_pro
+  - bybit
+  tools:
+  - custom_dealer_risk
+  - proprietary_gvv_model
+  - vol_surface_live
+  charting: custom
+  order_types_used:
+  - limit
+  - post_only_limit
+  - vwap
+  - twap
+  data_feeds:
+  - options_chain
+  - vol_surface
+  - spot_perp_futures
+strategy:
+  family: options_hedger_proxy
+  params:
+    move_window_s: 900
+    move_reference_bps: 20.0
+    vol_window_s: 300
+    flip_vol_bps: 60.0
+    hold_seconds: 1800
+  style_notes: ''
+attention:
+  kinds:
+  - trade
+  - book
+  tags:
+  - trade
+  - mark_price
+  ignored_tags:
+  - news
+  - social
+  min_severity: 0.0
+personality:
+  risk_tolerance: 0.5
+  fomo: 0.02
+  panic: 0.08
+  patience: 0.7
+  herding: 0.05
+  reaction_mu_seconds: 0.5
+  reaction_sigma_seconds: 1.0
+flow:
+  weight: 0.007668298035213337
+  activation_rate: 0.15
+  typical_hold_seconds:
+  - 600
+  - 7200
+  default_conviction: 0.55
+  cooldown_seconds: 120
+  strong_vote_conviction: 0.3
+disposition:
+  idle_bias: 0.0
+  idle_conviction: 0.05
+circadian:
+  timezone_label: 2x daily hedge windows
+  presence_by_hour_utc:
+  - 1.0
+  - 1.0
+  - 1.0
+  - 0.7
+  - 0.5
+  - 0.4
+  - 0.4
+  - 0.4
+  - 0.4
+  - 0.5
+  - 0.6
+  - 0.7
+  - 0.9
+  - 1.0
+  - 1.0
+  - 1.0
+  - 0.7
+  - 0.5
+  - 0.45
+  - 0.4
+  - 0.45
+  - 0.55
+  - 0.8
+  - 1.0
+indicators:
+  volatility_regime:
+    window_s: 300
+    low_bps: 15
+    high_bps: 80
+    prefer: low
+    weight: 0.6
+  price_momentum:
+    window_s: 900
+    ref_bps: 20
+    action: fade
+    weight: 0.4
+indicator_weight: 0.3
+indicator_regime_range: 0.0
+indicator_regime_low_bps: 15.0
+indicator_regime_high_bps: 60.0
+indicator_regime_prefer: high
+indicator_regime_window_s: 300.0

@@ -27,7 +27,7 @@ Fees and slippage are charged on both entry and exit of every position.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from loguru import logger
@@ -55,6 +55,16 @@ class PaperExecutor(Executor):
         max_daily_loss_pct: float = 0.0,
         slippage_size_k: float = 0.0,
         slippage_ref_notional_usd: float = 100_000.0,
+        max_session_dd_pct: float = 0.0,
+        max_position_loss_pct: float = 0.0,
+        black_swan_sigma: float = 0.0,
+        black_swan_cooldown_s: float = 600.0,
+        black_swan_window_s: float = 30.0,
+        black_swan_sigma_window_s: float = 300.0,
+        slippage_cap_bps: float = 30.0,
+        book_depth_frac_cap: float = 0.25,
+        half_spread_bps: float = 0.5,
+        depth_ref_usd: float = 1_000_000.0,
     ) -> None:
         self._equity = starting_equity_usd
         self._start_equity = starting_equity_usd
@@ -88,6 +98,43 @@ class PaperExecutor(Executor):
         self._day_anchor_date = None       # type: ignore[assignment]
         self._day_anchor_equity = starting_equity_usd
         self._halt_reason: str | None = None
+
+        # Phase 10 — session drawdown circuit breaker. Unlike the peak-dd
+        # halt above (which auto-clears once equity recovers), session-dd
+        # HARD-CLOSES all positions the moment it trips and remains halted
+        # until `manual_unlock()` is called. Forces a post-mortem before
+        # resuming trading. Default 0.0 = disabled.
+        self.max_session_dd_pct = max(0.0, float(max_session_dd_pct))
+        self._session_halted: bool = False
+        self._session_halt_ts: datetime | None = None
+        self._session_halt_reason: str | None = None
+
+        # Phase 10 — per-trade hard SL floor. Closes a position as soon as
+        # its unrealized loss exceeds `max_position_loss_pct` of current
+        # equity. This is the last line of defense against a long tail —
+        # overrides all peak-favorable / shape-aware keep-open logic.
+        self.max_position_loss_pct = max(0.0, float(max_position_loss_pct))
+
+        # Phase 10 — black-swan 30s price monitor. Rolling price deltas
+        # over `black_swan_window_s` are compared to `black_swan_sigma_window_s`-
+        # realized stddev; when |Δ| > sigma × ref_sigma we close all positions
+        # and suspend new opens for `black_swan_cooldown_s`. sigma=0 disables.
+        self.black_swan_sigma = max(0.0, float(black_swan_sigma))
+        self.black_swan_window_s = max(5.0, float(black_swan_window_s))
+        self.black_swan_sigma_window_s = max(60.0, float(black_swan_sigma_window_s))
+        self.black_swan_cooldown_s = max(0.0, float(black_swan_cooldown_s))
+        self._black_swan_cooldown_until: datetime | None = None
+        self._black_swan_last_fired: datetime | None = None
+
+        # Phase 11 — realistic execution knobs.
+        self.slippage_cap_bps = max(0.0, float(slippage_cap_bps))
+        self.book_depth_frac_cap = max(0.0, float(book_depth_frac_cap))
+        self.half_spread_bps = max(0.0, float(half_spread_bps))
+        self.depth_ref_usd = max(1.0, float(depth_ref_usd))
+        # Running totals for report augmentation.
+        self._slippage_usd_total = 0.0
+        self._fee_usd_total = 0.0
+        self._frictionless_equity = starting_equity_usd
 
         # Multi-layer exit overlay. All layers opt-in via settings; neutral
         # defaults preserve the sign-flip-only behavior.
@@ -127,6 +174,108 @@ class PaperExecutor(Executor):
     def positions(self) -> list[Position]:
         return self._positions
 
+    # Phase 10 — black-swan hook exposed for the engine to call each tick
+    # BEFORE forecast-driven exits so a detonating move doesn't let the
+    # projector's slow-moving forecast stall on stale state.
+    def check_black_swan(
+        self, ts: datetime, state: "MarketState"
+    ) -> str | None:
+        """Scan MarketState's price series for a > σ_ref × N move in the
+        last `black_swan_window_s`. When tripped, close all positions at the
+        current mark and arm a cooldown. Returns the halt reason if fired,
+        else None. Cooldown auto-clears after `black_swan_cooldown_s`."""
+        if self.black_swan_sigma <= 0:
+            return None
+        # Cooldown still active?
+        if self._black_swan_cooldown_until is not None:
+            if ts < self._black_swan_cooldown_until:
+                return (f"black-swan cooldown until "
+                        f"{self._black_swan_cooldown_until.isoformat()}")
+            self._black_swan_cooldown_until = None
+        prices = getattr(state, "prices", None)
+        if prices is None or not prices._data:
+            return None
+        cur_price = state.last_price
+        if not cur_price or cur_price <= 0:
+            return None
+        # Find the price closest to (now - window_s).
+        now_t = ts.timestamp()
+        target = now_t - self.black_swan_window_s
+        oldest_in_window: float | None = None
+        for t, v in prices._data:
+            if t >= target:
+                oldest_in_window = v
+                break
+        if oldest_in_window is None or oldest_in_window <= 0:
+            return None
+        delta_bps = abs((cur_price - oldest_in_window) / oldest_in_window * 10_000.0)
+        # Reference σ — realized stddev of bps returns over the sigma window.
+        returns_bps: list[float] = []
+        prev: tuple[float, float] | None = None
+        sigma_cutoff = now_t - self.black_swan_sigma_window_s
+        for t, v in prices._data:
+            if t < sigma_cutoff or v <= 0:
+                prev = (t, v)
+                continue
+            if prev is not None and prev[1] > 0:
+                returns_bps.append((v - prev[1]) / prev[1] * 10_000.0)
+            prev = (t, v)
+        if len(returns_bps) < 5:
+            return None
+        mean = sum(returns_bps) / len(returns_bps)
+        var = sum((x - mean) ** 2 for x in returns_bps) / len(returns_bps)
+        ref_sigma = var ** 0.5
+        if ref_sigma <= 0:
+            return None
+        threshold = self.black_swan_sigma * ref_sigma
+        if delta_bps < threshold:
+            return None
+        # Fired. Close every open position at the mark and arm cooldown.
+        reason = (f"black-swan Δ30s={delta_bps:.1f}bps > "
+                  f"{self.black_swan_sigma:.1f}×σ_5m={threshold:.1f}bps")
+        self._black_swan_last_fired = ts
+        self._black_swan_cooldown_until = ts + timedelta(seconds=self.black_swan_cooldown_s)
+        for p in list(self._positions):
+            self._close_position(p, cur_price, ts, reason)
+        self._positions = []
+        logger.warning("BLACK-SWAN  {}  cooldown until {}", reason,
+                       self._black_swan_cooldown_until.isoformat())
+        return reason
+
+    def manual_unlock(self) -> None:
+        """Operator-driven clear of the session-drawdown halt. Leaves the
+        peak-drawdown auto-clear halt untouched (it manages itself)."""
+        if self._session_halted:
+            logger.warning("[session-dd] manually unlocked (was: {})",
+                           self._session_halt_reason)
+        self._session_halted = False
+        self._session_halt_ts = None
+        self._session_halt_reason = None
+
+    @property
+    def session_halted(self) -> bool:
+        return self._session_halted
+
+    @property
+    def session_halt_reason(self) -> str | None:
+        return self._session_halt_reason
+
+    @property
+    def black_swan_active(self) -> bool:
+        return self._black_swan_cooldown_until is not None
+
+    @property
+    def slippage_usd_total(self) -> float:
+        return self._slippage_usd_total
+
+    @property
+    def fee_usd_total(self) -> float:
+        return self._fee_usd_total
+
+    @property
+    def frictionless_equity_usd(self) -> float:
+        return self._frictionless_equity
+
     def evaluate_exits(
         self,
         ts: datetime,
@@ -146,6 +295,16 @@ class PaperExecutor(Executor):
         max_hold backstop in `mark_to_market` is the last line of defense.
         """
         if price is None or price <= 0 or not self._positions:
+            return
+        # Phase 10 — if the session-DD halt just armed, close everything
+        # at the mark so the halt actually protects equity (the default
+        # refuse-new-opens halt lets existing positions keep bleeding).
+        self._refresh_risk_state(ts)
+        if self._session_halted:
+            reason = f"session halt: {self._session_halt_reason}"
+            for p in list(self._positions):
+                self._close_position(p, price, ts, reason)
+            self._positions = []
             return
         emove = forecast.expected_move_bps
         conf = getattr(forecast, "confidence", 0.0)
@@ -176,6 +335,20 @@ class PaperExecutor(Executor):
     ) -> str | None:
         """Return a close-reason string if any exit layer fires, else None."""
         side_sign = 1.0 if p.side is Side.BUY else -1.0
+        unreal_bps_pre = side_sign * (price - p.entry_price) / p.entry_price * 1e4
+
+        # Layer 0 — hard SL floor (Phase 10). Worst-case per-position loss is
+        # capped at `max_position_loss_pct` of current equity. Converts that
+        # dollar cap into a bps-of-notional threshold and closes when reached.
+        # This takes priority over all shape-aware / peak-favorable holds.
+        if self.max_position_loss_pct > 0 and p.size_usd > 0:
+            max_loss_usd = self._equity * self.max_position_loss_pct / 100.0
+            if max_loss_usd > 0:
+                floor_bps = -(max_loss_usd / p.size_usd) * 1e4
+                if unreal_bps_pre <= floor_bps:
+                    return (f"hard SL floor {unreal_bps_pre:+.1f}bps <= "
+                            f"{floor_bps:+.1f}bps (cap "
+                            f"{self.max_position_loss_pct:.2f}% eq)")
 
         # Layer 1 — sign flip beyond the (regime-scaled) dead zone, gated by
         # flip confidence. Weak flips must persist to close.
@@ -290,31 +463,70 @@ class PaperExecutor(Executor):
         if price is None or price <= 0:
             return
         if intent.action == "open_long":
-            self._open(Side.BUY, intent, price)
+            self._open(Side.BUY, intent, price, state=state)
         elif intent.action == "open_short":
-            self._open(Side.SELL, intent, price)
+            self._open(Side.SELL, intent, price, state=state)
         elif intent.action == "close":
             ts = intent.ts
             for p in list(self._positions):
-                self._close_position(p, price, ts, intent.reason or "manual")
+                self._close_position(p, price, ts, intent.reason or "manual", state=state)
             self._positions = []
         # "hold" → nothing
 
     # -- internals -------------------------------------------------------
 
-    def _fill_price(self, mark: float, taker_side: Side, size_usd: float = 0.0) -> float:
-        """Size-scaled slippage. Baseline is `slippage_bps`; each increment of
-        `slippage_ref_notional_usd` adds another `slippage_bps × slippage_size_k`
-        of adverse slippage. With `slippage_size_k=0` this collapses to the
-        flat-bps model for backward compat."""
+    def _fill_price(self, mark: float, taker_side: Side, size_usd: float = 0.0,
+                    state: "MarketState | None" = None) -> tuple[float, float]:
+        """Book-depth-shaded fill (Phase 11). Returns `(fill_price, slippage_bps)`.
+
+        Layers, in order:
+          - Half-spread charge on entry/exit (always paid, one side each).
+          - Linear-within-5bps depth impact: when we know the 5-bp book depth
+            on the taker side, slippage_bps = 5 · size_usd / side_depth_5bps_usd
+            (i.e. eating the whole 5 bp band would cost 5 bp of slippage).
+            Falls back to a size-scaled legacy model when depth is missing.
+          - Capped at `slippage_cap_bps` so a broken book snapshot can't
+            report a 10,000 bp fill.
+
+        Backwards-compat: existing callers that do `fill = _fill_price(...)`
+        still work — Python tuples unpack on assignment so we keep the 2-arg
+        shape by returning the composite; historical single-float paths
+        were updated to use the tuple explicitly below.
+        """
         sign = 1 if taker_side is Side.BUY else -1
-        eff_bps = self.slippage_bps
-        if self.slippage_size_k > 0 and size_usd > 0:
-            eff_bps *= 1.0 + self.slippage_size_k * (size_usd / self.slippage_ref_notional_usd)
-        return mark * (1 + sign * eff_bps / 10_000.0)
+        side_depth = None
+        if state is not None:
+            side_depth = (state.ask_depth_5bps_usd if taker_side is Side.BUY
+                          else state.bid_depth_5bps_usd)
+        depth_bps = 0.0
+        if side_depth and side_depth > 0 and size_usd > 0:
+            # Book-depth model: eating the entire 5 bps band costs 5 bps of
+            # adverse slippage. Scale linearly below that; clip above.
+            depth_bps = 5.0 * size_usd / float(side_depth)
+        else:
+            # Legacy size-scaled fallback (kept so replay runs with no L2
+            # feed still produce reasonable slippage numbers).
+            depth_bps = self.slippage_bps
+            if self.slippage_size_k > 0 and size_usd > 0:
+                depth_bps *= 1.0 + self.slippage_size_k * (
+                    size_usd / self.slippage_ref_notional_usd
+                )
+        total_bps = min(self.slippage_cap_bps, self.half_spread_bps + depth_bps)
+        return mark * (1 + sign * total_bps / 10_000.0), total_bps
 
     def _fee(self, notional_usd: float) -> float:
         return notional_usd * self.fee_rate_bps / 10_000.0
+
+    def _book_capacity_usd(self, side: Side, state: "MarketState | None") -> float | None:
+        """Return the max order size, in USD, that stays within the
+        configured `book_depth_frac_cap` × side_depth_5bps_usd. None when
+        the book snapshot isn't available (no cap enforced)."""
+        if state is None or self.book_depth_frac_cap <= 0:
+            return None
+        d = state.ask_depth_5bps_usd if side is Side.BUY else state.bid_depth_5bps_usd
+        if not d or d <= 0:
+            return None
+        return float(d) * self.book_depth_frac_cap
 
     def _refresh_risk_state(self, ts: datetime | None = None) -> None:
         """Update session peak + daily anchor, evaluate halts.
@@ -326,6 +538,20 @@ class PaperExecutor(Executor):
         # Ratchet session peak.
         if self._equity > self._peak_equity:
             self._peak_equity = self._equity
+
+        # Phase 10 — session-DD hard halt. Once armed, stays armed until
+        # `manual_unlock()` is called (operator post-mortem gate).
+        if self.max_session_dd_pct > 0 and not self._session_halted:
+            session_trigger = self._peak_equity * (1.0 - self.max_session_dd_pct / 100.0)
+            if self._equity <= session_trigger:
+                self._session_halted = True
+                self._session_halt_ts = ts or datetime.utcnow()
+                self._session_halt_reason = (
+                    f"session DD ${self._equity:,.2f} <= ${session_trigger:,.2f} "
+                    f"(peak ${self._peak_equity:,.2f} - "
+                    f"{self.max_session_dd_pct:.1f}%)"
+                )
+                logger.warning("[session-dd] HALTED  {}", self._session_halt_reason)
         # Daily anchor — set on first call, reset when UTC date changes.
         try:
             today = (ts or datetime.utcnow()).date()
@@ -371,10 +597,43 @@ class PaperExecutor(Executor):
     def halt_reason(self) -> str | None:
         return self._halt_reason
 
+    def risk_snapshot(self) -> dict:
+        """Per-tick risk state surfaced to the UI for the HALTED banner."""
+        return {
+            "halted": bool(self._halt_reason or self._session_halted
+                           or self._black_swan_cooldown_until is not None),
+            "peak_halt_reason": self._halt_reason,
+            "session_halted": self._session_halted,
+            "session_halt_reason": self._session_halt_reason,
+            "session_halt_ts": (self._session_halt_ts.isoformat()
+                                if self._session_halt_ts else None),
+            "black_swan_cooldown_until": (
+                self._black_swan_cooldown_until.isoformat()
+                if self._black_swan_cooldown_until else None
+            ),
+            "peak_equity": self._peak_equity,
+            "equity": self._equity,
+            "dd_pct_from_peak": (
+                (self._peak_equity - self._equity) / self._peak_equity * 100.0
+                if self._peak_equity > 0 else 0.0
+            ),
+            "max_session_dd_pct": self.max_session_dd_pct,
+            "max_position_loss_pct": self.max_position_loss_pct,
+            "black_swan_sigma": self.black_swan_sigma,
+            "slippage_usd_total": self._slippage_usd_total,
+            "fee_usd_total": self._fee_usd_total,
+            "frictionless_equity_usd": self._frictionless_equity,
+        }
+
     def _capacity_check(self, size_usd: float) -> str | None:
         self._refresh_risk_state()
         if self._halt_reason is not None:
             return f"halted: {self._halt_reason}"
+        if self._session_halted:
+            return f"session-halted: {self._session_halt_reason}"
+        if self._black_swan_cooldown_until is not None:
+            return (f"black-swan cooldown until "
+                    f"{self._black_swan_cooldown_until.isoformat()}")
         if len(self._positions) >= self.max_concurrent_positions:
             return f"portfolio full ({len(self._positions)}/{self.max_concurrent_positions})"
         cap = self._equity * self.max_total_notional_pct / 100.0
@@ -383,26 +642,53 @@ class PaperExecutor(Executor):
                     f"{cap:,.0f} ({self.max_total_notional_pct:.0f}% of equity)")
         return None
 
-    def _open(self, side: Side, intent: TradeIntent, mark: float) -> None:
-        reject = self._capacity_check(intent.size_usd)
+    def _open(self, side: Side, intent: TradeIntent, mark: float,
+              state: "MarketState | None" = None) -> None:
+        # Phase 11 — capacity clip BEFORE the notional/halt checks so we
+        # emit a CAPACITY_CLIPPED event even if the clipped size would have
+        # tripped other caps.
+        requested_size = intent.size_usd
+        clipped = False
+        clip_note = ""
+        cap_usd = self._book_capacity_usd(side, state)
+        size_usd = requested_size
+        if cap_usd is not None and size_usd > cap_usd:
+            clipped = True
+            clip_note = (f"book clip {size_usd:,.0f}→{cap_usd:,.0f} "
+                         f"(≤{self.book_depth_frac_cap:.0%} × 5bp depth)")
+            size_usd = cap_usd
+            if size_usd <= 0:
+                self._log({
+                    "event": "capacity_rejected", "ts": intent.ts,
+                    "side": side.value, "size_usd_requested": requested_size,
+                    "reason": "book depth = 0",
+                })
+                return
+        reject = self._capacity_check(size_usd)
         if reject is not None:
             logger.info("SKIP  {:<5} ${:>8.2f}  {}", side.value.upper(),
-                        intent.size_usd, reject)
+                        size_usd, reject)
             self._log({
                 "event": "skip", "ts": intent.ts, "side": side.value,
-                "size_usd": intent.size_usd, "reason": reject,
+                "size_usd": size_usd, "reason": reject,
+                "size_usd_requested": requested_size,
             })
             return
-        fill = self._fill_price(mark, side, intent.size_usd)
-        fee = self._fee(intent.size_usd)
+        intended_mark = mark
+        fill, slip_bps = self._fill_price(mark, side, size_usd, state=state)
+        intended_pnl_bps_cost = slip_bps  # entry slippage contributes 1× to round-trip
+        slip_usd = size_usd * slip_bps / 10_000.0
+        fee = self._fee(size_usd)
         self._equity -= fee
+        self._slippage_usd_total += slip_usd
+        self._fee_usd_total += fee
         self._refresh_risk_state(intent.ts)
         pid = f"t{self._next_id:04d}"
         self._next_id += 1
         pos = Position(
             id=pid,
             side=side,
-            size_usd=intent.size_usd,
+            size_usd=size_usd,
             entry_price=fill,
             entry_ts=intent.ts,
             tp_price=0.0,
@@ -412,46 +698,85 @@ class PaperExecutor(Executor):
             confidence=intent.confidence,
             peak_favorable_s=intent.peak_favorable_s,
         )
+        # Stash entry-side metadata on the position for later realized-vs-
+        # intended accounting at close time. Using a dict-attached sidecar
+        # keeps the dataclass untouched (slots=True prohibits new fields).
+        self._entry_meta: dict = getattr(self, "_entry_meta", {})
+        self._entry_meta[pid] = {
+            "intended_mark": intended_mark,
+            "entry_slip_bps": slip_bps,
+            "entry_slip_usd": slip_usd,
+            "entry_fee_usd": fee,
+            "requested_size_usd": requested_size,
+            "clipped": clipped,
+        }
         self._positions.append(pos)
         logger.info(
             "OPEN  {} {:<5} ${:>8.2f} @ {:.2f}  emove={:+.1f}bps conf={:.2f}"
-            "  fee=${:.2f}  open={} eq=${:.2f}",
-            pid, side.value.upper(), intent.size_usd, fill,
-            intent.expected_move_bps, intent.confidence, fee,
-            len(self._positions), self._equity,
+            "  slip={:.1f}bps fee=${:.2f}  open={} eq=${:.2f}{}",
+            pid, side.value.upper(), size_usd, fill,
+            intent.expected_move_bps, intent.confidence,
+            slip_bps, fee, len(self._positions), self._equity,
+            f"  [{clip_note}]" if clipped else "",
         )
         self._log({
             "event": "open", "ts": intent.ts, "position_id": pid, "side": side.value,
-            "size_usd": intent.size_usd, "fill_price": fill, "mark_price": mark,
-            "fee_usd": fee, "equity_usd": self._equity, "reason": intent.reason,
+            "size_usd": size_usd, "fill_price": fill, "mark_price": mark,
+            "fee_usd": fee, "slippage_bps": slip_bps, "slippage_usd": slip_usd,
+            "equity_usd": self._equity, "reason": intent.reason,
             "expected_move_bps": intent.expected_move_bps, "confidence": intent.confidence,
             "open_positions": len(self._positions),
+            "size_usd_requested": requested_size, "capacity_clipped": clipped,
+            "capacity_note": clip_note,
         })
 
-    def _close_position(self, p: Position, mark: float, ts: datetime, reason: str) -> None:
+    def _close_position(self, p: Position, mark: float, ts: datetime, reason: str,
+                        state: "MarketState | None" = None) -> None:
         # Scrub per-position layer state before the close goes through so
         # these dicts never outlive the position they describe.
         self._flip_streak.pop(p.id, None)
         self._peak_bps.pop(p.id, None)
         exit_side = Side.SELL if p.side is Side.BUY else Side.BUY
-        fill = self._fill_price(mark, exit_side, p.size_usd)
+        fill, slip_bps_exit = self._fill_price(mark, exit_side, p.size_usd, state=state)
         if p.side is Side.BUY:
             pnl_usd = p.size_usd * (fill - p.entry_price) / p.entry_price
         else:
             pnl_usd = p.size_usd * (p.entry_price - fill) / p.entry_price
         fee = self._fee(p.size_usd)
+        slip_usd_exit = p.size_usd * slip_bps_exit / 10_000.0
+        self._slippage_usd_total += slip_usd_exit
+        self._fee_usd_total += fee
         self._equity += pnl_usd - fee
+        meta = getattr(self, "_entry_meta", {}).pop(p.id, None) if hasattr(self, "_entry_meta") else None
+        # Phase 11 — frictionless counterfactual PnL (no slippage, no fee) on
+        # both sides. Uses the intended mark at entry vs the current mark at
+        # close so the report can publish a "what the strategy would have
+        # earned with zero friction" equity curve.
+        intended_mark = (meta["intended_mark"] if meta else p.entry_price)
+        if p.side is Side.BUY:
+            frictionless_pnl = p.size_usd * (mark - intended_mark) / intended_mark
+        else:
+            frictionless_pnl = p.size_usd * (intended_mark - mark) / intended_mark
+        self._frictionless_equity += frictionless_pnl
         self._refresh_risk_state(ts)
         self.trades_completed += 1
         net = pnl_usd - fee
         held_s = (ts - p.entry_ts).total_seconds() if p.entry_ts else 0
         if net > 0:
             self.wins += 1
+        entry_slip_bps = float(meta["entry_slip_bps"]) if meta else 0.0
+        entry_slip_usd = float(meta["entry_slip_usd"]) if meta else 0.0
+        entry_fee_usd = float(meta["entry_fee_usd"]) if meta else 0.0
+        total_slip_usd = entry_slip_usd + slip_usd_exit
+        total_fee_usd = entry_fee_usd + fee
+        intended_bps = (((mark - intended_mark) / intended_mark * 10_000.0)
+                        if intended_mark > 0 else 0.0)
+        realized_bps = ((net / p.size_usd) * 10_000.0) if p.size_usd > 0 else 0.0
         logger.info(
             "CLOSE {} {:<5} ${:>8.2f} @ {:.2f}  pnl=${:+.2f}  fee=${:.2f}  "
-            "net=${:+.2f}  held={:.0f}s  eq=${:.2f}  ({})",
+            "slip=${:.2f}  net=${:+.2f}  held={:.0f}s  eq=${:.2f}  ({})",
             p.id, p.side.value.upper(), p.size_usd, fill, pnl_usd, fee,
-            net, held_s, self._equity, reason,
+            slip_usd_exit, net, held_s, self._equity, reason,
         )
         self._recent_trades.append({
             "id": p.id,
@@ -467,6 +792,17 @@ class PaperExecutor(Executor):
             "fee_killed": bool(pnl_usd > 0 and net <= 0),
             "expected_move_bps": p.expected_move_bps,
             "confidence": round(p.confidence, 3),
+            # Phase 11 — realized vs intended friction accounting.
+            "entry_slip_bps": round(entry_slip_bps, 2),
+            "exit_slip_bps": round(slip_bps_exit, 2),
+            "entry_slip_usd": round(entry_slip_usd, 4),
+            "exit_slip_usd": round(slip_usd_exit, 4),
+            "total_slip_usd": round(total_slip_usd, 4),
+            "total_fee_usd": round(total_fee_usd, 4),
+            "intended_bps": round(intended_bps, 2),
+            "realized_bps": round(realized_bps, 2),
+            "frictionless_pnl_usd": round(frictionless_pnl, 4),
+            "capacity_clipped": bool(meta and meta.get("clipped", False)),
         })
         if len(self._recent_trades) > 60:
             self._recent_trades.pop(0)
@@ -478,6 +814,10 @@ class PaperExecutor(Executor):
             "equity_usd": self._equity, "reason": reason,
             "trades_completed": self.trades_completed, "wins": self.wins,
             "open_positions": len(self._positions) - 1,
+            "entry_slip_bps": entry_slip_bps, "exit_slip_bps": slip_bps_exit,
+            "total_slip_usd": total_slip_usd, "total_fee_usd": total_fee_usd,
+            "intended_bps": intended_bps, "realized_bps": realized_bps,
+            "frictionless_equity_usd": self._frictionless_equity,
         })
 
     def _log(self, rec: dict[str, Any]) -> None:

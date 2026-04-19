@@ -34,6 +34,29 @@ class VariantMetrics:
     action_counts: dict[str, int]
     regime_counts: dict[str, int]
     tribe_net: dict[str, float]  # tribe_id -> avg signed conviction
+    # Phase 11 — realistic execution accounting. Surfaces the cost of
+    # friction so the user can compare frictionless vs realized PnL and
+    # see when capacity caps clipped a position. All zero when the run
+    # didn't produce any closed trades.
+    slippage_usd_total: float = 0.0
+    fee_usd_total: float = 0.0
+    intended_bps_avg: float = 0.0
+    realized_bps_avg: float = 0.0
+    bps_drag_avg: float = 0.0  # intended - realized (cost of friction in bps)
+    capacity_clipped_count: int = 0
+    capacity_rejected_count: int = 0
+    frictionless_end_equity: float = 0.0
+    frictionless_curve: list[float] = field(default_factory=list)
+    # Per-trade table for the report — newest last. Each row carries the
+    # raw fields the close ledger event already produces.
+    trades_table: list[dict] = field(default_factory=list)
+    # Phase 13 — lineage. Populated when the variant directory contains a
+    # `lineage.yaml` (i.e. it was spawned by the evolutionary loop). Plain
+    # variants from Phase 9 leave these at default.
+    lineage_generation: int = 0
+    lineage_parent_id: str | None = None
+    lineage_mutated_count: int = 0
+    lineage_notes: str = ""
 
     @property
     def equity_delta(self) -> float:
@@ -42,6 +65,17 @@ class VariantMetrics:
     @property
     def win_rate(self) -> float:
         return self.wins / self.trades if self.trades else 0.0
+
+    @property
+    def frictionless_delta(self) -> float:
+        if self.frictionless_end_equity == 0.0:
+            return 0.0
+        return self.frictionless_end_equity - self.start_equity
+
+    @property
+    def friction_cost_usd(self) -> float:
+        """Dollars left on the table to the venue — fees + slippage."""
+        return self.slippage_usd_total + self.fee_usd_total
 
 
 @dataclass
@@ -57,7 +91,9 @@ class RunMetrics:
         return len(self.variants) > 1
 
 
-def _load_variant(manifest_path: Path, decisions_path: Path) -> VariantMetrics:
+def _load_variant(manifest_path: Path, decisions_path: Path,
+                  ledger_dir: Path | None = None,
+                  variant_config_dir: Path | None = None) -> VariantMetrics:
     m = orjson.loads(manifest_path.read_bytes())
 
     rows: list[dict] = []
@@ -92,6 +128,83 @@ def _load_variant(manifest_path: Path, decisions_path: Path) -> VariantMetrics:
     step = max(1, len(rows) // N_PLOT)
     sampled = rows[::step]
 
+    # Phase 11 — drain the ledger for per-trade friction accounting.
+    slip_total = 0.0
+    fee_total = 0.0
+    intended_bps_sum = 0.0
+    realized_bps_sum = 0.0
+    n_closed = 0
+    capacity_clipped = 0
+    capacity_rejected = 0
+    frictionless_end = 0.0
+    frictionless_curve: list[float] = []
+    trades_table: list[dict] = []
+    if ledger_dir is not None and ledger_dir.exists():
+        for jp in sorted(ledger_dir.glob("*.jsonl")):
+            with jp.open("rb") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        ev = orjson.loads(line)
+                    except Exception:
+                        continue
+                    kind = ev.get("event")
+                    if kind == "close":
+                        slip_total += float(ev.get("total_slip_usd", 0.0))
+                        fee_total += float(ev.get("total_fee_usd",
+                                                  ev.get("fee_usd", 0.0)))
+                        intended_bps_sum += float(ev.get("intended_bps", 0.0))
+                        realized_bps_sum += float(ev.get("realized_bps", 0.0))
+                        frictionless_end = float(ev.get(
+                            "frictionless_equity_usd", frictionless_end))
+                        frictionless_curve.append(frictionless_end)
+                        n_closed += 1
+                        trades_table.append({
+                            "ts": ev.get("ts"),
+                            "side": ev.get("side"),
+                            "size_usd": ev.get("size_usd"),
+                            "entry_price": ev.get("entry_price"),
+                            "fill_price": ev.get("fill_price"),
+                            "intended_bps": ev.get("intended_bps", 0.0),
+                            "realized_bps": ev.get("realized_bps", 0.0),
+                            "entry_slip_bps": ev.get("entry_slip_bps", 0.0),
+                            "exit_slip_bps": ev.get("exit_slip_bps", 0.0),
+                            "total_slip_usd": ev.get("total_slip_usd", 0.0),
+                            "total_fee_usd": ev.get("total_fee_usd",
+                                                    ev.get("fee_usd", 0.0)),
+                            "net_usd": ev.get("net_usd", 0.0),
+                            "reason": ev.get("reason", ""),
+                        })
+                    elif kind == "open" and bool(ev.get("capacity_clipped")):
+                        capacity_clipped += 1
+                    elif kind == "capacity_rejected":
+                        capacity_rejected += 1
+    intended_avg = intended_bps_sum / n_closed if n_closed else 0.0
+    realized_avg = realized_bps_sum / n_closed if n_closed else 0.0
+    drag_avg = intended_avg - realized_avg
+    if frictionless_end == 0.0:
+        frictionless_end = float(m.get("end_equity_usd", 0.0))
+
+    # Phase 13 — pull lineage out of the variant's config dir if one was
+    # supplied. Lazy-import keeps `experiments` an optional dependency.
+    lineage_gen = 0
+    lineage_parent: str | None = None
+    lineage_mutated = 0
+    lineage_notes = ""
+    if variant_config_dir is not None and variant_config_dir.exists():
+        try:
+            from ..experiments.lineage import load_lineage
+            lin = load_lineage(variant_config_dir)
+            if lin is not None:
+                lineage_gen = lin.generation
+                lineage_parent = lin.parent_variant_id
+                lineage_mutated = len(lin.mutated_fields)
+                lineage_notes = lin.notes or ""
+        except Exception:  # noqa: BLE001
+            pass
+
     return VariantMetrics(
         variant_id=m["variant_id"],
         synth_rate=m["synth_rate"],
@@ -108,6 +221,20 @@ def _load_variant(manifest_path: Path, decisions_path: Path) -> VariantMetrics:
         action_counts=action_counts,
         regime_counts=regime_counts,
         tribe_net=tribe_net,
+        slippage_usd_total=slip_total,
+        fee_usd_total=fee_total,
+        intended_bps_avg=intended_avg,
+        realized_bps_avg=realized_avg,
+        bps_drag_avg=drag_avg,
+        capacity_clipped_count=capacity_clipped,
+        capacity_rejected_count=capacity_rejected,
+        frictionless_end_equity=frictionless_end,
+        frictionless_curve=frictionless_curve,
+        trades_table=trades_table,
+        lineage_generation=lineage_gen,
+        lineage_parent_id=lineage_parent,
+        lineage_mutated_count=lineage_mutated,
+        lineage_notes=lineage_notes,
     )
 
 
@@ -141,12 +268,27 @@ def load_run_metrics(run_dir: Path) -> RunMetrics:
                 continue
             manifest = vd / "manifest.json"
             decisions = vd / "decisions.jsonl"
+            # Per-variant ledger lives under <variant>/ledger/ in the
+            # standard sprint+watch layout. Older runs may be missing it.
+            ledger = vd / "ledger"
+            if not ledger.exists():
+                ledger = run_dir / "ledger" / vd.name
+            # Phase 13 — find this variant's tribes_dir from its manifest;
+            # the lineage.yaml lives in that config dir.
+            variant_config_dir: Path | None = None
             if manifest.exists():
+                m = orjson.loads(manifest.read_bytes())
                 if not rollup_path.exists():
-                    m = orjson.loads(manifest.read_bytes())
                     day = m.get("day", day)
                     symbol = m.get("symbol", symbol)
-                variant_metrics.append(_load_variant(manifest, decisions))
+                td = m.get("tribes_dir")
+                if td:
+                    variant_config_dir = Path(td)
+                variant_metrics.append(_load_variant(
+                    manifest, decisions,
+                    ledger_dir=ledger if ledger.exists() else None,
+                    variant_config_dir=variant_config_dir,
+                ))
 
     return RunMetrics(
         run_id=run_id,
