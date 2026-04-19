@@ -2,10 +2,20 @@
 of simultaneously-open positions.
 
 Exit model: every tick the council's live forecast is evaluated against every
-open position via `evaluate_exits()`. A position is closed when the council's
-expected_move_bps flips against it beyond a small dead-zone (default 0.5 bps),
-preventing whipsaw from near-zero oscillations. `mark_to_market()` remains as
-a hard backstop that closes positions exceeding `max_hold_seconds`.
+open position via `evaluate_exits()`. The base rule is a sign-flip beyond the
+configured dead-zone; three optional layers stack on top:
+
+  1. **Conviction-magnitude** — weak flips (conf < strong_flip_conf) must
+     persist for `weak_flip_confirm_ticks` before closing; strong flips close
+     immediately. Streaks reset when the council realigns.
+  2. **Profit ratchet** — once a position's peak unrealized reaches
+     `ratchet_arm_bps`, it closes on a retrace of `ratchet_retrace_frac` of
+     that peak. Pure trailing protection — no static TP.
+  3. **Regime-aware dead zone + edge exhaustion** — dead zone scales by
+     regime (cascade tighter, chop wider); if remaining forecasted move in
+     the position's direction no longer covers fees, close.
+
+`mark_to_market()` remains as a hard backstop for `max_hold_seconds`.
 
 Fees and slippage are charged on both entry and exit of every position.
 """
@@ -33,6 +43,8 @@ class PaperExecutor(Executor):
         max_hold_seconds: int = 600,
         exit_dead_zone_bps: float = 0.5,
         ledger: Ledger | None = None,
+        *,
+        exit_strategy: dict | None = None,
     ) -> None:
         self._equity = starting_equity_usd
         self._start_equity = starting_equity_usd
@@ -49,6 +61,24 @@ class PaperExecutor(Executor):
         self._next_id = 1
         self._recent_trades: list[dict] = []   # last 60 closed, newest last
 
+        # Multi-layer exit overlay. All layers opt-in via settings; neutral
+        # defaults preserve the sign-flip-only behavior.
+        es = exit_strategy or {}
+        self.strong_flip_conf = float(es.get("strong_flip_conf", 0.25))
+        self.weak_flip_confirm_ticks = max(1, int(es.get("weak_flip_confirm_ticks", 2)))
+        self.ratchet_arm_bps = float(es.get("ratchet_arm_bps", 0.0))
+        self.ratchet_retrace_frac = float(es.get("ratchet_retrace_frac", 1.0))
+        self.dead_zone_regime_mult: dict[str, float] = dict(
+            es.get("dead_zone_regime_mult", {}) or {}
+        )
+        self.edge_exhausted_factor = float(es.get("edge_exhausted_factor", 0.0))
+        self.edge_exhausted_min_age_s = float(es.get("edge_exhausted_min_age_s", 20.0))
+        # Per-position state for layered exits. Keyed by Position.id; purged
+        # on close. Dict lookups are O(1) and we never have more than
+        # max_concurrent_positions entries, so the memory story is bounded.
+        self._flip_streak: dict[str, int] = {}
+        self._peak_bps: dict[str, float] = {}
+
     # -- Executor interface ---------------------------------------------
 
     @property
@@ -63,32 +93,103 @@ class PaperExecutor(Executor):
     def positions(self) -> list[Position]:
         return self._positions
 
-    def evaluate_exits(self, ts: datetime, price: float, forecast) -> None:
+    def evaluate_exits(
+        self,
+        ts: datetime,
+        price: float,
+        forecast,
+        regime_label: str | None = None,
+    ) -> None:
         """Close positions the council no longer supports.
 
-        Exit rule (applied per position each tick):
-          LONG  → close if emove ≤ -dead_zone (council turned negative)
-          SHORT → close if emove ≥ +dead_zone (council turned positive)
+        Layered rule — any trigger closes the position:
+          • sign-flip beyond regime-scaled dead zone, gated by
+            conviction-magnitude (weak flips need a confirm streak)
+          • profit ratchet (peak retrace after arming)
+          • edge exhausted (remaining forecasted move can't cover fees)
 
-        The dead zone prevents churning when the forecast oscillates around
-        zero. Positions that stay aligned keep running indefinitely — the
-        council is the only exit signal besides the max_hold backstop.
+        Positions that stay aligned with a healthy edge keep running; the
+        max_hold backstop in `mark_to_market` is the last line of defense.
         """
         if price is None or price <= 0 or not self._positions:
             return
         emove = forecast.expected_move_bps
-        dz = self.exit_dead_zone_bps
+        conf = getattr(forecast, "confidence", 0.0)
+        dz = self.exit_dead_zone_bps * float(
+            self.dead_zone_regime_mult.get(regime_label or "", 1.0)
+        )
+        # Round-trip fee budget (notional bps) — both sides pay slippage + fee.
+        rt_fees_bps = 2.0 * (self.fee_rate_bps + self.slippage_bps)
+
         survivors: list[Position] = []
         for p in self._positions:
-            if p.side is Side.BUY and emove <= -dz:
-                self._close_position(p, price, ts,
-                                     f"council flip short emove={emove:+.1f}bps")
-            elif p.side is Side.SELL and emove >= dz:
-                self._close_position(p, price, ts,
-                                     f"council flip long emove={emove:+.1f}bps")
+            reason = self._exit_reason(p, price, ts, emove, conf, dz, rt_fees_bps)
+            if reason is not None:
+                self._close_position(p, price, ts, reason)
             else:
                 survivors.append(p)
         self._positions = survivors
+
+    def _exit_reason(
+        self,
+        p: Position,
+        price: float,
+        ts: datetime,
+        emove: float,
+        conf: float,
+        dz: float,
+        rt_fees_bps: float,
+    ) -> str | None:
+        """Return a close-reason string if any exit layer fires, else None."""
+        side_sign = 1.0 if p.side is Side.BUY else -1.0
+
+        # Layer 1 — sign flip beyond the (regime-scaled) dead zone, gated by
+        # flip confidence. Weak flips must persist to close.
+        flipped = (p.side is Side.BUY and emove <= -dz) or (
+            p.side is Side.SELL and emove >= dz
+        )
+        if flipped:
+            if conf >= self.strong_flip_conf:
+                self._flip_streak.pop(p.id, None)
+                direction = "short" if p.side is Side.BUY else "long"
+                return f"strong flip {direction} emove={emove:+.1f}bps conf={conf:.2f}"
+            streak = self._flip_streak.get(p.id, 0) + 1
+            self._flip_streak[p.id] = streak
+            if streak >= self.weak_flip_confirm_ticks:
+                self._flip_streak.pop(p.id, None)
+                return (f"confirmed weak flip ×{streak} emove={emove:+.1f}bps "
+                        f"conf={conf:.2f}")
+        else:
+            # Council realigned (or within dead zone) — drop any streak so a
+            # future weak flip starts fresh rather than resuming a stale count.
+            self._flip_streak.pop(p.id, None)
+
+        # Current unrealized in bps of notional (signed — positive = winning).
+        unreal_bps = side_sign * (price - p.entry_price) / p.entry_price * 1e4
+
+        # Layer 2 — profit ratchet. Arms once peak unrealized crosses
+        # `ratchet_arm_bps`, then trails at `retrace_frac` of the peak.
+        if self.ratchet_arm_bps > 0 and self.ratchet_retrace_frac < 1.0:
+            peak = max(self._peak_bps.get(p.id, 0.0), unreal_bps)
+            self._peak_bps[p.id] = peak
+            if peak >= self.ratchet_arm_bps:
+                trigger = peak * (1.0 - self.ratchet_retrace_frac)
+                if unreal_bps <= trigger:
+                    return (f"ratchet retrace peak={peak:+.1f}bps "
+                            f"now={unreal_bps:+.1f}bps")
+
+        # Layer 3b — edge exhausted. If the remaining forecasted move in the
+        # position's favor can't cover fees, close even though the council is
+        # nominally still aligned. Aged-in check avoids killing fresh entries.
+        if self.edge_exhausted_factor > 0.0:
+            held_s = (ts - p.entry_ts).total_seconds() if p.entry_ts else 0.0
+            if held_s >= self.edge_exhausted_min_age_s:
+                remaining = side_sign * emove
+                threshold = rt_fees_bps * self.edge_exhausted_factor
+                if remaining < threshold:
+                    return (f"edge exhausted remaining={remaining:+.1f}bps "
+                            f"< fees×{self.edge_exhausted_factor:.2f}={threshold:.1f}bps")
+        return None
 
     def apply_funding(self, funding_rate: float, tick_seconds: float) -> None:
         """Accrue perpetual-futures funding for every open position.
@@ -203,6 +304,10 @@ class PaperExecutor(Executor):
         })
 
     def _close_position(self, p: Position, mark: float, ts: datetime, reason: str) -> None:
+        # Scrub per-position layer state before the close goes through so
+        # these dicts never outlive the position they describe.
+        self._flip_streak.pop(p.id, None)
+        self._peak_bps.pop(p.id, None)
         exit_side = Side.SELL if p.side is Side.BUY else Side.BUY
         fill = self._fill_price(mark, exit_side)
         if p.side is Side.BUY:
