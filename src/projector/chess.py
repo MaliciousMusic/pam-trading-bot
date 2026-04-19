@@ -68,6 +68,13 @@ class ChessProjector:
         self.depth_ref_usd = depth_ref_usd
         self.depth_floor_usd = depth_floor_usd
         self.regime_multiplier: float = 1.0
+        # Per-tribe skill overlay. Set externally after construction (the
+        # live wiring in run_bot_ui.py builds the calibrator after the
+        # projector). When present, the projector scales each tribe's
+        # contribution by `calibrator.skill_multiplier(tribe_id)` so tribes
+        # with measured accuracy speak louder and chronically-wrong ones
+        # get damped. Defaults to None → no-op (projector ignores skill).
+        self.calibrator = None
         # Wiggly-path knobs.
         self.auditor = auditor
         self.mean_reversion_rate = float(mean_reversion_rate)
@@ -84,76 +91,144 @@ class ChessProjector:
         self._rng = random.Random(rng_seed)
 
     def project(self, state: MarketState) -> Forecast:
-        sim = state.snapshot()
-        start_ts = sim.last_update or datetime.now(timezone.utc)
-        ts = start_ts
-        step_aggs: list = []
-        step_bps_list: list[float] = []
-        cum_bps = 0.0
-        steps_bps: list[float] = []
-        prev_ts = ts
+        """Per-tribe isolated projection.
+
+        Each tribe runs forward in its own sim snapshot — it sees only the
+        price movement its own pressure creates, not the aggregate echo. At
+        combine time the 17 tribe curves are summed (weight and skill are
+        already baked into each curve) to produce the deterministic "thick"
+        forecast line. The individual tribe curves double as the wiggly fan
+        the UI draws — no gaussian noise layer, just the honest per-archetype
+        futures.
+        """
+        start_ref = state.snapshot()
+        start_ts = start_ref.last_update or datetime.now(timezone.utc)
         effective_gain = self.bps_per_unit_pressure * self.regime_multiplier
         dt_s = float(self.tick_seconds)
+        n_steps = self.steps
 
-        for step_i in range(self.steps):
+        skill: dict[str, float] = {}
+        if self.calibrator is not None:
+            for t in self.tribes:
+                try:
+                    skill[t.spec.id] = float(self.calibrator.skill_multiplier(t.spec.id))
+                except Exception:
+                    skill[t.spec.id] = 1.0
+
+        # Per-tribe cumulative bps curves. Each tribe projects in isolation —
+        # its simulated price trajectory reflects only its own contribution,
+        # breaking the echo-chamber feedback from the old aggregate-first
+        # projection.
+        per_tribe_curves: list[list[float]] = []
+        per_tribe_ids: list[str] = []
+        # Per-step stochastic shock sigma shared by every tribe. Derived from
+        # the backscorer's residual stddev (via `_sigma_per_step`), then
+        # converted to per-step increments. This is the ingredient that makes
+        # each tribe's forecast an actual wiggly curve rather than a straight
+        # line — the tribe's deterministic read is a drift, and the noise is
+        # that tribe's forecast uncertainty at each horizon. With it, the
+        # paths look like plausible futures; without it, they'd look like
+        # rulers.
+        sigma_cum = self._sigma_per_step(n_steps)
+        n_tribes = max(1, len(self.tribes))
+        step_shock_sigma: list[float] = []
+        prev_var = 0.0
+        for s in sigma_cum:
+            cur_var = float(s) ** 2
+            inc = max(0.0, cur_var - prev_var)
+            # Split variance evenly across tribes so the sum of 17
+            # independent per-tribe shocks reproduces the target horizon
+            # sigma instead of sqrt(N) × target.
+            step_shock_sigma.append(math.sqrt(inc / n_tribes))
+            prev_var = cur_var
+        # Decayed votes per step — collected from the isolated per-tribe walks
+        # so we still have an aggregate object per step for confidence math.
+        decayed_by_step: list[list] = [[] for _ in range(n_steps)]
+
+        for tribe in self.tribes:
+            sk = skill.get(tribe.spec.id, 1.0)
+            w = float(tribe.weight)
+            sim = state.snapshot()
+            ts = start_ts
             prev_ts = ts
-            ts = ts + timedelta(seconds=dt_s)
-            sim.advance_clock(ts)
-            raw_votes = [t.project_vote(ts, sim) for t in self.tribes]
-            # Per-tribe horizon decay — a scalper's signal dies out quickly,
-            # a swing trader's persists. Exponential decay in *elapsed time*
-            # since the projection started; the vote's own horizon is the
-            # decay time-constant. Votes with ABSTAIN side carry zero
-            # conviction already, so they're unaffected by the scaling.
-            elapsed_s = (step_i + 1) * dt_s
-            decayed_votes = []
-            for v in raw_votes:
+            cum_bps = 0.0
+            curve: list[float] = []
+            for step_i in range(n_steps):
+                prev_ts = ts
+                ts = ts + timedelta(seconds=dt_s)
+                sim.advance_clock(ts)
+                elapsed_s = (step_i + 1) * dt_s
+                v = tribe.project_vote(ts, sim)
                 hs = self._tribe_horizon_s.get(v.tribe_id, self.default_horizon_seconds)
                 factor = math.exp(-elapsed_s / hs)
-                new_conv = v.conviction * factor
-                new_buy = v.buy_frac * factor
-                new_sell = v.sell_frac * factor
-                decayed_votes.append(replace(
+                combo = factor * sk
+                new_conv = max(0.0, min(1.0, v.conviction * combo))
+                decayed_by_step[step_i].append(replace(
                     v, conviction=new_conv,
-                    buy_frac=new_buy, sell_frac=new_sell,
+                    buy_frac=v.buy_frac * combo,
+                    sell_frac=v.sell_frac * combo,
                 ))
-            agg = aggregate_votes(decayed_votes, ts)
-            step_aggs.append(agg)
-            vote_bps = agg.net_pressure * effective_gain
-            event_bps = step_event_bps(
-                sim.pending_events, self.tribes,
-                prev_ts.timestamp(), ts.timestamp(),
-            )
-            total_bps = vote_bps + event_bps
-            side_depth = (
-                sim.ask_depth_5bps_usd if total_bps >= 0
-                else sim.bid_depth_5bps_usd
-            )
-            if side_depth and side_depth > 0:
-                scale = self.depth_ref_usd / max(side_depth, self.depth_floor_usd)
-            else:
-                scale = 1.0
-            step_bps = total_bps * scale
-            # Ornstein-Uhlenbeck mean-reversion on cumulative drift. Pulls
-            # the running total toward zero at `mean_reversion_rate` per
-            # step — counteracts the projector's previous bias of letting
-            # small persistent pressures compound into enormous straight
-            # lines. Rate of 0 disables (exact prior behavior).
-            if self.mean_reversion_rate > 0.0 and cum_bps != 0.0:
-                step_bps -= self.mean_reversion_rate * cum_bps
-            step_bps_list.append(step_bps)
-            cum_bps += step_bps
-            steps_bps.append(cum_bps)
-            if sim.last_price is not None and sim.last_price > 0:
-                sim.last_price = sim.last_price * (1 + step_bps / 10_000.0)
-                sim.prices.add(ts, sim.last_price)
-            if sim.last_funding_rate is not None:
-                sim.last_funding_rate *= 0.995
+                signed = (1.0 if v.side.value == "buy" else
+                          -1.0 if v.side.value == "sell" else 0.0)
+                # Tribe's own contribution to the consensus: signed conviction
+                # scaled by horizon decay, skill, pool weight, and the gain
+                # kernel. This is what this tribe alone would push the price by.
+                vote_bps = signed * v.conviction * factor * sk * w * effective_gain
+                event_bps = step_event_bps(
+                    sim.pending_events, [tribe],
+                    prev_ts.timestamp(), ts.timestamp(),
+                )
+                total_bps = vote_bps + event_bps
+                side_depth = (
+                    sim.ask_depth_5bps_usd if total_bps >= 0
+                    else sim.bid_depth_5bps_usd
+                )
+                if side_depth and side_depth > 0:
+                    scale = self.depth_ref_usd / max(side_depth, self.depth_floor_usd)
+                else:
+                    scale = 1.0
+                step_bps = total_bps * scale
+                # Stochastic shock — the tribe's per-step forecast error.
+                # Drawn from its own RNG so two tribes with the same drift
+                # still produce distinct wiggly futures.
+                shock_sig = step_shock_sigma[step_i] if step_i < len(step_shock_sigma) else 0.0
+                if shock_sig > 0.0:
+                    step_bps += self._rng.gauss(0.0, shock_sig)
+                if self.mean_reversion_rate > 0.0 and cum_bps != 0.0:
+                    step_bps -= self.mean_reversion_rate * cum_bps
+                cum_bps += step_bps
+                curve.append(cum_bps)
+                if sim.last_price is not None and sim.last_price > 0:
+                    sim.last_price = sim.last_price * (1 + step_bps / 10_000.0)
+                    sim.prices.add(ts, sim.last_price)
+                if sim.last_funding_rate is not None:
+                    sim.last_funding_rate *= 0.995
+            per_tribe_curves.append(curve)
+            per_tribe_ids.append(tribe.spec.id)
 
-        kernel = [self.confidence_decay ** i for i in range(len(step_bps_list))]
+        # Consensus thick line = simple sum across tribes. Weight and skill
+        # are already inside each curve, so summing gives the weighted chorus.
+        steps_bps: list[float] = []
+        for i in range(n_steps):
+            steps_bps.append(sum(curve[i] for curve in per_tribe_curves))
+        step_bps_list: list[float] = []
+        prev_cum = 0.0
+        for cum in steps_bps:
+            step_bps_list.append(cum - prev_cum)
+            prev_cum = cum
+
+        # Per-step aggregate for the confidence computation. The decayed
+        # votes came from the isolated walks (each tribe's vote at its own
+        # step timestamp), so the aggregate's uncertainty measure is still
+        # a fair "how coherent was the council at step i" signal.
+        step_aggs = [
+            aggregate_votes(decayed_by_step[i], start_ts + timedelta(seconds=(i + 1) * dt_s))
+            for i in range(n_steps)
+        ]
+
+        kernel = [self.confidence_decay ** i for i in range(n_steps)]
         k_sum = sum(kernel) or 1.0
         expected_move_bps = sum(b * w for b, w in zip(step_bps_list, kernel))
-
         signal_quality = sum(
             (1.0 - s.uncertainty) * w for s, w in zip(step_aggs, kernel)
         ) / k_sum
@@ -161,32 +236,37 @@ class ChessProjector:
         directional = abs(expected_move_bps) / abs_activity if abs_activity > 0 else 0.0
         final_conf = max(0.0, min(1.0, signal_quality * directional))
 
-        steps_sigma_bps = self._sigma_per_step(len(step_bps_list))
-        sample_paths, directional_agreement, terminals = self._per_tribe_paths(
-            state, expected_move_bps, steps_sigma_bps,
-        )
-        # If per-tribe sampling is disabled, fall back to gaussian-around-mean
-        # so the UI fan still has something to draw.
-        if not sample_paths and self.sample_paths_n > 0:
-            sample_paths = self._gaussian_paths(steps_bps, steps_sigma_bps)
+        steps_sigma_bps = self._sigma_per_step(n_steps)
+
+        # Directional agreement — fraction of tribe terminals sharing the
+        # sign of the consensus. With 17 archetypes this is a sharper read
+        # than a 0/1 gaussian split.
+        terminals = [c[-1] if c else 0.0 for c in per_tribe_curves]
+        sign_ref = 1.0 if expected_move_bps >= 0 else -1.0
+        if terminals:
+            agree = sum(1 for t in terminals if (1.0 if t >= 0 else -1.0) == sign_ref)
+            directional_agreement = agree / len(terminals)
+        else:
+            directional_agreement = None
 
         logger.debug(
             "projector: {} steps, move {:+.1f}bps, signal={:.2f} dir={:.2f} "
-            "conf={:.2f} σ₀={:.1f} samples={}",
-            self.steps, expected_move_bps, signal_quality, directional, final_conf,
-            steps_sigma_bps[0] if steps_sigma_bps else 0.0, len(sample_paths),
+            "conf={:.2f} σ₀={:.1f} tribes={}",
+            n_steps, expected_move_bps, signal_quality, directional, final_conf,
+            steps_sigma_bps[0] if steps_sigma_bps else 0.0, len(per_tribe_curves),
         )
         return Forecast(
             ts=start_ts,
             steps=step_aggs,
             expected_move_bps=expected_move_bps,
             confidence=final_conf,
-            horizon_seconds=self.steps * self.tick_seconds,
+            horizon_seconds=n_steps * self.tick_seconds,
             steps_bps=steps_bps,
             steps_sigma_bps=steps_sigma_bps,
-            sample_paths_bps=sample_paths,
+            sample_paths_bps=per_tribe_curves,
             directional_agreement=directional_agreement,
             sample_terminals_bps=terminals,
+            sample_paths_tribe_ids=per_tribe_ids,
         )
 
     # -- wiggly-path helpers ---------------------------------------------
@@ -228,95 +308,3 @@ class ChessProjector:
             out.append(float(sigma))
         return out
 
-    def _per_tribe_paths(self, state: MarketState, expected_move_bps: float,
-                         steps_sigma_bps: list[float],
-                         ) -> tuple[list[list[float]], float | None, list[float] | None]:
-        """Run N shadow simulations where each tribe's vote is stochastically
-        perturbed per path. The fraction of paths whose terminal bps shares
-        the sign of the deterministic expected move is the directional
-        agreement — a sharper confidence signal than the aggregate-then-noise
-        approach. Returns (paths, agreement, terminals)."""
-        n_paths = self.sample_paths_n
-        n_steps = self.steps
-        if n_paths <= 0 or n_steps == 0 or not self.tribes:
-            return [], None, None
-        effective_gain = self.bps_per_unit_pressure * self.regime_multiplier
-        dt_s = float(self.tick_seconds)
-        paths: list[list[float]] = []
-        terminals: list[float] = []
-        agree_count = 0
-        sign_ref = 1.0 if expected_move_bps >= 0 else -1.0
-        # Per-step shock sigma, split evenly across tribes. Gives each tribe
-        # its own noise draw without exploding the total variance.
-        n_tribes = max(1, len(self.tribes))
-        step_shock_sigma: list[float] = []
-        prev_var = 0.0
-        for s in steps_sigma_bps:
-            cur_var = float(s) ** 2
-            inc = max(0.0, cur_var - prev_var)
-            step_shock_sigma.append(math.sqrt(inc / n_tribes))
-            prev_var = cur_var
-
-        for _path in range(n_paths):
-            sim = state.snapshot()
-            ts = sim.last_update or datetime.now(timezone.utc)
-            cum_bps = 0.0
-            path_curve: list[float] = []
-            for step_i in range(n_steps):
-                prev_ts = ts
-                ts = ts + timedelta(seconds=dt_s)
-                sim.advance_clock(ts)
-                elapsed_s = (step_i + 1) * dt_s
-                per_tribe_bps = 0.0
-                shock_sig = step_shock_sigma[step_i] if step_i < len(step_shock_sigma) else 0.0
-                for t in self.tribes:
-                    v = t.project_vote(ts, sim)
-                    hs = self._tribe_horizon_s.get(v.tribe_id, self.default_horizon_seconds)
-                    factor = math.exp(-elapsed_s / hs)
-                    signed = (1.0 if v.side.value == "buy" else
-                              -1.0 if v.side.value == "sell" else 0.0)
-                    contrib = signed * v.conviction * factor * t.weight
-                    noise = self._rng.gauss(0.0, shock_sig) if shock_sig > 0 else 0.0
-                    per_tribe_bps += contrib * effective_gain + noise
-                # Same mean-reversion as the deterministic path so the fan
-                # shape matches.
-                if self.mean_reversion_rate > 0.0 and cum_bps != 0.0:
-                    per_tribe_bps -= self.mean_reversion_rate * cum_bps
-                cum_bps += per_tribe_bps
-                path_curve.append(cum_bps)
-                if sim.last_price is not None and sim.last_price > 0:
-                    sim.last_price = sim.last_price * (1 + per_tribe_bps / 10_000.0)
-            paths.append(path_curve)
-            terminals.append(cum_bps)
-            sign_path = 1.0 if cum_bps >= 0 else -1.0
-            if sign_path == sign_ref:
-                agree_count += 1
-        agreement = agree_count / n_paths
-        return paths, agreement, terminals
-
-    def _gaussian_paths(self, steps_bps: list[float],
-                        steps_sigma_bps: list[float]) -> list[list[float]]:
-        """Fallback — gaussian noise around the deterministic curve."""
-        n_paths = self.sample_paths_n
-        n_steps = len(steps_bps)
-        if n_paths <= 0 or n_steps == 0:
-            return []
-        # Per-step shock stddev from the differences of the cumulative sigma
-        # curve. Assuming independent increments, sigma_cum²(t) = Σ σ_step².
-        step_shock_sigma: list[float] = []
-        prev_var = 0.0
-        for s in steps_sigma_bps:
-            cur_var = float(s) ** 2
-            inc = max(0.0, cur_var - prev_var)
-            step_shock_sigma.append(math.sqrt(inc))
-            prev_var = cur_var
-        paths: list[list[float]] = []
-        for _ in range(n_paths):
-            path: list[float] = []
-            running = 0.0
-            for i in range(n_steps):
-                shock = self._rng.gauss(0.0, step_shock_sigma[i])
-                running += (steps_bps[i] - (steps_bps[i - 1] if i > 0 else 0.0)) + shock
-                path.append(running)
-            paths.append(path)
-        return paths

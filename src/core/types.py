@@ -98,6 +98,9 @@ class Forecast:
     directional_agreement: float | None = None
     # Sample-path forecast curve (median) and per-path terminals for audit.
     sample_terminals_bps: list[float] | None = None
+    # Tribe id for each entry in `sample_paths_bps` — lets the UI color
+    # each wiggly path by its archetype. Parallel-indexed with paths.
+    sample_paths_tribe_ids: list[str] | None = None
 
 
 @dataclass(slots=True)

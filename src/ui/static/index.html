@@ -614,8 +614,25 @@
   const ICONS={retail_app_newbie:'📱',retail_degen_leveraged:'🎰',ta_day_trader:'📊',
     swing_trend_follower:'🧭',mm_algo:'⚙️',liquidation_hunter:'🎯',
     contrarian_funding_fader:'⚖️',news_fader:'📰',
-    retail_grid_bot:'🤖',copy_trader:'🐑'};
+    retail_grid_bot:'🤖',copy_trader:'🐑',
+    basis_arb:'🔺',cross_venue_arb:'🌉',leverage_cycle:'🎢',
+    options_hedger_proxy:'🛡️',
+    ta_day_trader_asia:'🌏',ta_day_trader_eu:'🌍',ta_day_trader_us:'🌎'};
   const BOT_IDS=new Set(['mm_algo','retail_grid_bot','copy_trader','contrarian_funding_fader']);
+  // Distinct color per tribe — used to tint both the wiggly forecast path
+  // on the chart and a small dot on each tribe's ring in the council wheel
+  // so you can correlate "that red path is this archetype".
+  const TRIBE_COLORS={
+    retail_app_newbie:'#f08cc1',retail_degen_leveraged:'#ff7043',
+    ta_day_trader:'#4dd0e1',swing_trend_follower:'#66bb6a',
+    mm_algo:'#ffca28',liquidation_hunter:'#ef5350',
+    contrarian_funding_fader:'#ba68c8',news_fader:'#90a4ae',
+    retail_grid_bot:'#26c6da',copy_trader:'#a1887f',
+    basis_arb:'#42a5f5',cross_venue_arb:'#8d6e63',
+    leverage_cycle:'#ec407a',options_hedger_proxy:'#9ccc65',
+    ta_day_trader_asia:'#5c6bc0',ta_day_trader_eu:'#ab47bc',
+    ta_day_trader_us:'#ffa726'};
+  const tribeColor=id=>TRIBE_COLORS[id]||'#bdbdbd';
   const $=id=>document.getElementById(id);
   const fmt=(n,d=2)=>n==null?'—':n.toLocaleString(undefined,{minimumFractionDigits:d,maximumFractionDigits:d});
   const bps=n=>n==null?'—':(n>=0?'+':'')+n.toFixed(1)+'bps';
@@ -637,6 +654,7 @@
   let lastForecastBps=null;      // cumulative expected-move curve from projector
   let lastForecastSigma=null;    // per-step sigma for the uncertainty fan
   let lastForecastSamples=null;  // Monte Carlo sample paths in bps
+  let lastForecastPathTribeIds=null; // tribe_id per path (same length as samples)
   const TRAIL_COLORS={
     '15s':'#22d3ee','1m':'#60a5fa','5m':'#c084fc',
     '10m':'#fb923c','15m':'#fde047',
@@ -694,6 +712,15 @@
       em.setAttribute('class','emoji'); em.setAttribute('y','1');
       em.textContent=ICONS[t.id]||'◆';
       g.appendChild(em);
+
+      // Tribe-color dot — matches the chart path color so you can correlate
+      // "that wiggly line is this tribe". Placed top-right of the body.
+      const tag=document.createElementNS(SVG,'circle');
+      tag.setAttribute('cx',BODY_R*0.62); tag.setAttribute('cy',-BODY_R*0.62);
+      tag.setAttribute('r',3.2);
+      tag.setAttribute('fill',tribeColor(t.id));
+      tag.setAttribute('stroke','#101010'); tag.setAttribute('stroke-width','1');
+      g.appendChild(tag);
 
       const labelY=RING_R+14;
       const nm=document.createElementNS(SVG,'text');
@@ -857,6 +884,7 @@
     lastForecastBps=t.forecast_steps_bps||null;
     lastForecastSigma=t.forecast_sigma_bps||null;
     lastForecastSamples=t.forecast_sample_paths_bps||null;
+    lastForecastPathTribeIds=t.forecast_sample_paths_tribe_ids||null;
     currentTick=t.tick;
 
     // Detect trade entries and exits by diffing position list
@@ -903,7 +931,7 @@
 
     drawPriceWithProjection('price-c',priceHist,lastForecastSteps,t.price,
       pd>=0?'#4dbb6e':'#d94f4f',predictionTrail,t.tick,tradeEvents,
-      {stepsBps:lastForecastBps,sigmaBps:lastForecastSigma,samples:lastForecastSamples});
+      {stepsBps:lastForecastBps,sigmaBps:lastForecastSigma,samples:lastForecastSamples,pathTribeIds:lastForecastPathTribeIds});
 
     const regEl=$('regime-chip');
     if(regEl){
@@ -1060,6 +1088,7 @@
     const stepsBps=extras&&extras.stepsBps;
     const sigmaBps=extras&&extras.sigmaBps;
     const samplesBps=extras&&extras.samples;
+    const pathTribeIds=extras&&extras.pathTribeIds;
     const proj=VISIBLE.proj?[]:null;
     if(VISIBLE.proj){
       if(stepsBps&&stepsBps.length){
@@ -1080,18 +1109,13 @@
     // y-range calculation so they don't clip the chart when price is
     // otherwise quiet.
     const envelope=[];
-    if(projLen && VISIBLE.proj){
-      if(sigmaBps&&sigmaBps.length===projLen && stepsBps){
-        for(let i=0;i<projLen;i++){
-          envelope.push(currentPrice*(1+(stepsBps[i]+2*sigmaBps[i])/10000));
-          envelope.push(currentPrice*(1+(stepsBps[i]-2*sigmaBps[i])/10000));
-        }
-      }
-      if(samplesBps&&samplesBps.length){
-        for(const path of samplesBps){
-          if(!path||!path.length) continue;
-          envelope.push(currentPrice*(1+path[0]/10000));
-          envelope.push(currentPrice*(1+path[path.length-1]/10000));
+    if(projLen && VISIBLE.proj && samplesBps&&samplesBps.length){
+      // Per-tribe path extremes drive y-range — they *are* the uncertainty
+      // ensemble now, no separate sigma band needed.
+      for(const path of samplesBps){
+        if(!path||!path.length) continue;
+        for(let i=0;i<path.length;i++){
+          envelope.push(currentPrice*(1+path[i]/10000));
         }
       }
     }
@@ -1112,33 +1136,16 @@
       ctx.setLineDash([2,3]);ctx.beginPath();
       ctx.moveTo(nowX,2);ctx.lineTo(nowX,h-2);ctx.stroke();ctx.setLineDash([]);
 
-      // Uncertainty fan — ±2σ band first (wider, fainter), then ±1σ on top.
-      // Starts from the current price so the band is anchored to reality.
-      if(sigmaBps&&sigmaBps.length===projLen&&stepsBps){
-        const drawBand=(kSig,alpha)=>{
-          ctx.fillStyle=`rgba(200,168,75,${alpha})`;
-          ctx.beginPath();
-          ctx.moveTo(nowX,yAt(currentPrice));
-          for(let i=0;i<projLen;i++){
-            const up=currentPrice*(1+(stepsBps[i]+kSig*sigmaBps[i])/10000);
-            ctx.lineTo(xAt(hist.length+i),yAt(up));
-          }
-          for(let i=projLen-1;i>=0;i--){
-            const dn=currentPrice*(1+(stepsBps[i]-kSig*sigmaBps[i])/10000);
-            ctx.lineTo(xAt(hist.length+i),yAt(dn));
-          }
-          ctx.closePath();ctx.fill();
-        };
-        drawBand(2, 0.06);
-        drawBand(1, 0.10);
-      }
-
-      // Monte Carlo sample paths — thin, faint, drawn behind the expected
-      // curve so the "wiggly path" is visible without dominating the chart.
+      // Per-tribe wiggly paths — each colored by its archetype. The dispersion
+      // between paths *is* the council's uncertainty; no separate sigma fan.
       if(samplesBps&&samplesBps.length){
-        ctx.strokeStyle='rgba(200,168,75,0.12)';ctx.lineWidth=0.7;
-        for(const path of samplesBps){
+        ctx.lineWidth=0.9;
+        for(let k=0;k<samplesBps.length;k++){
+          const path=samplesBps[k];
           if(!path||path.length!==projLen) continue;
+          const tid=pathTribeIds&&pathTribeIds[k];
+          const col=tribeColor(tid);
+          ctx.strokeStyle=col+'66'; // ~0.4 alpha
           ctx.beginPath();
           ctx.moveTo(nowX,yAt(currentPrice));
           for(let i=0;i<projLen;i++){
@@ -1149,7 +1156,9 @@
         }
       }
 
-      ctx.strokeStyle='rgba(200,168,75,0.75)';ctx.lineWidth=1.4;ctx.beginPath();
+      // Consensus thick line — bright cyan, drawn on top. This is the
+      // weighted sum of the 17 tribe paths (weight × skill baked in).
+      ctx.strokeStyle='rgba(100,230,255,0.95)';ctx.lineWidth=2.2;ctx.beginPath();
       ctx.moveTo(nowX,yAt(hist[hist.length-1]));
       proj.forEach((v,i)=>{ctx.lineTo(xAt(hist.length+i),yAt(v));});
       ctx.stroke();
@@ -1530,6 +1539,7 @@
     p0=null; e0=null; currentTick=0; posTrackingInit=false;
     lastForecastSteps=[]; lastForecastBps=null;
     lastForecastSigma=null; lastForecastSamples=null;
+    lastForecastPathTribeIds=null;
     knownPositions.clear();
     ['h-price','h-equity','h-fitness','h-trades','h-tick'].forEach(
       id=>{const el=$(id);if(el)el.textContent='—'});
@@ -1616,7 +1626,7 @@
       const pd=p0?((last-p0)/p0)*100:0;
       drawPriceWithProjection('price-c',priceHist,lastForecastSteps,last,
         pd>=0?'#4dbb6e':'#d94f4f',predictionTrail,currentTick,tradeEvents,
-        {stepsBps:lastForecastBps,sigmaBps:lastForecastSigma,samples:lastForecastSamples});
+        {stepsBps:lastForecastBps,sigmaBps:lastForecastSigma,samples:lastForecastSamples,pathTribeIds:lastForecastPathTribeIds});
     }
     if(eqHist.length>=2){
       const ed=e0?((eqHist[eqHist.length-1]-e0)/e0)*100:0;

@@ -136,6 +136,10 @@ async def main() -> None:
     )
     # Push any resumed gain onto the projector before the first tick.
     projector.bps_per_unit_pressure = kernel_calibrator.current_gain()
+    # Thread the skill calibrator into the projector so forecasts weight
+    # each tribe by its measured accuracy (chronically-wrong tribes get
+    # damped, consistently-right ones speak louder).
+    projector.calibrator = calibrator
 
     # Phase E — regime overlay. Thresholds and per-label multipliers live
     # in settings.regime; defaults are already calibrated for BTC perps.
