@@ -264,6 +264,32 @@ class ForecastAuditor:
             "by_horizon": rows,
         }
 
+    def sigma_by_horizon(self, *, window_s: float = 3600.0,
+                         min_samples: int = 10) -> dict[int, float]:
+        """Residual stddev of realized_move − predicted_move per horizon,
+        keyed by horizon seconds. Used by the projector to build its
+        uncertainty fan and sample Monte Carlo paths. Horizons with fewer
+        than `min_samples` resolved anchors are omitted — the caller is
+        expected to fall back to a default."""
+        if not self._resolved:
+            return {}
+        cutoff = self._resolved[-1].realized_ts - window_s
+        bucket: dict[int, list[float]] = {}
+        for r in self._resolved:
+            if r.realized_ts < cutoff:
+                continue
+            resid = r.realized_move_bps - r.expected_move_bps
+            bucket.setdefault(r.horizon_s, []).append(resid)
+        out: dict[int, float] = {}
+        for h, xs in bucket.items():
+            n = len(xs)
+            if n < min_samples:
+                continue
+            m = sum(xs) / n
+            var = sum((x - m) ** 2 for x in xs) / n
+            out[h] = var ** 0.5
+        return out
+
     def recent(self, limit: int = 200) -> list[dict]:
         take = list(self._resolved)[-limit:]
         return [

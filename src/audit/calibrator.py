@@ -91,6 +91,8 @@ class TribeCalibrator:
         fast_halflife_resolved: int = 50,
         fast_min_samples: int = 10,
         regime_shift_threshold: float = 0.12,
+        enable_regime_conditional: bool = False,
+        regime_min_samples: int = 15,
     ) -> None:
         self.dir = directory or DEFAULT_DIR
         self.dir.mkdir(parents=True, exist_ok=True)
@@ -110,19 +112,36 @@ class TribeCalibrator:
         # `ewma` lives in [0,1]; 0.5 = chance. Start at 0.5 (neutral).
         self._skill: dict[str, dict] = {}
 
+        # Regime-conditional skill. Same shape as _skill, nested under
+        # (tribe_id, regime_label). When enabled, `skill_multiplier` prefers
+        # the per-regime EWMA over the global one once min_samples per
+        # regime has been crossed — resolves "trend-tribe skilled in trend
+        # bleeds conviction in chop" without waiting for the fast EWMA to
+        # converge across hundreds of anchors.
+        self._skill_by_regime: dict[str, dict[str, dict]] = {}
+        self._regime_conditional = bool(enable_regime_conditional)
+        self._regime_min_samples = max(1, int(regime_min_samples))
+
         # Vote log so we can retrospectively score past ticks when
-        # forecasts mature. Keyed by tick_ts (epoch seconds) → {tribe_id:
-        # (side_int, conviction)}. Bounded by _vote_history_s (must cover
-        # the longest anchor horizon).
-        self._votes_at_tick: "OrderedDict[float, dict[str, tuple[int, float]]]" = OrderedDict()
+        # forecasts mature. Keyed by tick_ts (epoch seconds) → {"regime":
+        # str|None, "votes": {tribe_id: (side_int, conviction)}}. Bounded by
+        # _vote_history_s (must cover the longest anchor horizon).
+        self._votes_at_tick: "OrderedDict[float, dict]" = OrderedDict()
 
         self._load()
 
     # --- ingest ------------------------------------------------------
 
-    def record_votes(self, tick_ts: float, votes: Iterable[Vote]) -> None:
+    def record_votes(
+        self,
+        tick_ts: float,
+        votes: Iterable[Vote],
+        regime_label: str | None = None,
+    ) -> None:
         """Snapshot this tick's votes so resolved anchors can score them.
-        Call once per tick, with the per-tribe votes before aggregation."""
+        Call once per tick, with the per-tribe votes before aggregation.
+        `regime_label` (e.g. "chop", "cascade_up") is stamped so resolved
+        anchors feed both the global and the per-regime EWMA."""
         per: dict[str, tuple[int, float]] = {}
         for v in votes:
             if v.side is Side.BUY:
@@ -132,7 +151,10 @@ class TribeCalibrator:
             else:
                 side = 0
             per[v.tribe_id] = (side, float(v.conviction))
-        self._votes_at_tick[float(tick_ts)] = per
+        self._votes_at_tick[float(tick_ts)] = {
+            "regime": regime_label,
+            "votes": per,
+        }
         cutoff = float(tick_ts) - self._vote_history_s
         while self._votes_at_tick:
             oldest_ts = next(iter(self._votes_at_tick))
@@ -142,15 +164,17 @@ class TribeCalibrator:
 
     def apply_resolved(self, resolved: Iterable[Resolved]) -> None:
         """Score every tribe that voted at the anchor's origin tick against
-        the realized direction. Updates both slow and fast EWMAs, then
-        persists."""
+        the realized direction. Updates both slow and fast EWMAs (global)
+        AND the per-regime EWMA for the label stamped at vote time."""
         changed = False
         alpha = 1.0 - 0.5 ** (1.0 / float(self._halflife))
         alpha_fast = 1.0 - 0.5 ** (1.0 / float(self._halflife_fast))
         for rec in resolved:
-            votes = self._votes_at_tick.get(rec.tick_ts)
-            if not votes:
+            snap = self._votes_at_tick.get(rec.tick_ts)
+            if not snap:
                 continue
+            votes = snap["votes"] if isinstance(snap, dict) and "votes" in snap else snap
+            regime_label = snap.get("regime") if isinstance(snap, dict) else None
             if rec.realized_move_bps > 0:
                 realized = 1
             elif rec.realized_move_bps < 0:
@@ -165,7 +189,6 @@ class TribeCalibrator:
                 s = self._skill.setdefault(
                     tid, {"n": 0, "correct": 0, "ewma": 0.5, "ewma_fast": 0.5}
                 )
-                # Backfill ewma_fast for state loaded from an older format.
                 if "ewma_fast" not in s:
                     s["ewma_fast"] = s.get("ewma", 0.5)
                 s["ewma"] = s["ewma"] + alpha * (weighted - s["ewma"])
@@ -173,6 +196,15 @@ class TribeCalibrator:
                 s["n"] += 1
                 s["correct"] += int(hit)
                 changed = True
+                # Per-regime EWMA. Uses the same alpha so a regime's recent
+                # performance weighs identically to the global recency.
+                if regime_label:
+                    rs = self._skill_by_regime.setdefault(tid, {}).setdefault(
+                        regime_label, {"n": 0, "correct": 0, "ewma": 0.5}
+                    )
+                    rs["ewma"] = rs["ewma"] + alpha * (weighted - rs["ewma"])
+                    rs["n"] += 1
+                    rs["correct"] += int(hit)
         if changed:
             self._save()
 
@@ -185,28 +217,31 @@ class TribeCalibrator:
             return 1.0 + (x - 0.5) * 2.0 * (self._max_boost - 1.0)
         return self._max_shrink + x * 2.0 * (1.0 - self._max_shrink)
 
-    def skill_multiplier(self, tribe_id: str) -> float:
-        """Multiplier in [max_shrink, max_boost] to scale this tribe's
-        conviction. Returns 1.0 if the overlay is disabled or the tribe
-        has fewer than `min_samples` scored anchors.
+    def skill_multiplier(self, tribe_id: str, regime_label: str | None = None) -> float:
+        """Multiplier in [max_shrink, max_boost] for this tribe's conviction.
 
-        Phase H regime-adaptive logic: when the fast EWMA has enough
-        samples AND diverges from the slow EWMA by more than
-        `regime_shift_threshold`, the fast estimate takes over — the
-        tribe is in a changed regime and the stale long-run history is
-        no longer informative. Otherwise the slow EWMA (low variance,
-        stable) is used."""
+        Resolution order:
+          1. Per-regime EWMA (if enabled, label provided, n ≥ regime_min_samples)
+          2. Fast EWMA override (if |fast − slow| ≥ regime_shift_threshold)
+          3. Slow EWMA (the long-run stable estimate)
+          4. 1.0 (too few samples, or apply=False)
+        """
         if not self._apply:
             return 1.0
+        # 1 — per-regime.
+        if self._regime_conditional and regime_label:
+            rs = self._skill_by_regime.get(tribe_id, {}).get(regime_label)
+            if rs and rs["n"] >= self._regime_min_samples:
+                return self._ewma_to_multiplier(float(rs["ewma"]))
         s = self._skill.get(tribe_id)
         if not s or s["n"] < self._min_samples:
             return 1.0
         slow = float(s["ewma"])
         fast = float(s.get("ewma_fast", slow))
-        # Regime-shift override: fast EWMA wins if it has its own sample
-        # floor AND diverges from slow by more than threshold.
+        # 2 — fast override.
         if s["n"] >= self._min_samples_fast and abs(fast - slow) >= self._regime_shift_threshold:
             return self._ewma_to_multiplier(fast)
+        # 3 — slow fallback.
         return self._ewma_to_multiplier(slow)
 
     def regime_shift_alerts(self) -> list[dict]:
@@ -241,6 +276,18 @@ class TribeCalibrator:
                 s["n"] >= self._min_samples_fast
                 and abs(diff) >= self._regime_shift_threshold
             )
+            regime_rows = []
+            for reg, rs in sorted(self._skill_by_regime.get(tid, {}).items()):
+                regime_rows.append({
+                    "regime": reg,
+                    "n": int(rs["n"]),
+                    "ewma_hit": float(rs["ewma"]),
+                    "raw_hit_rate": (rs["correct"] / rs["n"]) if rs["n"] else None,
+                    "active": (
+                        self._regime_conditional
+                        and rs["n"] >= self._regime_min_samples
+                    ),
+                })
             rows.append({
                 "tribe_id": tid,
                 "n": s["n"],
@@ -251,6 +298,7 @@ class TribeCalibrator:
                 "divergence": diff,
                 "regime_shift": shifted,
                 "multiplier": self.skill_multiplier(tid),
+                "by_regime": regime_rows,
             })
         return {
             "apply": self._apply,
@@ -261,6 +309,8 @@ class TribeCalibrator:
             "regime_shift_threshold": self._regime_shift_threshold,
             "max_shrink": self._max_shrink,
             "max_boost": self._max_boost,
+            "regime_conditional": self._regime_conditional,
+            "regime_min_samples": self._regime_min_samples,
             "tribes": rows,
         }
 
@@ -270,6 +320,7 @@ class TribeCalibrator:
         payload = {
             "updated_at": datetime.now(timezone.utc).isoformat(),
             "skill": self._skill,
+            "skill_by_regime": self._skill_by_regime,
         }
         try:
             self._path.write_bytes(orjson.dumps(payload, option=orjson.OPT_INDENT_2))
@@ -304,5 +355,24 @@ class TribeCalibrator:
                 "ewma": ewma,
                 "ewma_fast": ewma_fast,
             }
+        # Regime-conditional skill (backfill-friendly — older files lack this).
+        regime = data.get("skill_by_regime") if isinstance(data, dict) else None
+        if isinstance(regime, dict):
+            for tid, by_reg in regime.items():
+                if not isinstance(by_reg, dict):
+                    continue
+                clean: dict[str, dict] = {}
+                for label, rs in by_reg.items():
+                    if not isinstance(rs, dict):
+                        continue
+                    rn = int(rs.get("n", 0))
+                    rewma = float(rs.get("ewma", 0.5)) if rn > 0 else 0.5
+                    clean[str(label)] = {
+                        "n": rn,
+                        "correct": int(rs.get("correct", 0)),
+                        "ewma": rewma,
+                    }
+                if clean:
+                    self._skill_by_regime[tid] = clean
         logger.info("[calibrator] loaded skill overlay for {} tribes from {}",
                     len(self._skill), self._path.name)

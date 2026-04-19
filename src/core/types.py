@@ -83,6 +83,21 @@ class Forecast:
     expected_move_bps: float     # cumulative expected move, basis points
     confidence: float            # decays with depth
     horizon_seconds: int
+    # Wiggly-path enrichment — optional, all three default None so existing
+    # callers/tests stay untouched. `steps_bps` is the cumulative expected
+    # move at each step (monotonic drift); `steps_sigma_bps` is the stddev
+    # around that drift derived from the backscorer; `sample_paths_bps` is
+    # a bundle of Monte Carlo realizations drawn using per-step sigma.
+    steps_bps: list[float] | None = None
+    steps_sigma_bps: list[float] | None = None
+    sample_paths_bps: list[list[float]] | None = None
+    # Fraction of per-tribe MC paths whose terminal bps shares the sign of
+    # `expected_move_bps`. 1.0 = every path agreed, 0.5 = total ambiguity.
+    # Populated only when the projector is configured for per-tribe sampling;
+    # the decision engine uses this as a size multiplier.
+    directional_agreement: float | None = None
+    # Sample-path forecast curve (median) and per-path terminals for audit.
+    sample_terminals_bps: list[float] | None = None
 
 
 @dataclass(slots=True)
@@ -101,6 +116,10 @@ class Position:
     # Audit metadata — what the forecast said at entry
     expected_move_bps: float = 0.0
     confidence: float = 0.0
+    # Shape-aware exit — seconds-from-entry at which the projected favorable
+    # move peaked. Executor closes the position if held significantly past
+    # this point (see PaperExecutor.shape_grace_seconds). 0 disables.
+    peak_favorable_s: int = 0
 
     @property
     def is_flat(self) -> bool:
@@ -126,3 +145,5 @@ class TradeIntent:
     tp_price: float = 0.0
     sl_price: float = 0.0
     horizon_seconds: int = 0
+    # Shape-aware exit metadata (see Position.peak_favorable_s).
+    peak_favorable_s: int = 0
