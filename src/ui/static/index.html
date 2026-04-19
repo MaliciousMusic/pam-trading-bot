@@ -47,7 +47,7 @@
 
   /* ── MAIN 3-COLUMN GRID ─────────────── */
   main{flex:1;display:grid;width:100%;
-    grid-template-columns:minmax(160px,216px) 1fr minmax(200px,268px);
+    grid-template-columns:minmax(150px,200px) 1fr minmax(190px,248px);
     grid-template-rows:1fr;
     gap:1px;background:var(--border);overflow:hidden;min-height:0;min-width:0}
 
@@ -125,6 +125,17 @@
   .chart-box{display:flex;flex-direction:column;padding:10px 14px;min-height:0;overflow:hidden}
   .chart-box.price{flex:1}
   .chart-box.equity{flex-shrink:0;height:88px}
+  .chart-box.accmap{flex-shrink:0;padding:5px 10px 6px}
+  .accmap-wrap{display:flex;gap:4px;align-items:stretch;margin-top:3px}
+  .accmap-rows{display:flex;flex-direction:column;gap:1px;flex-shrink:0;font-size:9px;line-height:1}
+  .accmap-rows .row{display:flex;align-items:center;gap:3px;height:9px;color:var(--muted);white-space:nowrap}
+  .accmap-rows .row i{width:5px;height:5px;border-radius:50%;flex:none}
+  .accmap-rows .row.global{color:#e8e3d4;font-weight:600}
+  .accmap-rows .row.global i{background:rgba(100,230,255,0.95)}
+  .chart-box.accmap canvas{flex:1;height:auto;width:100%;display:block}
+  .acc-legend{display:inline-flex;gap:6px;align-items:center;font-size:9px;color:var(--muted);margin-left:8px}
+  .acc-legend i{width:6px;height:6px;border-radius:2px;display:inline-block}
+  .accmap-axis{display:flex;justify-content:space-between;font-size:9px;color:var(--muted);margin-top:2px;padding:0 2px}
   .chart-hdr{display:flex;justify-content:space-between;align-items:baseline;
     margin-bottom:6px;flex-shrink:0}
   .chart-hdr .k{font-size:8.5px;color:var(--muted);letter-spacing:.12em;
@@ -164,7 +175,10 @@
   .trade-legend span{display:inline-flex;align-items:center;gap:3px}
 
   /* ── RIGHT SIDEBAR ───────────────────── */
-  .sidebar{padding:9px;overflow:auto;display:flex;flex-direction:column;gap:7px;background:var(--bg);min-width:0}
+  .sidebar{padding:7px;overflow:hidden;display:flex;flex-direction:column;gap:5px;background:var(--bg);min-width:0;min-height:0}
+  .sidebar .box{display:flex;flex-direction:column;min-height:0}
+  .sidebar #pos-box{flex:0 0 auto}
+  .sidebar #th-box{flex:1 1 0;min-height:0}
   .box{background:var(--bg2);border-radius:3px;padding:9px}
   .box-hdr{display:flex;justify-content:space-between;align-items:baseline;
     font-size:8.5px;color:var(--muted);letter-spacing:.12em;
@@ -180,7 +194,7 @@
   .proj-lbl{display:flex;justify-content:space-between;font-size:7.5px;
     color:var(--muted);margin-top:4px;font-family:var(--mono)}
   .pos-meta{font-family:var(--mono);font-size:8.5px;color:var(--muted);margin-bottom:4px}
-  .ports{max-height:280px;overflow-y:auto;display:flex;flex-direction:column;gap:3px}
+  .ports{max-height:180px;overflow-y:auto;display:flex;flex-direction:column;gap:3px}
   .ports::-webkit-scrollbar{width:4px}
   .ports::-webkit-scrollbar-thumb{background:var(--bg3);border-radius:2px}
   .port-row{display:grid;grid-template-columns:30px 40px 1fr auto;gap:5px;
@@ -199,7 +213,7 @@
     text-align:center;padding:10px 0;font-style:italic}
 
   /* ── TRADE HISTORY ──────────────────── */
-  .th-list{display:flex;flex-direction:column;gap:2px;max-height:320px;overflow-y:auto}
+  .th-list{display:flex;flex-direction:column;gap:2px;flex:1 1 0;min-height:0;overflow-y:auto}
   .th-list::-webkit-scrollbar{width:4px}
   .th-list::-webkit-scrollbar-thumb{background:var(--bg3);border-radius:2px}
   .th-row{display:grid;grid-template-columns:22px 1fr auto;gap:4px;
@@ -252,27 +266,21 @@
     .chart-box.equity{height:64px}
     .chart-box.equity canvas{height:28px}
   }
-  /* Narrow: switch to 2-column scrollable layout. Breakpoint raised from
-     1100 → 1400px so mid-width viewports (split-screen IDE + browser,
-     docked panels) get the sidebar BELOW the chart at full width — the
-     cramped ~200px column wasn't readable for the portfolio/trade-history
-     stack. */
-  @media (max-width:1400px){
-    header{gap:10px;padding:6px 12px}
-    .hdr-item .v{font-size:12px}
-    .hdr-item .k{font-size:8px}
-    body{overflow:auto;height:auto;min-height:100vh}
-    header{flex-wrap:wrap;gap:6px 10px;padding:6px 10px}
-    main{grid-template-columns:minmax(160px,210px) 1fr;
-         grid-template-rows:auto auto;gap:1px;overflow:visible}
-    .left-panel{grid-column:1;grid-row:1 / span 2;min-height:480px}
-    .charts-panel{grid-column:2;grid-row:1;min-height:420px;overflow:visible}
-    .sidebar{grid-column:2;grid-row:2;flex-direction:row;flex-wrap:wrap;
-             overflow:visible;max-height:none;padding:8px;gap:8px}
-    .sidebar .box{flex:1 1 220px;min-width:220px}
-    .ports{max-height:180px}
-    .chart-box.price{min-height:280px}
-    footer{height:auto;min-height:40px}
+  /* Mid-width: keep the 3-column grid but tighten column widths so the
+     whole dashboard still fits in the viewport without a right scrollbar.
+     The goal is to NEVER need to scroll — every component visible at once.
+     We only fall back to a stacked layout at phablet-or-narrower widths. */
+  @media (max-width:1280px){
+    main{grid-template-columns:minmax(140px,180px) 1fr minmax(180px,230px)}
+    .chart-box.equity{height:60px}
+    .chart-box.equity canvas{height:28px}
+  }
+  @media (max-width:1060px){
+    main{grid-template-columns:minmax(130px,160px) 1fr minmax(170px,210px)}
+    .chart-box.equity{height:48px}
+    .chart-box.equity canvas{height:22px}
+    .hdr-item .v{font-size:11px}
+    .hdr-item .k{font-size:7.5px}
   }
   /* Phablet / large mobile */
   @media (max-width:720px){
@@ -559,15 +567,8 @@
       </div>
       <div class="canvas-wrap"><canvas id="price-c"></canvas></div>
       <div class="pred-legend" id="pred-legend">
-        <span data-tgl="15s"><i style="background:#22d3ee"></i>+15s<b id="acc-15s"></b></span>
-        <span data-tgl="1m"><i style="background:#60a5fa"></i>+1m<b id="acc-1m"></b></span>
-        <span data-tgl="5m"><i style="background:#c084fc"></i>+5m<b id="acc-5m"></b></span>
-        <span data-tgl="10m"><i style="background:#fb923c"></i>+10m<b id="acc-10m"></b></span>
-        <span class="sep"></span>
         <span data-tgl="proj" class="tgl">projection</span>
-        <span data-tgl="lines" class="tgl">écarts</span>
       </div>
-      <div class="pred-hint">clic pour masquer · ● vert = direction correcte · ● rouge = inverse · trait = écart prédit/réel</div>
       <div class="trade-legend">
         <span><span style="color:var(--buy);font-size:10px">▲</span> long entry</span>
         <span><span style="color:var(--sell);font-size:10px">▼</span> short entry</span>
@@ -581,6 +582,22 @@
         <span class="v" id="eq-d">—</span>
       </div>
       <canvas id="eq-c"></canvas>
+    </div>
+    <div class="chart-box accmap">
+      <div class="chart-hdr">
+        <span class="k">Accuracy Heatmap</span>
+        <span class="v" id="acc-d">— tribes × — steps</span>
+        <span class="acc-legend">
+          <i style="background:#d94f4f"></i>malus
+          <i style="background:#3a3a3a"></i>neutre
+          <i style="background:#4dbb6e"></i>bonus
+        </span>
+      </div>
+      <div class="accmap-wrap">
+        <div class="accmap-rows" id="accmap-rows"></div>
+        <canvas id="accmap-c"></canvas>
+      </div>
+      <div class="accmap-axis"><span>+1</span><span>horizon (steps)</span><span>+N</span></div>
     </div>
   </div>
 
@@ -633,6 +650,26 @@
     ta_day_trader_asia:'#5c6bc0',ta_day_trader_eu:'#ab47bc',
     ta_day_trader_us:'#ffa726'};
   const tribeColor=id=>TRIBE_COLORS[id]||'#bdbdbd';
+  // Hue extraction from a hex colour — lets us order tribes by position on
+  // the colour wheel so the council ring and heatmap rows follow a smooth
+  // red→yellow→green→cyan→blue→magenta gradient instead of a weight- or
+  // insertion-order jumble.
+  function hexHue(hex){
+    const h=(hex||'#888').replace('#','');
+    if(h.length<6) return 0;
+    const r=parseInt(h.slice(0,2),16)/255;
+    const g=parseInt(h.slice(2,4),16)/255;
+    const b=parseInt(h.slice(4,6),16)/255;
+    const mx=Math.max(r,g,b), mn=Math.min(r,g,b), d=mx-mn;
+    if(d===0) return 0;
+    let hu;
+    if(mx===r) hu=((g-b)/d)%6;
+    else if(mx===g) hu=(b-r)/d+2;
+    else hu=(r-g)/d+4;
+    hu*=60; if(hu<0) hu+=360;
+    return hu;
+  }
+  const tribeHue=id=>hexHue(TRIBE_COLORS[id]||'#888');
   const $=id=>document.getElementById(id);
   const fmt=(n,d=2)=>n==null?'—':n.toLocaleString(undefined,{minimumFractionDigits:d,maximumFractionDigits:d});
   const bps=n=>n==null?'—':(n>=0?'+':'')+n.toFixed(1)+'bps';
@@ -661,7 +698,7 @@
   };
   const predictionTrail=[];
   let currentTick=0;
-  const VISIBLE={'15s':true,'1m':true,'5m':true,'10m':true,proj:true,lines:true};
+  const VISIBLE={proj:true};
   const knownPositions=new Map(); // id → {side, entry_price}
   const tradeEvents=[]; // {tick, price, side, type:'entry'|'exit', pnlBps}
   let posTrackingInit=false;
@@ -674,7 +711,10 @@
 
   async function loadTribes(){
     const r=await fetch('/api/tribes'); const ts=await r.json();
-    ts.sort((a,b)=>b.weight-a.weight);
+    // Arrange tribes around the council ring in colour-wheel order so
+    // neighbours are visually related — red/orange together, then yellow,
+    // green, cyan, blue, purple — instead of being reshuffled by weight.
+    ts.sort((a,b)=>tribeHue(a.id)-tribeHue(b.id));
     const root=$('tribes'); root.innerHTML='';
     const n=ts.length;
     ts.forEach((t,i)=>{
@@ -708,19 +748,16 @@
       body.setAttribute('class','body'); body.setAttribute('r',BODY_R);
       g.appendChild(body);
 
-      const em=document.createElementNS(SVG,'text');
-      em.setAttribute('class','emoji'); em.setAttribute('y','1');
-      em.textContent=ICONS[t.id]||'◆';
-      g.appendChild(em);
-
-      // Tribe-color dot — matches the chart path color so you can correlate
-      // "that wiggly line is this tribe". Placed top-right of the body.
-      const tag=document.createElementNS(SVG,'circle');
-      tag.setAttribute('cx',BODY_R*0.62); tag.setAttribute('cy',-BODY_R*0.62);
-      tag.setAttribute('r',3.2);
-      tag.setAttribute('fill',tribeColor(t.id));
-      tag.setAttribute('stroke','#101010'); tag.setAttribute('stroke-width','1');
-      g.appendChild(tag);
+      // Tribe-color identity dot — replaces the emoji. Centered inside the
+      // body so the tribe's hue is the primary visual, matching the chart
+      // path colour and the heatmap row colour exactly.
+      const dot=document.createElementNS(SVG,'circle');
+      dot.setAttribute('cx',0); dot.setAttribute('cy',0);
+      dot.setAttribute('r',BODY_R*0.55);
+      dot.setAttribute('fill',tribeColor(t.id));
+      dot.setAttribute('stroke','rgba(0,0,0,0.55)');
+      dot.setAttribute('stroke-width','1');
+      g.appendChild(dot);
 
       const labelY=RING_R+14;
       const nm=document.createElementNS(SVG,'text');
@@ -947,16 +984,10 @@
       }
     }
 
-    const bs=t.backscore&&t.backscore.by_horizon||[];
-    const bmap={};for(const row of bs){bmap[row.label]=row;}
-    for(const lbl of ['15s','1m','5m','10m']){
-      const el=$('acc-'+lbl);if(!el)continue;
-      const row=bmap[lbl];
-      if(!row||row.hit_rate==null){el.textContent='';continue;}
-      const hr=Math.round(row.hit_rate*100);
-      const mae=row.mae_bps!=null?row.mae_bps.toFixed(1):'—';
-      el.textContent=` ${hr}% · ${mae}bps · n=${row.n}`;
-    }
+    // Per-tribe horizon-specific accuracy heatmap (replaces the old global
+    // 15s/1m/5m/10m dot trail). The projector ships `projector_weights`
+    // ∈ [0.1, 3.0] per (tribe, horizon); we render it as a 17 × N grid.
+    renderAccuracyHeatmap(t.projector_weights, t.forecast_sample_paths_tribe_ids);
 
     if(e0==null)e0=t.equity_usd;
     eqHist.push(t.equity_usd);
@@ -969,6 +1000,122 @@
 
     renderPortfolio(t.positions||[], t.total_notional_usd||0, t.equity_usd, t.price, t.ts);
     renderTradeHistory(t.recent_trades||[]);
+  }
+
+  // Adaptive Temporal Weighting heatmap: rows = 17 tribes + a top "Global"
+  // row (weighted mean across tribes), cols = projector horizons (1..N).
+  // Colour: midnight-black at W=1 (neutral), red as W→0.1 (malus), green
+  // as W→3.0 (bonus). Logarithmic so the +/- extremes are visually
+  // symmetric around neutral.
+  const _accRowOrder=[];  // stable tribe order once first frame arrives
+  function renderAccuracyHeatmap(weights, tribeIds){
+    if(!weights||typeof weights!=='object') return;
+    const ids=Object.keys(weights);
+    if(!ids.length) return;
+    // Freeze ordering on first non-empty frame, sorted by tribe hue so the
+    // heatmap rows follow the same colour-wheel gradient as the council.
+    if(!_accRowOrder.length){
+      const pool=new Set();
+      const src=(tribeIds&&tribeIds.length)?tribeIds:ids;
+      for(const id of src) if(weights[id]) pool.add(id);
+      for(const id of ids) pool.add(id);
+      _accRowOrder.push(...[...pool].sort((a,b)=>tribeHue(a)-tribeHue(b)));
+    }
+    const rowIds=_accRowOrder.filter(id=>Array.isArray(weights[id]));
+    const nSteps=Math.max(...rowIds.map(id=>weights[id].length));
+    if(!nSteps) return;
+    // Build the row labels (global + per-tribe) and sync the DOM.
+    const rows=$('accmap-rows');
+    const want=['__global__'].concat(rowIds);
+    if(rows.childElementCount!==want.length){
+      rows.innerHTML='';
+      for(const id of want){
+        const div=document.createElement('div');
+        if(id==='__global__'){
+          div.className='row global';
+          div.innerHTML='<i></i><span>Global</span>';
+        }else{
+          div.className='row';
+          const color=(typeof tribeColor==='function')?tribeColor(id):'#888';
+          div.innerHTML=`<i style="background:${color}"></i>`;
+          div.title=id;
+        }
+        rows.appendChild(div);
+      }
+    }
+    // Draw the grid.
+    const canvas=$('accmap-c');
+    const dpr=window.devicePixelRatio||1;
+    const wrap=canvas.parentElement;
+    const cssW=Math.max(60, wrap.clientWidth - rows.offsetWidth - 6);
+    const cellH=9;
+    const cssH=cellH*want.length;
+    canvas.style.width=cssW+'px';
+    canvas.style.height=cssH+'px';
+    canvas.width=Math.max(1, Math.floor(cssW*dpr));
+    canvas.height=Math.max(1, Math.floor(cssH*dpr));
+    const ctx=canvas.getContext('2d');
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    ctx.fillStyle='#08090b';
+    ctx.fillRect(0,0,cssW,cssH);
+    const colW=cssW/nSteps;
+    // Colour mapping: log-space around 1.0, then lerp red(−) / green(+).
+    // Reference = log(1.5) = projector's _weight_max, so a tribe at the cap
+    // renders full green and one at 1/1.5 ≈ 0.67 renders full red. Scale
+    // stays symmetric around neutral (w=1.0).
+    const wToColor=(w)=>{
+      const lw=Math.log(Math.max(0.01,w)) / Math.log(1.5); // ≈[-1, +1]
+      const c=Math.max(-1,Math.min(1,lw));
+      if(c>=0){
+        // neutral grey → green
+        const g=Math.round(58 + (187-58)*c);
+        const r=Math.round(58 + (77 -58)*c);
+        const b=Math.round(58 + (110-58)*c);
+        const a=0.25 + 0.75*Math.abs(c);
+        return `rgba(${r},${g},${b},${a})`;
+      }else{
+        const t=-c;
+        const r=Math.round(58 + (217-58)*t);
+        const g=Math.round(58 + (79 -58)*t);
+        const b=Math.round(58 + (79 -58)*t);
+        const a=0.25 + 0.75*t;
+        return `rgba(${r},${g},${b},${a})`;
+      }
+    };
+    // Build the global weighted-mean row: simple arithmetic mean of W values
+    // (not weighted by pool share — users want to see learned accuracy, not
+    // who's big). Matches the projector's per-horizon scoring semantics.
+    const globalRow=new Array(nSteps).fill(0);
+    const globalN=new Array(nSteps).fill(0);
+    for(const id of rowIds){
+      const row=weights[id];
+      for(let h=0;h<Math.min(nSteps,row.length);h++){
+        globalRow[h]+=row[h]; globalN[h]++;
+      }
+    }
+    for(let h=0;h<nSteps;h++) globalRow[h]=globalN[h]?globalRow[h]/globalN[h]:1.0;
+    // Draw global row (top).
+    for(let h=0;h<nSteps;h++){
+      ctx.fillStyle=wToColor(globalRow[h]);
+      ctx.fillRect(h*colW, 0, Math.ceil(colW)+0.5, cellH-1);
+    }
+    // Draw per-tribe rows.
+    for(let r=0;r<rowIds.length;r++){
+      const row=weights[rowIds[r]];
+      const y=(r+1)*cellH;
+      for(let h=0;h<nSteps;h++){
+        const w=h<row.length?row[h]:1.0;
+        ctx.fillStyle=wToColor(w);
+        ctx.fillRect(h*colW, y, Math.ceil(colW)+0.5, cellH-1);
+      }
+    }
+    const accD=$('acc-d');
+    if(accD) accD.textContent=`${rowIds.length} tribes × ${nSteps} steps`;
+    const axis=document.querySelector('.accmap-axis');
+    if(axis){
+      const spans=axis.querySelectorAll('span');
+      if(spans.length===3) spans[2].textContent=`+${nSteps}`;
+    }
   }
 
   function renderTradeHistory(trades){
@@ -1164,53 +1311,6 @@
       ctx.stroke();
     }
 
-    // prediction dot trail (behind price line)
-    const accStats={'15s':{n:0,hit:0,err:0},'1m':{n:0,hit:0,err:0},
-                    '5m':{n:0,hit:0,err:0},'10m':{n:0,hit:0,err:0}};
-    if(trail&&trail.length){
-      const earliestTick=tickNow - hist.length + 1;
-      for(const e of trail){
-        if(!VISIBLE[e.label]) continue;
-        const targetTick=e.tick + e.horizon_steps;
-        let combined_i, matured=false, actualPrice=null;
-        if(targetTick<=tickNow){
-          if(targetTick<earliestTick) continue;
-          combined_i=hist.length - 1 - (tickNow - targetTick);
-          actualPrice=hist[combined_i];
-          matured=true;
-        }else{
-          if(!projLen) continue;
-          const projIdx=targetTick - tickNow - 1;
-          if(projIdx>=projLen) continue;
-          combined_i=hist.length + projIdx;
-        }
-        const x=xAt(combined_i), yPred=yAt(e.predicted_price);
-        if(matured && actualPrice!=null && e.base_price){
-          const predMove=e.predicted_price - e.base_price;
-          const actualMove=actualPrice - e.base_price;
-          const correct=(predMove===0&&actualMove===0)||(predMove*actualMove)>0;
-          const errorBps=Math.abs(e.predicted_price - actualPrice)/e.base_price*10000;
-          const s=accStats[e.label];
-          if(s){s.n++;if(correct)s.hit++;s.err+=errorBps;}
-          if(VISIBLE.lines){
-            const yAct=yAt(actualPrice);
-            ctx.strokeStyle=correct?'rgba(77,187,110,.35)':'rgba(217,79,79,.35)';
-            ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(x,yPred);ctx.lineTo(x,yAct);ctx.stroke();
-          }
-          ctx.globalAlpha=0.35;ctx.fillStyle=e.color;
-          ctx.beginPath();ctx.arc(x,yPred,1.8,0,Math.PI*2);ctx.fill();
-          ctx.globalAlpha=0.55;
-          ctx.strokeStyle=correct?'#4dbb6e':'#d94f4f';
-          ctx.lineWidth=0.8;ctx.beginPath();ctx.arc(x,yPred,2.8,0,Math.PI*2);ctx.stroke();
-          ctx.globalAlpha=1;
-        }else{
-          ctx.fillStyle=e.color;ctx.globalAlpha=0.6;
-          ctx.beginPath();ctx.arc(x,yPred,1.8,0,Math.PI*2);ctx.fill();
-          ctx.globalAlpha=1;
-        }
-      }
-    }
-
     // historic price line — drawn LAST so it stays readable above dots
     ctx.strokeStyle='#000';ctx.lineWidth=3.5;ctx.lineJoin='round';ctx.beginPath();
     hist.forEach((v,i)=>{const x=xAt(i),y=yAt(v);
@@ -1277,15 +1377,6 @@
       ctx.restore();
     }
 
-    for(const k of Object.keys(accStats)){
-      const s=accStats[k];
-      const el=document.getElementById('acc-'+k);if(!el)continue;
-      if(s.n===0){el.textContent='';continue;}
-      const acc=Math.round(s.hit/s.n*100);
-      const avgErr=(s.err/s.n).toFixed(0);
-      el.textContent=` ${acc}% ±${avgErr}bps (${s.n})`;
-      el.style.color=acc>=60?'#4dbb6e':acc>=45?'#666':'#d94f4f';
-    }
   }
 
   function onEvent(ev){
@@ -1602,7 +1693,7 @@
     ws=new WebSocket(`${proto}//${location.host}/ws`);
     ws.onopen=()=>{const c=$('conn');c.textContent='live';c.className='live'};
     ws.onmessage=e=>{const m=JSON.parse(e.data);
-      if(m.type==='tick'){
+      if(m.type==='tick'){window._lastTick=m;
         if(m.variant_id!=null)onVariantTick(m.variant_id,m);else onTick(m);
       }else if(m.type==='event')onEvent(m);
       else if(m.type==='replay_state')onReplayState(m)};
