@@ -28,10 +28,16 @@
   .hdr-item .k{font-size:8.5px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;white-space:nowrap}
   .hdr-item .v{font-family:var(--mono);font-size:14px;font-weight:600;white-space:nowrap}
   .spacer{flex:1}
-  #btn-export{background:none;border:1px solid var(--border);color:var(--muted);
+  #btn-export,#btn-backtest,#btn-live{background:none;border:1px solid var(--border);color:var(--muted);
     font-size:8.5px;letter-spacing:.1em;padding:3px 8px;border-radius:2px;cursor:pointer;
     font-family:var(--mono)}
   #btn-export:hover{border-color:var(--fg);color:var(--fg)}
+  #btn-backtest{border-color:#c8820a;color:#c8820a;text-decoration:none;display:inline-flex;align-items:center}
+  #btn-backtest:hover{border-color:#f0a030;color:#f0a030}
+  #btn-backtest:active,#btn-backtest.hdr-btn-on{background:rgba(200,130,10,.18);border-color:#f0a030;color:#f0a030}
+  #btn-live{border-color:#2a6e2a;color:#4caf50;text-decoration:none;display:inline-flex;align-items:center}
+  #btn-live:hover{border-color:#4caf50;color:#8bc34a}
+  #btn-live:active,#btn-live.hdr-btn-on{background:rgba(76,175,80,.15);border-color:#8bc34a;color:#8bc34a}
   #conn{padding:2px 8px;border-radius:2px;font-size:8.5px;
     background:var(--bg3);letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
   #conn.live{background:var(--buy);color:#000}
@@ -412,6 +418,13 @@
     background:transparent;border:1px solid var(--bg3);color:var(--fg);
     padding:5px 12px;border-radius:2px;cursor:pointer;font-size:11px;opacity:.6;
   }
+  .rs-preset{
+    background:var(--bg3);border:1px solid var(--bg3);color:var(--muted);
+    padding:3px 8px;border-radius:2px;cursor:pointer;font-size:10px;
+    font-family:var(--mono);letter-spacing:.05em;
+  }
+  .rs-preset:hover{border-color:var(--fg);color:var(--fg)}
+  .rs-preset.active{background:rgba(200,168,75,.2);border-color:var(--accent);color:var(--accent)}
 </style>
 </head>
 <body>
@@ -424,6 +437,8 @@
   <div class="hdr-item"><span class="k">Tick</span><span class="v" id="h-tick">—</span></div>
   <div class="hdr-item"><span class="k">Sizing</span><span class="v curve-badge" id="h-curve">—</span></div>
   <span class="spacer"></span>
+  <button id="btn-backtest" title="Start a backtest replay session">⏮ BACKTEST</button>
+  <button id="btn-live" title="Switch to live trading view">◉ LIVE</button>
   <button id="btn-export" onclick="exportReport()" title="Download session audit report">⬇ REPORT</button>
   <span id="conn">connecting</span>
 </header>
@@ -439,9 +454,9 @@
   <div class="rb-controls">
     <button class="rb-btn" id="rb-pause-btn" onclick="replayPause()">⏸ PAUSE</button>
     <button class="rb-btn" onclick="replayStop()">■ STOP</button>
-    <button class="rb-btn" id="rb-speed-up" onclick="replaySpeed(2)">2×</button>
+    <button class="rb-btn" id="rb-speed-up" onclick="replaySpeed(3)">3×</button>
     <button class="rb-btn" id="rb-speed-10" onclick="replaySpeed(10)">10×</button>
-    <button class="rb-btn" id="rb-speed-50" onclick="replaySpeed(50)">50×</button>
+    <button class="rb-btn" id="rb-speed-30" onclick="replaySpeed(30)">30×</button>
   </div>
 </div>
 
@@ -449,12 +464,24 @@
 <div id="replay-start">
   <div class="rs-box">
     <h2>START REPLAY</h2>
-    <div class="rs-row"><label>DATE (YYYY-MM-DD)</label>
+    <div class="rs-row"><label>START DATE (YYYY-MM-DD)</label>
       <input id="rs-day" type="date" value="2024-01-15"></div>
+    <div class="rs-row"><label>DURATION — consecutive UTC days (equity carries over)</label>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input id="rs-days" type="number" value="1" min="1" max="30" step="1" style="width:70px">
+        <div style="display:flex;gap:4px">
+          <button type="button" class="rs-preset" data-days="1">1d</button>
+          <button type="button" class="rs-preset" data-days="3">3d</button>
+          <button type="button" class="rs-preset" data-days="7">1w</button>
+          <button type="button" class="rs-preset" data-days="14">2w</button>
+          <button type="button" class="rs-preset" data-days="30">1mo</button>
+        </div>
+      </div>
+    </div>
     <div class="rs-row"><label>SYMBOL</label>
       <input id="rs-symbol" type="text" value="BTCUSDT"></div>
     <div class="rs-row"><label>SPEED (×real-time)</label>
-      <input id="rs-speed" type="number" value="10" min="0.1" max="1000" step="1"></div>
+      <input id="rs-speed" type="number" value="3" min="0.1" max="200" step="1"></div>
     <div class="rs-row"><label>SYNTH RATES — check multiple to compare variants</label>
       <div style="display:flex;gap:12px;margin-top:2px">
         <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer">
@@ -466,9 +493,10 @@
       </div></div>
     <div class="rs-row"><label>SEED</label>
       <input id="rs-seed" type="number" value="42" min="0"></div>
+    <div id="rs-error" style="color:#ff6b6b;font-size:11px;margin-top:6px;display:none"></div>
     <div class="rs-actions">
-      <button class="rs-btn-cancel" onclick="$('replay-start').classList.remove('visible')">Cancel</button>
-      <button class="rs-btn-go" onclick="replayStart()">▶ START</button>
+      <button class="rs-btn-cancel" id="rs-cancel-btn" onclick="closeReplayModal()">Cancel</button>
+      <button class="rs-btn-go" id="rs-start-btn" onclick="replayStart()">▶ START</button>
     </div>
   </div>
 </div>
@@ -1454,11 +1482,26 @@
   /* ── Replay banner — ONLY function that touches #replay-banner ── */
   function onReplayState(m){
     const banner=$('replay-banner');
-    if(!m.active){banner.classList.remove('active','paused');return}
+    if(!m.active){
+      banner.classList.remove('active','paused');
+      // Replay ended — LIVE back to selected
+      $('btn-live').classList.add('hdr-btn-on');
+      $('btn-backtest').classList.remove('hdr-btn-on');
+      return;
+    }
     // Track run_id for tick inspect (keep after end so charts stay inspectable)
     if(m.run_id) _replayRunId=m.run_id;
-    // Close start modal if a replay just became active
+    // Reset price/equity baselines so the first replay tick sets p0, not a
+    // stale live price that may have slipped through before mute_live was set.
+    p0=null; e0=null;
+    // Close start modal and reset button state
     $('replay-start').classList.remove('visible');
+    const sb=$('rs-start-btn');const cb=$('rs-cancel-btn');
+    if(sb){sb.textContent='▶ START';sb.disabled=false;}
+    if(cb){cb.disabled=false;}
+    // BACKTEST is now the active mode
+    $('btn-backtest').classList.add('hdr-btn-on');
+    $('btn-live').classList.remove('hdr-btn-on');
     banner.classList.add('active');
     banner.classList.toggle('paused',!!m.paused);
     $('rb-day').textContent=m.day||'—';
@@ -1498,19 +1541,42 @@
 
   async function replayStart(){
     const day=$('rs-day').value;
+    if(!day){return;}
     const symbol=$('rs-symbol').value||'BTCUSDT';
     const speed=parseFloat($('rs-speed').value)||10;
     const seed=parseInt($('rs-seed').value)||42;
+    const days=Math.max(1,parseInt($('rs-days').value)||1);
     const checked=[...document.querySelectorAll('.sr-chk:checked')].map(el=>parseInt(el.value));
     const rates=checked.length>0?checked:[60];
-    $('replay-start').classList.remove('visible');
+    const btn=$('rs-start-btn');
+    const cancelBtn=$('rs-cancel-btn');
+    const errEl=$('rs-error');
+    btn.textContent='⏳ Starting…';
+    btn.disabled=true;
+    cancelBtn.disabled=true;
+    errEl.style.display='none';
     resetChartState();
     const body=rates.length>1
-      ?{day,symbol,speed,seed,variants:rates.map(r=>({synth_rate:r,seed}))}
-      :{day,symbol,speed,seed,synth_rate:rates[0]};
-    await fetch('/api/replay/start',{method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify(body)}).catch(()=>{});
+      ?{day,symbol,speed,seed,days,variants:rates.map(r=>({synth_rate:r,seed}))}
+      :{day,symbol,speed,seed,days,synth_rate:rates[0]};
+    try{
+      const r=await fetch('/api/replay/start',{method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(body)});
+      if(!r.ok){
+        const txt=await r.text().catch(()=>r.statusText);
+        throw new Error(`Server error ${r.status}: ${txt}`);
+      }
+    }catch(e){
+      errEl.textContent=e.message||'Failed to start replay';
+      errEl.style.display='block';
+      btn.textContent='▶ START';
+      btn.disabled=false;
+      cancelBtn.disabled=false;
+      return;
+    }
+    // Success — modal will close when replay_state.active=true arrives via WS
+    btn.textContent='▶ Starting…';
   }
 
   /* Show start modal when at /replay and no replay is active */
@@ -1578,6 +1644,40 @@
   Promise.all([loadConfig(),loadTribes()]).then(connect);
   maybeShowReplayForm();
   _initInspectHandlers();
+
+  // ── Header mode buttons ──────────────────────────────────────────
+  $('btn-backtest').addEventListener('click',()=>{
+    $('replay-start').classList.add('visible');
+  });
+  $('btn-live').addEventListener('click',()=>{
+    window.location.href='/';
+  });
+  // Default: LIVE is selected unless replay is active
+  $('btn-live').classList.add('hdr-btn-on');
+
+  // ── Duration preset buttons (1d / 3d / 1w / 2w / 1mo) ─────────────
+  function _updateDaysPresetActive(){
+    const n=parseInt($('rs-days').value)||1;
+    document.querySelectorAll('.rs-preset').forEach(b=>{
+      b.classList.toggle('active',parseInt(b.dataset.days)===n);
+    });
+  }
+  document.querySelectorAll('.rs-preset').forEach(btn=>{
+    btn.addEventListener('click',()=>{
+      $('rs-days').value=btn.dataset.days;
+      _updateDaysPresetActive();
+    });
+  });
+  const daysInput=$('rs-days');
+  if(daysInput) daysInput.addEventListener('input',_updateDaysPresetActive);
+  _updateDaysPresetActive();
+
+  // ── Expose functions used by inline onclick handlers ─────────────
+  window.closeReplayModal = ()=> $('replay-start').classList.remove('visible');
+  window.replayStart  = replayStart;
+  window.replayPause  = replayPause;
+  window.replayStop   = replayStop;
+  window.replaySpeed  = replaySpeed;
 })();
 
 async function exportReport(){

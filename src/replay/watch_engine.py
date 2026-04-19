@@ -112,7 +112,7 @@ class WatchEngine:
 
     async def _run_inner(self, events: Iterable[Event]) -> dict:
         if self._emit_replay_state:
-            await self.broadcaster.publish(self._replay_state_msg())
+            await self.broadcaster.publish_replay(self._replay_state_msg())
 
         last_tick_ts: datetime | None = None
         last_ts: datetime | None = None
@@ -125,6 +125,13 @@ class WatchEngine:
             self._events_consumed += 1
             last_ts = ev.ts
             self.state.ingest(ev)
+
+            # Yield every 50 events so the WS send queue + live engine + any
+            # pending HTTP handlers can run. state.ingest is cheap (~µs) but
+            # hundreds of consecutive calls between ticks would otherwise
+            # starve the event loop for tens of ms at a time.
+            if self._events_consumed % 50 == 0:
+                await asyncio.sleep(0)
 
             if last_tick_ts is None:
                 last_tick_ts = ev.ts
@@ -143,7 +150,7 @@ class WatchEngine:
             self.executor._positions = []
 
         if self._emit_replay_state:
-            await self.broadcaster.publish({**self._replay_state_msg(), "active": False})
+            await self.broadcaster.publish_replay({**self._replay_state_msg(), "active": False})
         return {
             "ticks": self._ticks,
             "events_consumed": self._events_consumed,
@@ -151,19 +158,33 @@ class WatchEngine:
         }
 
     async def _tick(self, ts: datetime) -> None:
-        # Pace: sleep before doing work so a cancel during sleep is clean
-        sleep_s = self.tick_seconds / max(self.speed, 0.1)
+        # Pace: sleep before doing work so a cancel during sleep is clean.
+        # Clamp sleep to at least 50ms so the event loop stays responsive at
+        # high speeds — tribe votes + projector can take 100-500ms CPU each
+        # tick; without breathing room, the WS sender and HTTP handlers
+        # starve and the UI appears frozen (speed slider, stop button, etc.).
+        # Effective speed at 3s ticks is capped at ~60x by this floor.
+        sleep_s = max(self.tick_seconds / max(self.speed, 0.1), 0.05)
         await asyncio.sleep(sleep_s)
 
         self._ticks += 1
         if self.state.last_price is None:
             return
 
-        raw_votes = [t.vote(ts, self.state) for t in self.tribes]
+        # Yield between each CPU-heavy step so HTTP handlers and the WS
+        # sender can interleave. Without these yields, a single tick blocks
+        # the event loop for 100-500ms, which at high replay speeds
+        # (cadence < 50ms) freezes the UI.
+        raw_votes = []
+        for t in self.tribes:
+            raw_votes.append(t.vote(ts, self.state))
+            await asyncio.sleep(0)
         regime = self.regime_classifier.classify(self.state)
         self.projector.regime_multiplier = regime.multiplier
         agg = aggregate_votes(raw_votes, ts)
+        await asyncio.sleep(0)
         forecast = self.projector.project(self.state)
+        await asyncio.sleep(0)
 
         if hasattr(self.executor, "apply_funding"):
             self.executor.apply_funding(
@@ -195,7 +216,7 @@ class WatchEngine:
         positions = self.executor.positions
         recent_trades = list(getattr(self.executor, "recent_trades", []))
 
-        await self.broadcaster.publish({
+        await self.broadcaster.publish_replay({
             "type": "tick",
             "variant_id": self.variant_id,
             "tick": self._ticks,
@@ -248,7 +269,7 @@ class WatchEngine:
         })
 
         if self._emit_replay_state and self._ticks % _REPLAY_STATE_EVERY == 0:
-            await self.broadcaster.publish(self._replay_state_msg())
+            await self.broadcaster.publish_replay(self._replay_state_msg())
 
     def _replay_state_msg(self) -> dict:
         pct = (self._ticks / max(self.total_ticks_est, 1)) * 100
@@ -283,7 +304,7 @@ async def _conduct(
         ticks = [e._ticks for e in engines]
         total_est = [e.total_ticks_est for e in engines]
         avg_pct = sum(t / max(te, 1) * 100 for t, te in zip(ticks, total_est)) / len(engines)
-        await broadcaster.publish({
+        await broadcaster.publish_replay({
             "type": "replay_state",
             "active": True,
             "run_id": run_id,
@@ -331,6 +352,7 @@ class WatchController:
         bars: list[dict] | None = None,
         funding: list[dict] | None = None,
         variants: list[dict] | None = None,
+        days: int = 1,
     ) -> str:
         """Start a new watch run, cancelling any active session.
 
@@ -338,97 +360,147 @@ class WatchController:
         and optionally variant_id.  When >1 variant, multi-variant mode is
         used: N concurrent engines + conductor.  When absent or single-element,
         falls back to single-variant behaviour (variant_id=None on tick msgs).
-        Returns the run_id."""
+
+        `days` runs that many consecutive UTC days back-to-back inside one
+        session, with per-variant equity carry-over. days=1 is the classic
+        single-day replay.
+
+        Returns the run_id. The actual data fetch + engine construction happens
+        in the background task so this returns instantly."""
         if self.active:
             await self.stop()
 
+        # Mute live-engine ticks so replay prices don't mix with real prices.
+        # Also flush the tick buffer so newly-connected clients don't receive
+        # stale live prices that would corrupt the replay price baseline (p0).
+        self._broadcaster.mute_live = True
+        self._broadcaster._tick_buffer.clear()
+
         from ..core.config import PROJECT_ROOT, settings
-        from .harness import _build_stack
 
         # Normalise variants list
         if not variants:
             variants = [{"synth_rate": synth_rate, "seed": seed}]
         multi = len(variants) > 1
-
-        if bars is None or funding is None:
-            from .kline_client import CachedHistoricalClient
-            client = CachedHistoricalClient(cache_root=self._cache_root, symbol=symbol)
-            bars = bars or await client.get_day_klines(day)
-            funding = funding or await client.get_day_funding(day)
+        days = max(1, int(days))
 
         cfg = settings()
         run_id = f"watch_{day.isoformat()}_{datetime.utcnow().strftime('%H%M%S')}"
         tick_seconds = int(cfg["clock"]["tick_seconds"])
-        total_ticks_est = len(bars) * 60 // tick_seconds
-
-        engines_events: list[tuple[WatchEngine, Iterable[Event]]] = []
-        for v in variants:
-            vrate = int(v.get("synth_rate", synth_rate))
-            vseed = int(v.get("seed", seed))
-            vid = str(v.get("variant_id", f"synth_{vrate}_seed_{vseed}"))
-            run_root = PROJECT_ROOT / "data" / "replays" / run_id
-            if multi:
-                ledger_dir = run_root / "ledger" / vid
-                decisions_path = run_root / "variants" / vid / "decisions.jsonl"
-            else:
-                ledger_dir = run_root / "ledger"
-                decisions_path = run_root / "decisions.jsonl"
-            decisions_path.parent.mkdir(parents=True, exist_ok=True)
-            tribes, state, projector, decision, executor, regime_clf = _build_stack(
-                cfg, ledger_dir=ledger_dir, rng_seed=vseed,
-            )
-            engine = WatchEngine(
-                tribes=tribes, state=state, projector=projector,
-                decision=decision, executor=executor,
-                regime_classifier=regime_clf,
-                tick_seconds=tick_seconds,
-                broadcaster=self._broadcaster,
-                run_id=run_id, day=day.isoformat(),
-                speed=speed, total_ticks_est=total_ticks_est,
-                variant_id=vid if multi else None,
-                emit_replay_state=not multi,
-                decisions_path=decisions_path,
-            )
-            evs = build_event_stream(bars, funding, synth_rate=vrate, symbol=symbol)
-            engines_events.append((engine, evs))
-
-        self._engines = [e for e, _ in engines_events]
 
         async def _run() -> None:
+            from .harness import _build_stack
+            from .kline_client import CachedHistoricalClient
             try:
-                if multi:
-                    engine_tasks = [
-                        asyncio.create_task(e.run(evs), name=f"watch_{vid}")
-                        for (e, evs), vid in zip(
-                            engines_events,
-                            [v.get("variant_id", f"synth_{v.get('synth_rate',synth_rate)}_seed_{v.get('seed',seed)}")
-                             for v in variants],
+                # Broadcast a "preparing" replay_state immediately so the UI
+                # knows the run is active and closes the start modal. Actual
+                # ticks flow once bars are fetched.
+                await self._broadcaster.publish_replay({
+                    "type": "replay_state", "active": True,
+                    "run_id": run_id, "day": day.isoformat(),
+                    "speed": speed, "tick": 0, "total_ticks_est": 1,
+                    "progress_pct": 0.0, "paused": False, "preparing": True,
+                })
+
+                client = CachedHistoricalClient(cache_root=self._cache_root, symbol=symbol)
+
+                # Build per-variant carry_equity so multi-day preserves equity
+                # across days (same contract as Phase 9 sprint orchestrator).
+                def _variant_id(v: dict) -> str:
+                    return str(v.get("variant_id",
+                        f"synth_{int(v.get('synth_rate',synth_rate))}_seed_{int(v.get('seed',seed))}"))
+                carry_equity: dict[str, float] = {}
+
+                for day_idx in range(days):
+                    current_day = day + timedelta(days=day_idx)
+                    if bars is not None and day_idx == 0:
+                        day_bars = bars
+                        day_funding = funding or []
+                    else:
+                        day_bars = await client.get_day_klines(current_day)
+                        day_funding = await client.get_day_funding(current_day)
+
+                    total_ticks_est = len(day_bars) * 60 // tick_seconds
+
+                    day_engines_events: list[tuple[WatchEngine, Iterable[Event]]] = []
+                    for v in variants:
+                        vrate = int(v.get("synth_rate", synth_rate))
+                        vseed = int(v.get("seed", seed))
+                        vid = _variant_id(v)
+                        run_root = PROJECT_ROOT / "data" / "replays" / run_id
+                        day_suffix = f"day{day_idx+1}" if days > 1 else ""
+                        if multi:
+                            ledger_dir = run_root / "ledger" / vid / day_suffix if day_suffix else run_root / "ledger" / vid
+                            decisions_path = (run_root / "variants" / vid / f"decisions_{day_suffix}.jsonl"
+                                              if day_suffix else run_root / "variants" / vid / "decisions.jsonl")
+                        else:
+                            ledger_dir = run_root / "ledger" / day_suffix if day_suffix else run_root / "ledger"
+                            decisions_path = (run_root / f"decisions_{day_suffix}.jsonl"
+                                              if day_suffix else run_root / "decisions.jsonl")
+                        decisions_path.parent.mkdir(parents=True, exist_ok=True)
+                        starting_eq = carry_equity.get(vid)
+                        tribes, state, projector, decision, executor, regime_clf = _build_stack(
+                            cfg, ledger_dir=ledger_dir, rng_seed=vseed,
+                            starting_equity_usd=starting_eq,
                         )
-                    ]
-                    conductor = asyncio.create_task(
-                        _conduct(self._engines, self._broadcaster, run_id, day.isoformat()),
-                        name=f"conductor_{run_id}",
-                    )
-                    try:
-                        await asyncio.gather(*engine_tasks)
-                    finally:
-                        conductor.cancel()
-                        await asyncio.gather(conductor, return_exceptions=True)
-                    await self._broadcaster.publish({"type": "replay_state", "active": False})
-                    logger.info("[watch] {} multi finished  n_variants={}", run_id, len(variants))
-                else:
-                    e, evs = engines_events[0]
-                    result = await e.run(evs)
-                    logger.info("[watch] {} finished  ticks={} Δeq={:+.2f}",
-                                run_id, result["ticks"],
-                                result["end_equity_usd"] - _STARTING_EQUITY)
+                        engine = WatchEngine(
+                            tribes=tribes, state=state, projector=projector,
+                            decision=decision, executor=executor,
+                            regime_classifier=regime_clf,
+                            tick_seconds=tick_seconds,
+                            broadcaster=self._broadcaster,
+                            run_id=run_id, day=current_day.isoformat(),
+                            speed=speed, total_ticks_est=total_ticks_est,
+                            variant_id=vid if multi else None,
+                            emit_replay_state=not multi,
+                            decisions_path=decisions_path,
+                        )
+                        evs = build_event_stream(day_bars, day_funding, synth_rate=vrate, symbol=symbol)
+                        day_engines_events.append((engine, evs))
+
+                    self._engines = [e for e, _ in day_engines_events]
+
+                    if multi:
+                        engine_tasks = [
+                            asyncio.create_task(e.run(evs), name=f"watch_{_variant_id(v)}_d{day_idx+1}")
+                            for (e, evs), v in zip(day_engines_events, variants)
+                        ]
+                        conductor = asyncio.create_task(
+                            _conduct(self._engines, self._broadcaster, run_id, current_day.isoformat()),
+                            name=f"conductor_{run_id}_d{day_idx+1}",
+                        )
+                        try:
+                            results = await asyncio.gather(*engine_tasks)
+                        finally:
+                            conductor.cancel()
+                            await asyncio.gather(conductor, return_exceptions=True)
+                        for v, r in zip(variants, results):
+                            carry_equity[_variant_id(v)] = r["end_equity_usd"]
+                        logger.info("[watch] {} day {}/{} multi done  n_variants={}",
+                                    run_id, day_idx+1, days, len(variants))
+                    else:
+                        e, evs = day_engines_events[0]
+                        vid0 = _variant_id(variants[0])
+                        day_start_eq = carry_equity.get(vid0, _STARTING_EQUITY)
+                        result = await e.run(evs)
+                        carry_equity[vid0] = result["end_equity_usd"]
+                        logger.info("[watch] {} day {}/{} done  ticks={} Δeq={:+.2f}",
+                                    run_id, day_idx+1, days, result["ticks"],
+                                    result["end_equity_usd"] - day_start_eq)
             except asyncio.CancelledError:
-                await self._broadcaster.publish({"type": "replay_state", "active": False})
                 logger.info("[watch] {} cancelled", run_id)
             except Exception as exc:
-                await self._broadcaster.publish({"type": "replay_state", "active": False})
                 logger.exception("[watch] {} error: {}", run_id, exc)
             finally:
+                # Always restore live ticks and clear replay state, regardless of
+                # success/cancel/exception. Previously a successful single-variant
+                # finish left mute_live=True, which silently broke the live view.
+                self._broadcaster.mute_live = False
+                self._broadcaster._tick_buffer.clear()
+                try:
+                    await self._broadcaster.publish_replay({"type": "replay_state", "active": False})
+                except Exception:
+                    pass
                 self._engines.clear()
                 self._task = None
 
@@ -457,4 +529,8 @@ class WatchController:
                 pass
         self._task = None
         self._engines.clear()
-        await self._broadcaster.publish({"type": "replay_state", "active": False})
+        # Restore live-engine ticks and flush replay prices from the buffer
+        # so the live chart starts fresh from the current real price.
+        self._broadcaster._tick_buffer.clear()
+        self._broadcaster.mute_live = False
+        await self._broadcaster.publish_replay({"type": "replay_state", "active": False})
