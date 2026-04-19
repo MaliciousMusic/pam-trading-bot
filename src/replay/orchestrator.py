@@ -70,6 +70,7 @@ class MultiVariantResult:
     end_utc: str
     wall_seconds: float
     rollup_path: str
+    zip_path: str | None = None
 
     @property
     def all_ok(self) -> bool:
@@ -179,6 +180,7 @@ async def run_multi_variant(
     max_concurrent: int | None = None,
     bars_fixture_path: Path | None = None,
     funding_fixture_path: Path | None = None,
+    emit_report: bool = True,
 ) -> MultiVariantResult:
     """Spawn one subprocess per variant and wait for all to finish.
 
@@ -279,8 +281,18 @@ async def run_multi_variant(
         rollup_path, wall,
     )
 
+    zip_path: str | None = None
+    if emit_report and all_ok := all(o.exit_code == 0 for o in outcomes):
+        try:
+            from .report_zip import build_zip
+            zp = build_zip(rollup_path.parent)
+            zip_path = str(zp)
+            logger.info("[orch] report zip -> {}", zp)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[orch] report build failed: {}", exc)
+
     return MultiVariantResult(
         run_id=run_id, day=day.isoformat(), symbol=symbol,
         variants=list(outcomes), start_utc=start_utc, end_utc=end_utc,
-        wall_seconds=wall, rollup_path=str(rollup_path),
+        wall_seconds=wall, rollup_path=str(rollup_path), zip_path=zip_path,
     )
