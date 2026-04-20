@@ -117,6 +117,21 @@
     text-transform:uppercase;margin-bottom:2px}
   .m .v{font-family:var(--mono);font-size:12px;font-weight:600;transition:color .3s}
   .m .floor{font-size:7px;color:var(--dim);margin-top:1px;font-family:var(--mono)}
+  /* Phase 15 — second metrics row (diversity, crowd share, avg horizon) */
+  .metrics-phase15 .m{background:var(--bg3)}
+  /* Per-category buy/sell mass strip: one column per archetype category.
+     Each column stacks a buy slice (top, green) above a sell slice (bottom,
+     red); heights sum to the category's share of total directional mass. */
+  .cat-mass{display:grid;grid-template-columns:repeat(9,1fr);gap:2px;
+    height:22px;margin-top:2px}
+  .cat-mass .col{position:relative;background:var(--bg3);border-radius:1px;
+    overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end;
+    font-size:6.5px;color:var(--muted);text-align:center;letter-spacing:.04em}
+  .cat-mass .col .buy{background:rgba(77,187,110,.55);width:100%}
+  .cat-mass .col .sell{background:rgba(217,79,79,.55);width:100%}
+  .cat-mass .col .lbl{position:absolute;bottom:1px;left:0;right:0;
+    font-family:var(--mono);font-size:6.5px;color:var(--fg);
+    text-shadow:0 0 2px rgba(0,0,0,.7);pointer-events:none;text-transform:uppercase}
 
   /* ── CENTER — Charts ─────────────────── */
   .charts-panel{display:flex;flex-direction:column;
@@ -584,6 +599,18 @@
         <div class="m"><div class="k">Conf</div><div class="v" id="m-conf">—</div><div class="floor" id="m-conf-floor"></div></div>
         <div class="m"><div class="k">Unc</div><div class="v" id="m-unc">—</div><div class="floor" id="m-unc-ceil"></div></div>
       </div>
+      <div class="metrics metrics-phase15">
+        <div class="m" title="Shannon entropy of directional mass across orthogonal categories. 1.0 = perfectly spread; ~0 = one cluster (e.g. TA-bloc).">
+          <div class="k">Diversity</div><div class="v" id="m-diversity">—</div><div class="floor" id="m-diversity-floor"></div>
+        </div>
+        <div class="m" title="Share of dominant-side mass held by crowd-prone categories (retail + TA). High share on a high-conf call triggers the crowded-trade shrink.">
+          <div class="k">Crowd</div><div class="v" id="m-crowd">—</div><div class="floor" id="m-crowd-floor"></div>
+        </div>
+        <div class="m" title="Weighted-average voter outlook horizon (seconds). Drops below ~50% of nominal trigger the volatility-adjusted deleverage.">
+          <div class="k">Hz</div><div class="v" id="m-avghz">—</div><div class="floor" id="m-avghz-floor"></div>
+        </div>
+      </div>
+      <div class="cat-mass" id="cat-mass" title="Per-category directional mass breakdown (buy vs sell). Hover a bar for the exact buy/sell split."></div>
     </div>
   </div>
 
@@ -664,7 +691,8 @@
     retail_grid_bot:'🤖',copy_trader:'🐑',
     basis_arb:'🔺',cross_venue_arb:'🌉',leverage_cycle:'🎢',
     options_hedger_proxy:'🛡️',
-    ta_day_trader_asia:'🌏',ta_day_trader_eu:'🌍',ta_day_trader_us:'🌎'};
+    ta_day_trader_asia:'🌏',ta_day_trader_eu:'🌍',ta_day_trader_us:'🌎',
+    microstructure_prober:'🔬',mev_frontrunner:'⚡',passive_whale_twap:'🐋'};
   const BOT_IDS=new Set(['mm_algo','retail_grid_bot','copy_trader','contrarian_funding_fader']);
   // Distinct color per tribe — used to tint both the wiggly forecast path
   // on the chart and a small dot on each tribe's ring in the council wheel
@@ -678,7 +706,9 @@
     basis_arb:'#42a5f5',cross_venue_arb:'#8d6e63',
     leverage_cycle:'#ec407a',options_hedger_proxy:'#9ccc65',
     ta_day_trader_asia:'#5c6bc0',ta_day_trader_eu:'#ab47bc',
-    ta_day_trader_us:'#ffa726'};
+    ta_day_trader_us:'#ffa726',
+    microstructure_prober:'#78909c',mev_frontrunner:'#ff6b35',
+    passive_whale_twap:'#00d4ff'};
   const tribeColor=id=>TRIBE_COLORS[id]||'#bdbdbd';
   // Hue extraction from a hex colour — lets us order tribes by position on
   // the colour wheel so the council ring and heatmap rows follow a smooth
@@ -929,6 +959,14 @@
     uv.textContent=t.uncertainty.toFixed(2);
     uv.style.color=t.uncertainty>0.6?'var(--sell)':t.uncertainty<0.2?'var(--buy)':'var(--fg)';
     $('m-unc-ceil').textContent='';
+
+    // Phase 15 council-intelligence metrics. `diversity_score` is green
+    // when council is well-spread, amber when one cluster dominates;
+    // `crowd_share` (retail+TA share of dominant-side mass) is red once
+    // it crosses the 0.5 crowded-trade threshold; `avg_voter_horizon_s`
+    // is red when it drops below half the nominal horizon (volatility-
+    // adjusted deleverage trigger).
+    renderPhase15Meta(t);
 
     renderProjection(t.forecast_steps||[]);
 
@@ -1266,6 +1304,90 @@
         `<span class="pbr" style="color:${upnl>=0?'var(--buy)':'var(--sell)'}">`+
         `${upnlStr} · ${held}s</span>`;
       root.appendChild(row);
+    }
+  }
+
+  // Phase 15 — render the three new council-intelligence metrics and the
+  // per-category directional-mass strip. Tolerant of legacy ticks (older
+  // projectors didn't populate these fields); leaves the display blank.
+  const CAT_ORDER=['mm','arb','ta','retail','event','hedger','microstructure','mev','whale'];
+  const CAT_LBL={mm:'MM',arb:'ARB',ta:'TA',retail:'RET',event:'EVT',
+                 hedger:'HDG',microstructure:'MST',mev:'MEV',whale:'WHL'};
+  const CROWDED_CATS=new Set(['retail','ta']);
+  function renderPhase15Meta(t){
+    const div=$('m-diversity'); const crv=$('m-crowd'); const hzv=$('m-avghz');
+    const strip=$('cat-mass');
+    // Diversity score ∈ [0,1]. Green when well-spread (>0.65), amber in the
+    // middle, red when a single bloc dominates (<0.35).
+    if(t.diversity_score==null){ div.textContent='—'; div.style.color='var(--fg)'; }
+    else{
+      const d=t.diversity_score;
+      div.textContent=d.toFixed(2);
+      div.style.color=d>0.65?'var(--buy)':d<0.35?'var(--sell)':'var(--fg)';
+    }
+    // Category mass — also drives the Crowd% readout (retail+TA share of
+    // dominant-side) and the per-category stacked strip below.
+    const cm=t.category_mass||null;
+    let crowdShare=null;
+    if(cm){
+      let bm=0, sm=0;
+      for(const k of CAT_ORDER){
+        const c=cm[k]||{buy:0,sell:0};
+        bm += +c.buy||0; sm += +c.sell||0;
+      }
+      const dom=bm>=sm?'buy':'sell';
+      const domTotal=Math.max(1e-9, dom==='buy'?bm:sm);
+      let crowded=0;
+      for(const k of CROWDED_CATS){
+        const c=cm[k]||{buy:0,sell:0};
+        crowded += +(c[dom])||0;
+      }
+      crowdShare=crowded/domTotal;
+    }
+    if(crowdShare==null){ crv.textContent='—'; crv.style.color='var(--fg)'; }
+    else{
+      crv.textContent=(crowdShare*100).toFixed(0)+'%';
+      // Matches engine `crowded_share_threshold=0.5` — same boundary users
+      // will see the crowded-trade shrink fire at.
+      crv.style.color=crowdShare>0.5?'var(--sell)':crowdShare<0.3?'var(--buy)':'var(--fg)';
+    }
+    // Avg voter horizon vs nominal. Matches engine `horizon_ref_ratio=0.5`.
+    const ah=t.avg_voter_horizon_s;
+    if(ah==null){ hzv.textContent='—'; hzv.style.color='var(--fg)'; }
+    else{
+      const nom=(CFG.projector_steps||200)*(CFG.tick_seconds||3);
+      const ratio=nom>0?ah/nom:1.0;
+      hzv.textContent=ah>=60?(ah/60).toFixed(1)+'m':Math.round(ah)+'s';
+      hzv.style.color=ratio<0.5?'var(--sell)':ratio>1.0?'var(--buy)':'var(--fg)';
+    }
+    // Per-category bar strip — each column stacks the category's buy mass
+    // (green, top) above its sell mass (red, bottom). Column heights are
+    // normalized to the largest single-side category mass so the tallest
+    // column fills the strip; short columns reveal the relative footprint.
+    renderCategoryStrip(cm, strip);
+  }
+  function renderCategoryStrip(cm, root){
+    root.innerHTML='';
+    let mx=0;
+    if(cm){
+      for(const k of CAT_ORDER){
+        const c=cm[k]||{buy:0,sell:0};
+        mx=Math.max(mx, +c.buy||0, +c.sell||0);
+      }
+    }
+    if(mx<=0) mx=1;
+    for(const k of CAT_ORDER){
+      const col=document.createElement('div');col.className='col';
+      const c=(cm&&cm[k])||{buy:0,sell:0};
+      const bh=((+c.buy||0)/mx)*50;
+      const sh=((+c.sell||0)/mx)*50;
+      const b=document.createElement('div');b.className='buy';b.style.height=bh.toFixed(1)+'%';
+      const s=document.createElement('div');s.className='sell';s.style.height=sh.toFixed(1)+'%';
+      col.appendChild(b); col.appendChild(s);
+      const lbl=document.createElement('div');lbl.className='lbl';lbl.textContent=CAT_LBL[k]||k;
+      col.appendChild(lbl);
+      col.title=`${CAT_LBL[k]||k}: buy ${(+c.buy||0).toFixed(2)} · sell ${(+c.sell||0).toFixed(2)}`;
+      root.appendChild(col);
     }
   }
 

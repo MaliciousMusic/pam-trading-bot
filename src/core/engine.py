@@ -386,6 +386,16 @@ class TradingEngine:
                 # this to render a 17 × N heatmap so the user can watch each
                 # tribe's horizon-specialist profile emerge over time.
                 "projector_weights": dict(getattr(self.projector, "_weights", {}) or {}),
+                # Phase 15 — council intelligence surface. `diversity_score` is
+                # the Shannon entropy of dominant-side mass across orthogonal
+                # archetype categories (1.0 = ideally spread, 0 = one bloc).
+                # `category_mass` is the per-category buy/sell mass breakdown
+                # (lets the UI show who's behind a high-conf call — retail
+                # bloc vs a true cross-category consensus). `avg_voter_horizon_s`
+                # is the weighted-average holding horizon of the voters.
+                "diversity_score": forecast.diversity_score,
+                "category_mass": forecast.category_mass,
+                "avg_voter_horizon_s": forecast.avg_voter_horizon_s,
                 "votes": [
                     {"tribe_id": v.tribe_id, "side": v.side.value,
                      "conviction": v.conviction, "weight": v.weight, "reason": v.reason}
