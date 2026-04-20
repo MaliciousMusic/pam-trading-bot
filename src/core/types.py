@@ -117,6 +117,15 @@ class Forecast:
     # the initial consensus. Shrinks when the council is dominated by
     # short-horizon scalpers; used for volatility-adjusted deleveraging.
     avg_voter_horizon_s: float | None = None
+    # Task 4c — Path-Integrity. Pool-weight-weighted average of calibrator
+    # skill multiplier across tribes voting WITH the consensus direction.
+    # ~1.0 = the signal is carried by tribes the calibrator rates neutral
+    # or better; < 0.7 = the consensus is being dragged by tribes pinned
+    # to the floor (TA Cemetery, over-eager retail). Decision engine uses
+    # this to refuse leverage *amplification* (agree_mult, crowd mults)
+    # when the path's drivers aren't themselves trustworthy — a loud
+    # consensus of bad predictors is still a bad prediction.
+    driver_skill_avg: float | None = None
 
 
 @dataclass(slots=True)

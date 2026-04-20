@@ -118,6 +118,7 @@
   .m .v{font-family:var(--mono);font-size:12px;font-weight:600;transition:color .3s}
   .m .floor{font-size:7px;color:var(--dim);margin-top:1px;font-family:var(--mono)}
   /* Phase 15 — second metrics row (diversity, crowd share, avg horizon) */
+  .metrics-phase15{grid-template-columns:1fr 1fr 1fr 1fr}
   .metrics-phase15 .m{background:var(--bg3)}
   /* Per-category buy/sell mass strip: one column per archetype category.
      Each column stacks a buy slice (top, green) above a sell slice (bottom,
@@ -608,6 +609,9 @@
         </div>
         <div class="m" title="Weighted-average voter outlook horizon (seconds). Drops below ~50% of nominal trigger the volatility-adjusted deleverage.">
           <div class="k">Hz</div><div class="v" id="m-avghz">—</div><div class="floor" id="m-avghz-floor"></div>
+        </div>
+        <div class="m" title="Path-Integrity. Pool-weight-weighted calibrator skill of tribes voting WITH consensus. ~1.0 = trustworthy drivers; &lt;0.7 caps all size multipliers (TA Cemetery protection).">
+          <div class="k">Driver</div><div class="v" id="m-drvskill">—</div><div class="floor" id="m-drvskill-floor"></div>
         </div>
       </div>
       <div class="cat-mass" id="cat-mass" title="Per-category directional mass breakdown (buy vs sell). Hover a bar for the exact buy/sell split."></div>
@@ -1316,6 +1320,7 @@
   const CROWDED_CATS=new Set(['retail','ta']);
   function renderPhase15Meta(t){
     const div=$('m-diversity'); const crv=$('m-crowd'); const hzv=$('m-avghz');
+    const dvr=$('m-drvskill');
     const strip=$('cat-mass');
     // Diversity score ∈ [0,1]. Green when well-spread (>0.65), amber in the
     // middle, red when a single bloc dominates (<0.35).
@@ -1359,6 +1364,15 @@
       const ratio=nom>0?ah/nom:1.0;
       hzv.textContent=ah>=60?(ah/60).toFixed(1)+'m':Math.round(ah)+'s';
       hzv.style.color=ratio<0.5?'var(--sell)':ratio>1.0?'var(--buy)':'var(--fg)';
+    }
+    // Task 4c — Driver skill: pool-weight-weighted calibrator skill of
+    // tribes voting WITH the consensus. Red < 0.7 (engine caps size
+    // multipliers); amber 0.7–0.9; green ≥ 0.9.
+    const ds=t.driver_skill_avg;
+    if(ds==null){ dvr.textContent='—'; dvr.style.color='var(--fg)'; }
+    else{
+      dvr.textContent=(+ds).toFixed(2);
+      dvr.style.color=ds<0.7?'var(--sell)':ds>=0.9?'var(--buy)':'var(--fg)';
     }
     // Per-category bar strip — each column stacks the category's buy mass
     // (green, top) above its sell mass (red, bottom). Column heights are

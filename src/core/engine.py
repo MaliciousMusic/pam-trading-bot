@@ -396,6 +396,10 @@ class TradingEngine:
                 "diversity_score": forecast.diversity_score,
                 "category_mass": forecast.category_mass,
                 "avg_voter_horizon_s": forecast.avg_voter_horizon_s,
+                # Task 4c — Path-Integrity driver score. Pool-weight-weighted
+                # calibrator skill of tribes voting with the consensus. < 0.7
+                # caps all size multipliers in the decision engine.
+                "driver_skill_avg": forecast.driver_skill_avg,
                 "votes": [
                     {"tribe_id": v.tribe_id, "side": v.side.value,
                      "conviction": v.conviction, "weight": v.weight, "reason": v.reason}
