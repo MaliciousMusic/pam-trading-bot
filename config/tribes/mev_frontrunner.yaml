@@ -24,7 +24,7 @@ hardware:
   typical_latency_ms: 2
   uptime: continuous
   specs:
-    screens: 0
+    screens: "0"
     connectivity: cross_connect
 software:
   platforms:
