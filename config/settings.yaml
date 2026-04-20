@@ -323,6 +323,37 @@ regime:
     cascade_up:   1.7
     cascade_down: 1.7
 
+# Per-tribe shadow ledgers — each council archetype runs a parallel 50k
+# paper account driven by its own vote (council forecast still drives the
+# exit layers for parity). The engine ticks each ledger alongside the real
+# PaperExecutor; the TribeTradingScorer folds realized trades into EWMAs
+# the aggregator reads as a side-aware trading_multiplier. Set enabled:false
+# to return to pre-shadow behavior.
+shadow_ledgers:
+  enabled: true
+  start_equity_usd: 50000.0
+  fee_rate_bps: 2.0
+  slippage_bps: 2.0
+  half_spread_bps: 0.5
+  max_concurrent_positions: 5
+  max_total_notional_pct: 200.0
+  max_hold_seconds: 600
+  max_session_dd_pct: 12.0
+  size_base_pct: 2.0
+  size_conv_scale: 1.0
+  min_vote_conviction: 0.10
+  # Scorer knobs — trading_multiplier lives in [max_shrink, max_boost],
+  # only applied once a tribe has ≥ min_trades_for_multiplier shadow trades
+  # on the queried side. Contrarian [INV] mask fires when a (tribe, regime,
+  # horizon) cell's EWMA < threshold AND n ≥ min_samples.
+  halflife_trades: 300
+  min_trades_for_multiplier: 30
+  trading_multiplier_max_boost: 1.4
+  trading_multiplier_max_shrink: 0.6
+  contrarian_cell_threshold: 0.45
+  contrarian_cell_min_samples: 30
+  harvest_top_quartile_boost: 2.0
+
 ui:
   host: 127.0.0.1
   port: 8765

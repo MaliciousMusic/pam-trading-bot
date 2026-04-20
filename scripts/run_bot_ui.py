@@ -14,6 +14,8 @@ from loguru import logger
 from src.audit.backscore import ForecastAuditor
 from src.audit.calibrator import TribeCalibrator
 from src.audit.scheduler import DailyAuditScheduler
+from src.audit.tribe_scorer import TribeTradingScorer
+from src.execution.shadow import build_shadow_ledgers
 from src.core.bus import EventBus
 from src.core.config import PROJECT_ROOT, data_sources, settings
 from src.core.engine import TradingEngine
@@ -156,6 +158,34 @@ async def main() -> None:
     # in settings.regime; defaults are already calibrated for BTC perps.
     regime_classifier = RegimeClassifier(cfg.get("regime", {}) or {})
 
+    # Per-tribe shadow ledgers + trading scorer. Each archetype gets its own
+    # 50k paper account and the scorer folds realized PnL into side-aware
+    # EWMAs. The calibrator gets the scorer attached so votes pick up the
+    # trading_multiplier automatically each tick.
+    sh_cfg = cfg.get("shadow_ledgers", {}) or {}
+    shadow_ledgers = build_shadow_ledgers(
+        tribes, cfg,
+        exit_strategy=cfg.get("exit_strategy", {}) or {},
+        risk_cfg=cfg.get("risk", {}) or {},
+        decision_cfg=cfg.get("decision", {}) or {},
+    )
+    tribe_scorer = None
+    if shadow_ledgers:
+        tribe_scorer = TribeTradingScorer(
+            halflife_trades=int(sh_cfg.get("halflife_trades", 300)),
+            min_trades_for_multiplier=int(sh_cfg.get("min_trades_for_multiplier", 30)),
+            trading_multiplier_max_boost=float(
+                sh_cfg.get("trading_multiplier_max_boost", 1.4)),
+            trading_multiplier_max_shrink=float(
+                sh_cfg.get("trading_multiplier_max_shrink", 0.6)),
+        )
+        for tid, ledger_sh in shadow_ledgers.items():
+            tribe_scorer.seed_start_equity(tid, ledger_sh.starting_equity_usd)
+        calibrator.attach_trading_scorer(tribe_scorer)
+        # Feed the top-quartile harvest boost through to the projector.
+        projector._harvest_top_quartile_boost = float(
+            sh_cfg.get("harvest_top_quartile_boost", 2.0))
+
     engine = TradingEngine(
         bus=bus, tribes=tribes, state=state,
         projector=projector, decision=decision,
@@ -166,6 +196,8 @@ async def main() -> None:
         calibrator=calibrator,
         kernel_calibrator=kernel_calibrator,
         regime_classifier=regime_classifier,
+        shadow_ledgers=shadow_ledgers,
+        tribe_scorer=tribe_scorer,
     )
 
     client = BinancePerpsWS(bus, streams=ds["streams"])
@@ -186,7 +218,9 @@ async def main() -> None:
                      kernel_calibrator=kernel_calibrator,
                      regime_classifier=regime_classifier, state=state,
                      watch_controller=watch_controller,
-                     executor=executor)
+                     executor=executor,
+                     tribe_scorer=tribe_scorer,
+                     shadow_ledgers=shadow_ledgers)
 
     host = cfg.get("ui", {}).get("host", "127.0.0.1")
     port = int(cfg.get("ui", {}).get("port", 8765))

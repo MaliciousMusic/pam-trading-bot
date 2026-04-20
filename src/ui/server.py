@@ -57,6 +57,8 @@ def create_app(
     state: MarketState | None = None,
     watch_controller=None,
     executor=None,
+    tribe_scorer=None,
+    shadow_ledgers: dict | None = None,
 ) -> FastAPI:
     app = FastAPI(title="PAM Council", docs_url=None, redoc_url=None)
 
@@ -205,6 +207,19 @@ def create_app(
         if calibrator is None:
             return JSONResponse({"enabled": False})
         return JSONResponse({"enabled": True, **calibrator.snapshot()})
+
+    @app.get("/api/tribe_trading")
+    async def tribe_trading():
+        """Per-tribe shadow-ledger scorecard. Drives the Tribe Trading
+        Heatmap on the dashboard. Returns the scorer snapshot plus the
+        live ledger equity rows (so the UI can render both in the same
+        table without a second round-trip)."""
+        if tribe_scorer is None:
+            return JSONResponse({"enabled": False})
+        payload = {"enabled": True, **tribe_scorer.snapshot()}
+        if shadow_ledgers:
+            payload["ledgers"] = [l.snapshot() for l in shadow_ledgers.values()]
+        return JSONResponse(payload)
 
     @app.get("/api/kernel")
     async def kernel():

@@ -152,8 +152,9 @@
   .accmap-grid .arow{display:flex;align-items:stretch;height:12px;
     border-radius:1px;transition:background .15s}
   .accmap-grid .arow:hover{background:rgba(255,255,255,.04)}
-  .accmap-grid .arow.global{height:14px;margin-bottom:3px;
-    padding-bottom:1px;border-bottom:2px solid rgba(200,168,75,.38);
+  .accmap-grid .arow.global{height:14px}
+  .accmap-grid .arow.global.last-top{margin-bottom:3px;padding-bottom:1px;
+    border-bottom:2px solid rgba(200,168,75,.38);
     box-shadow:0 1px 0 rgba(0,0,0,.35)}
   .accmap-grid .ar-lbl{display:flex;align-items:center;gap:4px;
     width:112px;flex:none;padding:0 6px 0 2px;white-space:nowrap;
@@ -162,13 +163,16 @@
   .accmap-grid .arow.global .ar-lbl{color:#f0ead4;font-weight:700;
     background:rgba(200,168,75,.06);border-right-color:rgba(200,168,75,.25)}
   .accmap-grid .ar-dot{width:5px;height:5px;border-radius:50%;flex:none}
-  .accmap-grid .arow.global .ar-dot{background:rgba(100,230,255,.95);
+  .accmap-grid .arow.forecast .ar-dot{background:rgba(100,230,255,.95);
     box-shadow:0 0 4px rgba(100,230,255,.55)}
+  .accmap-grid .arow.accuracy .ar-dot{background:rgba(200,168,75,.95);
+    box-shadow:0 0 4px rgba(200,168,75,.55)}
   .accmap-grid .ar-name{flex:1;overflow:hidden;text-overflow:ellipsis;
     letter-spacing:.01em}
   .accmap-grid .ar-avg{font-size:7.5px;color:var(--dim);letter-spacing:.02em;
     min-width:28px;text-align:right;font-weight:600}
-  .accmap-grid .arow.global .ar-avg{color:var(--accent);font-size:8.5px}
+  .accmap-grid .arow.forecast .ar-avg{color:rgba(100,230,255,.95);font-size:8.5px}
+  .accmap-grid .arow.accuracy .ar-avg{color:var(--accent);font-size:8.5px}
   .accmap-grid .ar-cells{display:flex;flex:1;min-width:0;position:relative}
   .accmap-grid .ar-cell{flex:1;min-width:0;height:100%}
   /* Minute gridlines are drawn as a single absolute overlay inside the
@@ -190,6 +194,67 @@
     color:var(--fg);border-radius:2px;box-shadow:0 3px 10px rgba(0,0,0,.55);
     white-space:nowrap;display:none}
   #accmap-tip b{color:var(--accent);font-weight:600;letter-spacing:.04em}
+  /* [INV] inversion badge. Stamped on accuracy-heatmap cells where the
+     (tribe × regime × horizon) EWMA < 0.45 with n ≥ 30 — i.e. the tribe is
+     a reliable-loser in that cell and the projector will flip its vote. */
+  .accmap-grid .ar-cell.inv{position:relative}
+  .accmap-grid .ar-cell.inv::after{content:"";position:absolute;inset:0;
+    border:1px dashed rgba(255,0,170,.9);
+    box-shadow:inset 0 0 4px rgba(255,0,170,.35);pointer-events:none}
+  .accmap-grid .ar-cell.inv::before{content:"▼";position:absolute;
+    top:-1px;right:1px;font-size:6px;color:rgba(255,0,170,.95);
+    line-height:1;pointer-events:none;text-shadow:0 0 2px #000}
+  /* Tribe Trading Heatmap — 9-column shadow-ledger scorecard. Each row is
+     a tribe; columns are (long-skill, short-skill, realized PnL, sharpe,
+     sl-discipline, tp-capture, max-DD, edge-over-cost, net-score). Row
+     layout mirrors .accmap-grid so the two heatmaps read as a single
+     stacked signal→trading audit strip. */
+  .chart-box.trading{flex-shrink:0;padding:6px 10px 7px}
+  .trading-grid{display:flex;flex-direction:column;gap:1px;margin-top:4px;
+    font-family:var(--mono);font-size:9.5px;line-height:1;position:relative}
+  .trading-grid .trow{display:flex;align-items:stretch;height:14px;
+    border-radius:1px;transition:background .15s}
+  .trading-grid .trow:hover{background:rgba(255,255,255,.04)}
+  .trading-grid .trow.hdr{height:13px;color:var(--muted);font-size:7.5px;
+    letter-spacing:.05em;text-transform:uppercase;
+    background:rgba(255,255,255,.02);margin-bottom:1px}
+  .trading-grid .trow.hdr .tr-cell{display:flex;align-items:center;
+    justify-content:center;padding:0 2px;
+    border-right:1px solid rgba(255,255,255,.04)}
+  .trading-grid .trow.global{height:15px;margin-bottom:3px;padding-bottom:1px;
+    border-bottom:2px solid rgba(200,168,75,.38);
+    box-shadow:0 1px 0 rgba(0,0,0,.35)}
+  .trading-grid .tr-lbl{display:flex;align-items:center;gap:4px;
+    width:112px;flex:none;padding:0 6px 0 2px;white-space:nowrap;
+    overflow:hidden;color:var(--muted);background:rgba(255,255,255,.015);
+    border-right:1px solid rgba(255,255,255,.04)}
+  .trading-grid .trow.global .tr-lbl{color:#f0ead4;font-weight:700;
+    background:rgba(200,168,75,.06);border-right-color:rgba(200,168,75,.25)}
+  .trading-grid .tr-dot{width:5px;height:5px;border-radius:50%;flex:none}
+  .trading-grid .trow.global .tr-dot{background:rgba(200,168,75,.95);
+    box-shadow:0 0 4px rgba(200,168,75,.55)}
+  .trading-grid .tr-name{flex:1;overflow:hidden;text-overflow:ellipsis;
+    letter-spacing:.01em}
+  .trading-grid .tr-tq{font-size:7.5px;color:#ffd700;letter-spacing:.04em;
+    font-weight:700;opacity:.9}
+  .trading-grid .tr-cells{display:grid;flex:1;min-width:0;
+    grid-template-columns:repeat(9,1fr);gap:1px}
+  .trading-grid .tr-cell{display:flex;align-items:center;justify-content:center;
+    height:100%;font-family:var(--mono);font-size:8.5px;color:var(--fg);
+    background:rgba(40,44,52,0.35);letter-spacing:.01em;overflow:hidden}
+  .trading-grid .tr-cell.dim{color:var(--dim);font-style:italic}
+  .trading-grid .tr-cell.null{color:var(--dim)}
+  /* Harvest radar mode toggle — accuracy (signal-backscore) vs trading-PnL
+     (shadow-ledger realized). Two-pill toggle in the box header. */
+  .harvest-mode{display:inline-flex;gap:1px;margin-left:6px;
+    background:rgba(0,0,0,.3);border-radius:2px;padding:1px;
+    font-family:var(--mono);font-size:7.5px;letter-spacing:.08em;
+    text-transform:uppercase;cursor:pointer;user-select:none}
+  .harvest-mode span{padding:1px 5px;color:var(--dim);border-radius:1px;
+    transition:color .15s,background .15s}
+  .harvest-mode span.active{color:var(--fg);background:rgba(200,168,75,.15)}
+  .harvest-mode span:hover{color:var(--muted)}
+  .harvest-box.lvl-hi .harvest-mode span.active{background:rgba(217,79,79,.22)}
   .chart-hdr{display:flex;justify-content:space-between;align-items:baseline;
     margin-bottom:6px;flex-shrink:0}
   .chart-hdr .k{font-size:8.5px;color:var(--muted);letter-spacing:.12em;
@@ -732,11 +797,26 @@
           <i style="background:#d94f4f"></i>malus
           <i style="background:#3a3a3a"></i>neutre
           <i style="background:#4dbb6e"></i>bonus
+          <i style="border:1px dashed rgba(255,0,170,.9);background:transparent"></i>[INV]
         </span>
       </div>
       <div class="accmap-grid" id="accmap-grid"></div>
       <div class="accmap-axis" id="accmap-axis"></div>
       <div id="accmap-tip"></div>
+    </div>
+    <div class="chart-box trading" style="position:relative"
+         title="Tribe Trading Heatmap — per-tribe shadow-ledger scorecard. Each tribe runs its own paper account with the full 6-layer exit engine on $50k. Columns: long/short hit-rate, realized PnL (bps), Sharpe, SL-discipline, TP-capture, max-DD, edge-over-cost, composite net-score. Gold dot + [TQ] tag marks top-quartile tribes whose harvest-mass contribution is doubled.">
+      <div class="chart-hdr">
+        <span class="k">Tribe Trading Heatmap</span>
+        <span class="v" id="trading-d">— shadow ledgers</span>
+        <span class="acc-legend">
+          <i style="background:#d94f4f"></i>loss
+          <i style="background:#3a3a3a"></i>flat
+          <i style="background:#4dbb6e"></i>win
+          <i style="background:#ffd700"></i>[TQ]
+        </span>
+      </div>
+      <div class="trading-grid" id="trading-grid"></div>
     </div>
   </div>
 
@@ -746,6 +826,11 @@
          title="Harvest-Mass Radar. Share of pool weight sitting in contrarian-flipped tribes. When high, the council is actively fading the crowd — the cumulative projection is multiplied by conviction_boost. Glows red above 30%.">
       <div class="box-hdr">
         <span>Harvest Pressure</span>
+        <span class="harvest-mode" id="harvest-mode"
+              title="Toggle: ACC = signal-backscore harvest mass (contrarian-flipped pool share). PnL = trading-ledger realized PnL across all shadow accounts.">
+          <span data-mode="acc" class="active">ACC</span>
+          <span data-mode="pnl">PnL</span>
+        </span>
         <span class="v" id="harvest-boost">×1.00</span>
       </div>
       <div class="harvest-body">
@@ -855,6 +940,7 @@
   const priceHist=[],eqHist=[];
   const MAX=3600,EQ_MAX=720;
   let p0=null,e0=null;
+  let _lastTick=null;
   let CFG={size_min_pct:1.0,size_max_pct:6.0,sizing_curve:'linear',
            bps_per_unit_pressure:8.0,projector_steps:200,tick_seconds:3};
   let lastForecastSteps=[];
@@ -1168,9 +1254,13 @@
     // The top "Global" row pulls its color from the backscorer's actual
     // hit-rate-per-horizon instead of averaging tribe weights (which
     // always centers on 1.0 and renders as dark grey).
+    const regimeLabel = (t.regime && t.regime.label) || null;
+    const skillCube = t.calibration && t.calibration.skill_cube;
     renderAccuracyHeatmap(t.projector_weights, t.forecast_sample_paths_tribe_ids,
                           t.backscore && t.backscore.by_horizon,
-                          t.forecast_steps_bps);
+                          t.forecast_steps_bps,
+                          skillCube, regimeLabel);
+    renderTribeTradingHeatmap(t.tribe_trading);
 
     if(e0==null)e0=t.equity_usd;
     eqHist.push(t.equity_usd);
@@ -1183,7 +1273,8 @@
 
     renderPortfolio(t.positions||[], t.total_notional_usd||0, t.equity_usd, t.price, t.ts);
     renderTradeHistory(t.recent_trades||[]);
-    renderHarvestRadar(t.harvest_mass_ratio, t.conviction_boost);
+    _lastTick = t;
+    renderHarvestRadar(t.harvest_mass_ratio, t.conviction_boost, t.tribe_trading);
     updateRiskBanner(t.risk);
   }
 
@@ -1340,7 +1431,23 @@
       return `rgba(${r},${g},${b},${a})`;
     }
   }
-  function renderAccuracyHeatmap(weights, tribeIds, byHorizon, stepsBps){
+  // Map a horizon in seconds to the skill_cube bucket label. Matches the
+  // bucketing the calibrator uses in apply_resolved (short ≤60, medium ≤300,
+  // long otherwise).
+  function _bucketForHorizon(s){
+    if(s<=60) return 'short';
+    if(s<=300) return 'medium';
+    return 'long';
+  }
+  function _invCell(skillCube, tid, regime, hSec){
+    if(!skillCube || !regime) return false;
+    const byReg=skillCube[tid]; if(!byReg) return false;
+    const bucket=_bucketForHorizon(hSec);
+    const specific = byReg[regime] && byReg[regime][bucket];
+    if(specific && specific.n>=30 && specific.ewma<0.45) return true;
+    return false;
+  }
+  function renderAccuracyHeatmap(weights, tribeIds, byHorizon, stepsBps, skillCube, regime){
     if(!weights||typeof weights!=='object') return;
     const ids=Object.keys(weights);
     if(!ids.length) return;
@@ -1366,23 +1473,34 @@
     if(sig !== _accGridSig){
       grid.innerHTML='';
       _accGridSig = sig;
-      const mkRow = (id, isGlobal) => {
+      const mkRow = (id, kind) => {
         const row=document.createElement('div');
-        row.className='arow'+(isGlobal?' global':'');
+        const isTop = kind==='forecast' || kind==='accuracy';
+        let cls='arow';
+        if(isTop) cls += ' global '+kind;
+        if(kind==='accuracy') cls += ' last-top';
+        row.className=cls;
         row.dataset.id = id;
         // Label half
         const lbl=document.createElement('div');
         lbl.className='ar-lbl';
         const dot=document.createElement('i'); dot.className='ar-dot';
-        if(!isGlobal){
+        if(!isTop){
           dot.style.background = (typeof tribeColor==='function')?tribeColor(id):'#888';
         }
         const nm=document.createElement('span'); nm.className='ar-name';
-        nm.textContent = isGlobal ? 'Global' : (id||'').replace(/_/g,' ');
+        nm.textContent = kind==='forecast' ? 'Live Forecast'
+                      : kind==='accuracy' ? 'Global Accuracy'
+                      : (id||'').replace(/_/g,' ');
         const av=document.createElement('span'); av.className='ar-avg';
         av.textContent = '—';
-        if(!isGlobal) row.title = id;
-        else row.title = 'True Global path — weighted-consensus cumulative bps per step, post-inversion and post-harvest-boost.';
+        if(kind==='forecast'){
+          row.title = 'Live weighted-consensus forecast — cumulative bps per step, post-inversion and post-harvest-boost. Updates every tick.';
+        }else if(kind==='accuracy'){
+          row.title = 'Rolling global hit-rate — % of past forecasts that were directionally correct at each horizon (backscorer-derived).';
+        }else{
+          row.title = id;
+        }
         lbl.appendChild(dot); lbl.appendChild(nm); lbl.appendChild(av);
         // Cells half
         const cells=document.createElement('div');
@@ -1396,8 +1514,9 @@
         row.appendChild(lbl); row.appendChild(cells);
         grid.appendChild(row);
       };
-      mkRow('__global__', true);
-      for(const tid of rowIds) mkRow(tid, false);
+      mkRow('__forecast__', 'forecast');
+      mkRow('__accuracy__', 'accuracy');
+      for(const tid of rowIds) mkRow(tid, 'tribe');
       // Minute-grid overlay: single linear-gradient served via CSS var,
       // painted once per row's ::after using the shared pattern.
       const gridStepS = tickS<=3?60 : tickS<=10?120 : 300;
@@ -1426,41 +1545,51 @@
       for(const v of arr){ if(isFinite(v)){ s+=v; n++; } }
       rowAvg[tid]=n>0?s/n:1;
     }
-    let globalAvg='—';
+    let forecastAvg='—';
     if(haveBps){
       let s=0, n=0;
       for(const b of stepsBps){ if(isFinite(b)){ s+=b; n++; } }
-      if(n>0) globalAvg=(s>=0?'+':'')+(s/n).toFixed(1)+'bps';
+      if(n>0) forecastAvg=(s>=0?'+':'')+(s/n).toFixed(1)+'bps';
+    }
+    // Always compute hitRow so the Accuracy row has real data every tick.
+    const hitRow=_globalHitRateRow(byHorizon, nSteps, tickS);
+    let accuracyAvg='—';
+    if(hitRow && hitRow.length){
+      let s=0, n=0;
+      for(const h of hitRow){ if(h!=null && isFinite(h)){ s+=h; n++; } }
+      if(n>0) accuracyAvg=(s*100/n).toFixed(0)+'%';
     }
     // Update each row's cells + summary. DOM is stable; we only touch
     // style.background / textContent so there are no layout thrashes.
-    const hitRow=haveBps?null:_globalHitRateRow(byHorizon, nSteps, tickS);
     const children=grid.children;
-    // Global row (first child).
-    const gRow=children[0];
-    if(gRow){
-      const gAvg=gRow.querySelector('.ar-avg');
-      if(gAvg) gAvg.textContent=globalAvg;
-      const gCells=gRow.querySelector('.ar-cells').children;
+    // Live Forecast row (child 0) — cumulative bps per step.
+    const fRow=children[0];
+    if(fRow){
+      const fAvg=fRow.querySelector('.ar-avg');
+      if(fAvg) fAvg.textContent=forecastAvg;
+      const fCells=fRow.querySelector('.ar-cells').children;
       for(let h=0; h<nSteps; h++){
-        const cell=gCells[h]; if(!cell) continue;
-        let color, label='—';
-        if(haveBps){
-          const b = h<stepsBps.length?stepsBps[h]:null;
-          color = _bpsToColor(b);
-          if(b!=null) label = (b>=0?'+':'')+b.toFixed(2)+'bps';
-        }else{
-          const hr = hitRow[h];
-          color = _hitToColor(hr);
-          if(hr!=null) label = (hr*100).toFixed(1)+'% hit';
-        }
-        cell.style.background = color;
+        const cell=fCells[h]; if(!cell) continue;
+        const b = haveBps && h<stepsBps.length ? stepsBps[h] : null;
+        cell.style.background = _bpsToColor(b);
+      }
+    }
+    // Global Accuracy row (child 1) — rolling hit rate per horizon.
+    const aRow=children[1];
+    if(aRow){
+      const aAvg=aRow.querySelector('.ar-avg');
+      if(aAvg) aAvg.textContent=accuracyAvg;
+      const aCells=aRow.querySelector('.ar-cells').children;
+      for(let h=0; h<nSteps; h++){
+        const cell=aCells[h]; if(!cell) continue;
+        const hr = hitRow ? hitRow[h] : null;
+        cell.style.background = _hitToColor(hr);
       }
     }
     // Tribe rows.
     for(let r=0; r<rowIds.length; r++){
       const tid=rowIds[r];
-      const row=children[r+1]; if(!row) continue;
+      const row=children[r+2]; if(!row) continue;
       const avgEl=row.querySelector('.ar-avg');
       if(avgEl){
         const v=rowAvg[tid];
@@ -1475,6 +1604,8 @@
         const cell=cells[h]; if(!cell) continue;
         const w=h<warr.length?warr[h]:1.0;
         cell.style.background=_wToColor(w);
+        const hSec=(h+1)*tickS;
+        cell.classList.toggle('inv', _invCell(skillCube, tid, regime, hSec));
       }
     }
     const accD=$('acc-d');
@@ -1514,7 +1645,8 @@
     // Stash the frame so the hover tooltip can read exact values.
     _accFrame = {
       rowIds, nSteps, tickS,
-      weights, stepsBps: haveBps?stepsBps:null, hitRow: haveBps?null:hitRow,
+      weights, stepsBps: haveBps?stepsBps:null, hitRow,
+      skillCube: skillCube||null, regime: regime||null,
     };
   }
 
@@ -1534,21 +1666,28 @@
       const h = +cell.dataset.h || 0;
       const id = row.dataset.id;
       let line='';
-      if(id === '__global__'){
+      if(id === '__forecast__'){
         let v='—';
         if(f.stepsBps && h < f.stepsBps.length){
           const b=f.stepsBps[h];
           v = (b>=0?'+':'')+b.toFixed(2)+' bps';
-        }else if(f.hitRow && f.hitRow[h]!=null){
+        }
+        line = `<b>LIVE FORECAST</b> · +${_fmtHz((h+1)*f.tickS)} · ${v}`;
+      }else if(id === '__accuracy__'){
+        let v='—';
+        if(f.hitRow && f.hitRow[h]!=null){
           v = (f.hitRow[h]*100).toFixed(1)+'% hit';
         }
-        line = `<b>GLOBAL</b> · +${_fmtHz((h+1)*f.tickS)} · ${v}`;
+        line = `<b>GLOBAL ACCURACY</b> · +${_fmtHz((h+1)*f.tickS)} · ${v}`;
       }else{
         const warr=f.weights[id]||[];
         const w = h<warr.length?warr[h]:1.0;
         const pct = ((w-1)*100);
         const dir = pct>=0?'+':'';
-        line = `<b>${id}</b> · +${_fmtHz((h+1)*f.tickS)} · ×${w.toFixed(3)} (${dir}${pct.toFixed(1)}%)`;
+        const hSec=(h+1)*f.tickS;
+        const isInv=_invCell(f.skillCube, id, f.regime, hSec);
+        const invTag=isInv?' · <b style="color:#ff00aa">[INV]</b> loser-cell, vote flipped':'';
+        line = `<b>${id}</b> · +${_fmtHz(hSec)} · ×${w.toFixed(3)} (${dir}${pct.toFixed(1)}%)${invTag}`;
       }
       tip.innerHTML=line;
       const host = grid.closest('.chart-box.accmap');
@@ -1564,6 +1703,149 @@
     });
     grid.addEventListener('mouseleave', ()=>{ tip.style.display='none'; });
   })();
+
+  // Tribe Trading Heatmap — 9-column shadow-ledger scorecard. Rows are
+  // tribes + a GLOBAL aggregator. Each column's cell is colour-tinted by a
+  // column-specific scale (skill uses _hitToColor, PnL uses _bpsToColor,
+  // Sharpe/discipline/capture/net_score use _hitToColor w/ shifted origin,
+  // max-DD uses a red-only scale). Top-quartile tribes get a gold [TQ] tag.
+  const TRADING_COLS=[
+    {key:'long_skill',   lbl:'L-SKL', fmt:v=>v==null?'—':(v*100).toFixed(0)+'%',   color:v=>_hitToColor(v)},
+    {key:'short_skill',  lbl:'S-SKL', fmt:v=>v==null?'—':(v*100).toFixed(0)+'%',   color:v=>_hitToColor(v)},
+    {key:'realized_pnl_bps', lbl:'PnL', fmt:v=>v==null?'—':(v>=0?'+':'')+v.toFixed(1), color:v=>_bpsToColor(v)},
+    {key:'sharpe_ewma',  lbl:'SHRP', fmt:v=>v==null?'—':v.toFixed(2),               color:v=>_tradingSharpeColor(v)},
+    {key:'sl_discipline',lbl:'SL-D', fmt:v=>v==null?'—':(v*100).toFixed(0)+'%',     color:v=>_hitToColor(v)},
+    {key:'tp_capture',   lbl:'TP-C', fmt:v=>v==null?'—':(v*100).toFixed(0)+'%',     color:v=>_hitToColor(v)},
+    {key:'max_drawdown_pct', lbl:'MaxDD', fmt:v=>v==null?'—':'-'+v.toFixed(1)+'%', color:v=>_tradingDDColor(v)},
+    {key:'edge_over_cost_bps', lbl:'EDG', fmt:v=>v==null?'—':(v>=0?'+':'')+v.toFixed(1), color:v=>_bpsToColor(v)},
+    {key:'net_score',    lbl:'NET',  fmt:v=>v==null?'—':v.toFixed(2),               color:v=>_hitToColor(v)},
+  ];
+  function _tradingSharpeColor(v){
+    if(v==null||!isFinite(v)) return 'rgba(40,44,52,0.35)';
+    const c=Math.max(-1,Math.min(1,v/2.0));
+    return _hitToColor(0.5 + c*0.5);
+  }
+  function _tradingDDColor(v){
+    if(v==null||!isFinite(v)) return 'rgba(40,44,52,0.35)';
+    const t=Math.max(0,Math.min(1, v/20.0));
+    const r=Math.round(58 + (217-58)*t);
+    const g=Math.round(58 + (79 -58)*t);
+    const b=Math.round(58 + (79 -58)*t);
+    return `rgba(${r},${g},${b},${(0.55+0.45*t).toFixed(2)})`;
+  }
+  let _tradingRowOrder=[];
+  let _tradingGridSig='';
+  function renderTribeTradingHeatmap(trading){
+    const grid=$('trading-grid'); if(!grid) return;
+    const dEl=$('trading-d');
+    if(!trading || trading.enabled===false){
+      if(dEl) dEl.textContent='disabled';
+      if(_tradingGridSig!==''){ grid.innerHTML=''; _tradingGridSig=''; _tradingRowOrder=[]; }
+      return;
+    }
+    const rows=Array.isArray(trading.tribes)?trading.tribes:[];
+    const glob=trading.global||null;
+    const tq=new Set(trading.top_quartile||[]);
+    if(!_tradingRowOrder.length && rows.length){
+      _tradingRowOrder=rows.map(r=>r.tribe_id)
+        .sort((a,b)=>tribeHue(a)-tribeHue(b));
+    }
+    const byId=new Map(rows.map(r=>[r.tribe_id,r]));
+    const orderedIds=_tradingRowOrder.filter(id=>byId.has(id));
+    for(const r of rows) if(!orderedIds.includes(r.tribe_id)) orderedIds.push(r.tribe_id);
+    const sig=`${orderedIds.length}:${glob?1:0}`;
+    if(sig!==_tradingGridSig){
+      grid.innerHTML='';
+      _tradingGridSig=sig;
+      const mkHdr=()=>{
+        const row=document.createElement('div');
+        row.className='trow hdr';
+        const lbl=document.createElement('div');
+        lbl.className='tr-lbl';
+        lbl.innerHTML='<span class="tr-name" style="font-size:7.5px">Tribe · $50k shadow</span>';
+        const cells=document.createElement('div'); cells.className='tr-cells';
+        for(const col of TRADING_COLS){
+          const c=document.createElement('div');
+          c.className='tr-cell';
+          c.textContent=col.lbl;
+          c.title=col.key;
+          cells.appendChild(c);
+        }
+        row.appendChild(lbl); row.appendChild(cells);
+        grid.appendChild(row);
+      };
+      const mkRow=(id,isGlobal)=>{
+        const row=document.createElement('div');
+        row.className='trow'+(isGlobal?' global':'');
+        row.dataset.id=id;
+        const lbl=document.createElement('div');
+        lbl.className='tr-lbl';
+        const dot=document.createElement('i'); dot.className='tr-dot';
+        if(!isGlobal){
+          dot.style.background=(typeof tribeColor==='function')?tribeColor(id):'#888';
+        }
+        const nm=document.createElement('span'); nm.className='tr-name';
+        nm.textContent = isGlobal ? 'GLOBAL' : (id||'').replace(/_/g,' ');
+        const tqTag=document.createElement('span'); tqTag.className='tr-tq';
+        tqTag.textContent='';
+        lbl.appendChild(dot); lbl.appendChild(nm); lbl.appendChild(tqTag);
+        const cells=document.createElement('div'); cells.className='tr-cells';
+        for(const col of TRADING_COLS){
+          const c=document.createElement('div');
+          c.className='tr-cell';
+          c.dataset.col=col.key;
+          cells.appendChild(c);
+        }
+        row.appendChild(lbl); row.appendChild(cells);
+        grid.appendChild(row);
+      };
+      mkHdr();
+      if(glob) mkRow('__global__', true);
+      for(const id of orderedIds) mkRow(id, false);
+    }
+    const paint=(row, data)=>{
+      if(!row||!data) return;
+      const cellsEl=row.querySelector('.tr-cells');
+      if(!cellsEl) return;
+      const cs=cellsEl.children;
+      for(let i=0;i<TRADING_COLS.length;i++){
+        const col=TRADING_COLS[i];
+        const cell=cs[i]; if(!cell) continue;
+        const v=data[col.key];
+        cell.textContent=col.fmt(v);
+        cell.classList.toggle('null', v==null);
+        cell.style.background=col.color(v);
+        const n=data.total_trades||0;
+        cell.title=`${row.dataset.id} · ${col.lbl} = ${col.fmt(v)}  ·  n=${n}`;
+      }
+    };
+    const children=grid.children;
+    let idx=1;
+    if(glob){
+      const gRow=children[idx++];
+      paint(gRow, glob);
+      if(gRow){
+        const tqTag=gRow.querySelector('.tr-tq');
+        const eq=glob.equity_usd, st=glob.start_equity_usd||1;
+        if(tqTag) tqTag.textContent = eq ? `$${(eq/1000).toFixed(0)}k` : '';
+      }
+    }
+    for(const id of orderedIds){
+      const tRow=children[idx++]; if(!tRow) continue;
+      const data=byId.get(id);
+      paint(tRow, data);
+      const tqTag=tRow.querySelector('.tr-tq');
+      if(tqTag){
+        if(tq.has(id)) tqTag.textContent='[TQ]';
+        else tqTag.textContent='';
+      }
+    }
+    if(dEl){
+      const n=orderedIds.length;
+      const tqn=tq.size;
+      dEl.textContent=`${n} tribes · ${tqn} top-Q`;
+    }
+  }
 
   function renderTradeHistory(trades){
     const root=$('th-list');
@@ -1749,8 +2031,15 @@
   // Cut-offs match the projector's harvest_scale behavior: ~0.3 is where
   // conviction_boost starts to be felt, 0.5 is where the crowd-fade story
   // gets loud. Safe against null/undefined from legacy ticks.
-  const _HR_CIRC = 2 * Math.PI * 26;  // arc circumference in SVG units
-  function renderHarvestRadar(massRatio, convictionBoost){
+  //
+  // Dual-mode: "acc" renders the signal-backscore harvest_mass_ratio (the
+  // council's contrarian-pool share from the backscorer). "pnl" renders
+  // the shadow-ledger realized hit-rate across tribes (|pnl| in bps mapped
+  // to 0-1 range, centered at 0 bps). In PnL mode the arc is green for
+  // positive, red for negative — a glance-at-it trading-PnL dial.
+  const _HR_CIRC = 2 * Math.PI * 26;
+  let _harvestMode='acc';
+  function renderHarvestRadar(massRatio, convictionBoost, trading){
     const box=$('harvest-box'); if(!box) return;
     const arc=box.querySelector('.hr-arc');
     const glow=box.querySelector('.hr-glow');
@@ -1759,15 +2048,42 @@
     const boostV=$('hr-boost-v');
     const boostHdr=$('harvest-boost');
     const hint=$('hr-hint');
-    const mass=Math.max(0,Math.min(1, (massRatio==null?0:+massRatio)));
     const boost=(convictionBoost==null?1.0:+convictionBoost);
-    // Fill the arc. Dash = mass*C, gap = remaining.
-    arc.setAttribute('stroke-dasharray', `${(mass*_HR_CIRC).toFixed(2)} ${_HR_CIRC.toFixed(2)}`);
-    pctEl.textContent = `${(mass*100).toFixed(0)}%`;
-    massV.textContent = (massRatio==null) ? '—' : `${(mass*100).toFixed(1)}%`;
     boostV.textContent = `×${boost.toFixed(2)}`;
     boostHdr.textContent = `×${boost.toFixed(2)}`;
     box.classList.remove('lvl-mid','lvl-hi');
+    if(_harvestMode==='pnl'){
+      const g=trading && trading.global;
+      const bps=g && g.realized_pnl_bps!=null ? +g.realized_pnl_bps : null;
+      const tot=g ? (g.total_trades||0) : 0;
+      const fill=bps==null ? 0 : Math.max(0,Math.min(1, Math.abs(bps)/25.0));
+      arc.setAttribute('stroke-dasharray', `${(fill*_HR_CIRC).toFixed(2)} ${_HR_CIRC.toFixed(2)}`);
+      const bpsStr = bps==null ? '—' : (bps>=0?'+':'')+bps.toFixed(1);
+      pctEl.textContent = bpsStr;
+      massV.textContent = bps==null ? '—' : bpsStr+'bps';
+      if(bps==null || tot<5){
+        arc.setAttribute('stroke','rgba(120,120,120,.45)');
+        glow.style.opacity='0';
+        hint.textContent = tot<5 ? `Warming up · ${tot} shadow trades` : 'No shadow PnL yet';
+      }else if(bps>=0){
+        const sat=Math.min(1, bps/25.0);
+        arc.setAttribute('stroke',`rgba(77,187,110,${(0.55+0.4*sat).toFixed(2)})`);
+        glow.style.opacity='0';
+        if(bps>=5) box.classList.add('lvl-mid');
+        hint.textContent = bps>=10 ? 'Shadow ledgers printing' : `Shadow PnL +${bps.toFixed(1)}bps`;
+      }else{
+        const sat=Math.min(1, -bps/25.0);
+        arc.setAttribute('stroke',`rgba(217,79,79,${(0.65+0.35*sat).toFixed(2)})`);
+        glow.style.opacity=(0.35+0.55*sat).toFixed(2);
+        box.classList.add('lvl-hi');
+        hint.textContent = bps<=-10 ? 'Shadow ledgers bleeding' : `Shadow PnL ${bps.toFixed(1)}bps`;
+      }
+      return;
+    }
+    const mass=Math.max(0,Math.min(1, (massRatio==null?0:+massRatio)));
+    arc.setAttribute('stroke-dasharray', `${(mass*_HR_CIRC).toFixed(2)} ${_HR_CIRC.toFixed(2)}`);
+    pctEl.textContent = `${(mass*100).toFixed(0)}%`;
+    massV.textContent = (massRatio==null) ? '—' : `${(mass*100).toFixed(1)}%`;
     if(mass<0.15){
       arc.setAttribute('stroke','rgba(120,120,120,.45)');
       glow.style.opacity='0';
@@ -1778,7 +2094,6 @@
       box.classList.add('lvl-mid');
       hint.textContent='Light contrarian drift';
     }else{
-      // Saturate red intensity beyond 0.3 up to 0.8.
       const sat=Math.min(1,(mass-0.3)/0.5);
       arc.setAttribute('stroke',`rgba(217,79,79,${(0.65+0.35*sat).toFixed(2)})`);
       glow.style.opacity=(0.35+0.55*sat).toFixed(2);
@@ -1788,6 +2103,22 @@
         : 'Council harvesting contrarian mass';
     }
   }
+  (function wireHarvestMode(){
+    const host=document.getElementById('harvest-mode');
+    if(!host) return;
+    host.addEventListener('click', (ev)=>{
+      const tgt=ev.target.closest('span[data-mode]');
+      if(!tgt) return;
+      const mode=tgt.dataset.mode;
+      if(!mode || mode===_harvestMode) return;
+      _harvestMode=mode;
+      for(const s of host.querySelectorAll('span[data-mode]')){
+        s.classList.toggle('active', s.dataset.mode===mode);
+      }
+      if(_lastTick) renderHarvestRadar(_lastTick.harvest_mass_ratio,
+        _lastTick.conviction_boost, _lastTick.tribe_trading);
+    });
+  })();
 
   function renderProjection(steps){
     const root=$('p-bars');root.innerHTML='';

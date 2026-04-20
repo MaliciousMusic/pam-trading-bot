@@ -146,11 +146,24 @@ class TribeCalibrator:
         self._skill_by_horizon: dict[str, dict[str, dict]] = {}
         self._horizon_min_samples = max(1, int(horizon_min_samples))
 
+        # ── Joint (tribe, regime, horizon_bucket) skill cube.
+        # Used by `contrarian_mask` to flag cells where a tribe has proven
+        # reliably-worse-than-chance inside a specific regime × horizon slice
+        # — far more surgical than the global is_contrarian_candidate scalar.
+        # Stored as { tribe_id: { regime: { bucket: {"n":…, "correct":…, "ewma":…} } } }.
+        self._skill_cube: dict[str, dict[str, dict[str, dict]]] = {}
+
         # Vote log so we can retrospectively score past ticks when
         # forecasts mature. Keyed by tick_ts (epoch seconds) → {"regime":
         # str|None, "votes": {tribe_id: (side_int, conviction)}}. Bounded by
         # _vote_history_s (must cover the longest anchor horizon).
         self._votes_at_tick: "OrderedDict[float, dict]" = OrderedDict()
+
+        # Optional attachment to a TribeTradingScorer. When present,
+        # `trading_multiplier(tid, side)` delegates to it so the engine
+        # has a single calibrator-shaped surface for both signal-skill
+        # and trading-skill multipliers.
+        self._trading_scorer = None
 
         self._load()
 
@@ -260,6 +273,18 @@ class TribeCalibrator:
                 hs["ewma_fast"] = hs["ewma_fast"] + alpha_fast * (weighted - hs["ewma_fast"])
                 hs["n"] += 1
                 hs["correct"] += int(hit)
+                # Joint (tribe, regime, horizon) cube — only populated when a
+                # regime label was stamped at vote time. This is the 3-D grid
+                # the loser-harvest [INV] badges read.
+                if regime_label:
+                    cs = (self._skill_cube.setdefault(tid, {})
+                                           .setdefault(regime_label, {})
+                                           .setdefault(bucket, {
+                                                "n": 0, "correct": 0, "ewma": 0.5,
+                                           }))
+                    cs["ewma"] = cs["ewma"] + alpha * (weighted - cs["ewma"])
+                    cs["n"] += 1
+                    cs["correct"] += int(hit)
         if changed:
             self._save()
 
@@ -318,6 +343,73 @@ class TribeCalibrator:
             return self._ewma_to_multiplier(fast)
         # 4 — slow fallback.
         return self._ewma_to_multiplier(slow)
+
+    def attach_trading_scorer(self, scorer) -> None:
+        """Bind a TribeTradingScorer so `trading_multiplier` can return
+        side-aware shadow-ledger skill adjustments alongside the signal-
+        skill multiplier. None disables the overlay."""
+        self._trading_scorer = scorer
+
+    def trading_multiplier(self, tribe_id: str, side) -> float:
+        """Delegate to the attached TribeTradingScorer; 1.0 when no scorer
+        is attached or the tribe hasn't traded enough for a verdict."""
+        if self._trading_scorer is None:
+            return 1.0
+        try:
+            return float(self._trading_scorer.trading_multiplier(tribe_id, side))
+        except Exception:
+            return 1.0
+
+    def contrarian_mask(
+        self,
+        tribe_id: str,
+        regime_label: str | None,
+        horizon_s: float | None,
+        *,
+        hit_rate_threshold: float = 0.45,
+        min_samples: int = 30,
+    ) -> bool:
+        """3-D contrarian trigger: True when this (tribe × regime × horizon)
+        cell has EWMA < threshold AND ≥ min_samples. Enables surgical
+        inversion — a tribe can be reliably-wrong in cascade-down at 5m
+        while remaining skilled in trend-up at 1m.
+
+        Falls back to False when the cell doesn't exist yet (insufficient
+        samples → no mask, trade the raw vote). Regime or horizon = None
+        collapses to the 2-D specificity the caller can supply."""
+        if not tribe_id:
+            return False
+        by_reg = self._skill_cube.get(tribe_id)
+        if not by_reg:
+            return False
+        bucket = self._horizon_bucket(horizon_s) if horizon_s is not None else None
+        # Specific (regime, bucket) cell first.
+        if regime_label and bucket:
+            cell = by_reg.get(regime_label, {}).get(bucket)
+            if cell and cell["n"] >= int(min_samples):
+                return float(cell["ewma"]) < float(hit_rate_threshold)
+        # One-axis fallbacks — regime alone, then bucket alone — so callers
+        # that only know one dimension still get a meaningful mask when
+        # enough samples exist in that slice.
+        if regime_label:
+            tot_n = 0
+            tot_w = 0.0
+            for _, cell in by_reg.get(regime_label, {}).items():
+                tot_n += int(cell["n"])
+                tot_w += float(cell["ewma"]) * int(cell["n"])
+            if tot_n >= int(min_samples):
+                return (tot_w / tot_n) < float(hit_rate_threshold)
+        if bucket:
+            tot_n = 0
+            tot_w = 0.0
+            for _, by_buck in by_reg.items():
+                cell = by_buck.get(bucket)
+                if cell:
+                    tot_n += int(cell["n"])
+                    tot_w += float(cell["ewma"]) * int(cell["n"])
+            if tot_n >= int(min_samples):
+                return (tot_w / tot_n) < float(hit_rate_threshold)
+        return False
 
     def is_contrarian_candidate(
         self,
@@ -474,6 +566,17 @@ class TribeCalibrator:
             "regime_conditional": self._regime_conditional,
             "regime_min_samples": self._regime_min_samples,
             "tribes": rows,
+            # Joint (tribe × regime × horizon_bucket) skill cells — UI reads
+            # this to stamp [INV] badges on the accuracy heatmap. Shape:
+            # { tribe_id: { regime: { bucket: {"n":…, "ewma":…} } } }.
+            "skill_cube": {
+                tid: {
+                    reg: {b: {"n": int(c["n"]), "ewma": float(c["ewma"])}
+                          for b, c in by_buck.items()}
+                    for reg, by_buck in by_reg.items()
+                }
+                for tid, by_reg in self._skill_cube.items()
+            },
         }
 
     # --- persistence -------------------------------------------------
@@ -484,6 +587,7 @@ class TribeCalibrator:
             "skill": self._skill,
             "skill_by_regime": self._skill_by_regime,
             "skill_by_horizon": self._skill_by_horizon,
+            "skill_cube": self._skill_cube,
         }
         try:
             self._path.write_bytes(orjson.dumps(payload, option=orjson.OPT_INDENT_2))
@@ -558,5 +662,31 @@ class TribeCalibrator:
                     }
                 if clean_h:
                     self._skill_by_horizon[tid] = clean_h
+        # Joint (tribe, regime, horizon_bucket) cube — persisted across
+        # sessions so the [INV] mask survives restarts.
+        cube = data.get("skill_cube") if isinstance(data, dict) else None
+        if isinstance(cube, dict):
+            for tid, by_reg in cube.items():
+                if not isinstance(by_reg, dict):
+                    continue
+                clean_c: dict[str, dict[str, dict]] = {}
+                for reg, by_buck in by_reg.items():
+                    if not isinstance(by_buck, dict):
+                        continue
+                    reg_clean: dict[str, dict] = {}
+                    for bucket, cell in by_buck.items():
+                        if not isinstance(cell, dict):
+                            continue
+                        cn = int(cell.get("n", 0))
+                        cewma = float(cell.get("ewma", 0.5)) if cn > 0 else 0.5
+                        reg_clean[str(bucket)] = {
+                            "n": cn,
+                            "correct": int(cell.get("correct", 0)),
+                            "ewma": cewma,
+                        }
+                    if reg_clean:
+                        clean_c[str(reg)] = reg_clean
+                if clean_c:
+                    self._skill_cube[tid] = clean_c
         logger.info("[calibrator] loaded skill overlay for {} tribes from {}",
                     len(self._skill), self._path.name)
