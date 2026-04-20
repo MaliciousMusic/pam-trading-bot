@@ -59,6 +59,29 @@ class DecisionEngine:
         self.htf_counter_strength = max(0.0, min(1.0, float(htf.get("counter_strength", 0.0))))
         self.htf_max_age_s = float(htf.get("max_age_seconds", 7200.0))
 
+        # Phase 1c — Crowded-trade filter. When the council is highly
+        # confident AND the directional mass is dominated by herd-prone
+        # categories (retail + TA), shrink sizing. These are the categories
+        # most likely to all light up for the same stale reason; a high-conf
+        # signal sourced entirely from them is a crowded-trade trap.
+        ct = d.get("crowded_trade", {}) or {}
+        self.crowded_categories: tuple[str, ...] = tuple(
+            ct.get("categories", ["retail", "ta"])
+        )
+        self.crowded_conf_threshold = float(ct.get("conf_threshold", 0.85))
+        self.crowded_share_threshold = float(ct.get("share_threshold", 0.5))
+        self.crowded_shrink_floor = float(ct.get("shrink_floor", 0.45))
+
+        # Phase 3c — Volatility-adjusted horizon. When the council's
+        # weighted-average voter horizon drops well below the projector's
+        # nominal horizon, everyone has shortened their outlook (panic-trading
+        # the 1-minute window). Deleverage because the directional signal is
+        # reactive, not strategic. `ref_ratio` is the avg/nominal ratio at or
+        # above which no shrink is applied; `shrink_floor` bounds the worst-case.
+        hz = d.get("horizon_shrink", {}) or {}
+        self.horizon_ref_ratio = float(hz.get("ref_ratio", 0.5))
+        self.horizon_shrink_floor = float(hz.get("shrink_floor", 0.55))
+
     def decide(
         self,
         ts: datetime,
@@ -92,9 +115,12 @@ class DecisionEngine:
             # happen because we'd have flipped direction, but clamp anyway.
             agree_mult = max(0.5, min(1.0, a))
         htf_mult = self._htf_multiplier(ts, state, side)
-        # Notional = equity × pct × leverage × sigma × agree × htf.
+        crowd_mult = self._crowded_trade_multiplier(forecast, side)
+        horizon_mult = self._horizon_multiplier(forecast)
+        # Notional = equity × pct × leverage × sigma × agree × htf × crowd × horizon.
         size_usd = (equity_usd * pct / 100.0 * self.leverage
-                    * sigma_mult * agree_mult * htf_mult)
+                    * sigma_mult * agree_mult * htf_mult
+                    * crowd_mult * horizon_mult)
         horizon = min(self.max_hold_seconds, max(30, forecast.horizon_seconds))
         action = "open_long" if side is Side.BUY else "open_short"
         peak_s = self._peak_favorable_seconds(forecast, side)
@@ -102,6 +128,7 @@ class DecisionEngine:
         reason = (f"emove {emove:+.1f}bps conf={conf:.2f} "
                   f"size={pct:.2f}%×{self.leverage:.0f}x({self.size_curve}) "
                   f"σ×{sigma_mult:.2f} agree×{agree_mult:.2f} htf×{htf_mult:.2f} "
+                  f"crowd×{crowd_mult:.2f} hz×{horizon_mult:.2f} "
                   f"hz={horizon}s")
         return TradeIntent(
             ts=ts, action=action, size_usd=size_usd, price_ref=price,
@@ -153,6 +180,48 @@ class DecisionEngine:
             return 1.0
         shrink = self.htf_counter_strength * min(1.0, abs(score))
         return max(0.0, 1.0 - shrink)
+
+    def _crowded_trade_multiplier(self, forecast: Forecast, side: Side) -> float:
+        """Phase 1c — shrink when a high-conf forecast is sourced mostly
+        from herd-prone categories. `category_mass` on the Forecast carries
+        per-category {buy, sell} mass; if the dominant-side share held by
+        crowded categories exceeds `crowded_share_threshold` AND conf is
+        above `crowded_conf_threshold`, scale toward `crowded_shrink_floor`.
+        """
+        mass = getattr(forecast, "category_mass", None)
+        if not mass:
+            return 1.0
+        if forecast.confidence < self.crowded_conf_threshold:
+            return 1.0
+        key = "buy" if side is Side.BUY else "sell"
+        total = sum(float(v.get(key, 0.0)) for v in mass.values())
+        if total <= 0:
+            return 1.0
+        crowded = sum(float(mass.get(c, {}).get(key, 0.0)) for c in self.crowded_categories)
+        share = crowded / total
+        if share <= self.crowded_share_threshold:
+            return 1.0
+        span = max(1e-9, 1.0 - self.crowded_share_threshold)
+        overshoot = max(0.0, min(1.0, (share - self.crowded_share_threshold) / span))
+        return 1.0 - (1.0 - self.crowded_shrink_floor) * overshoot
+
+    def _horizon_multiplier(self, forecast: Forecast) -> float:
+        """Phase 3c — deleverage when the council's weighted-average voter
+        horizon is much shorter than the projector's nominal horizon: the
+        voice is reactive (panic-trading the minute) rather than strategic.
+        Returns 1.0 above `horizon_ref_ratio` of nominal, scales linearly
+        toward `horizon_shrink_floor` as the ratio → 0."""
+        avg_h = getattr(forecast, "avg_voter_horizon_s", None)
+        if avg_h is None or avg_h <= 0:
+            return 1.0
+        nominal = float(forecast.horizon_seconds)
+        if nominal <= 0 or self.horizon_ref_ratio <= 0:
+            return 1.0
+        ratio = float(avg_h) / nominal
+        if ratio >= self.horizon_ref_ratio:
+            return 1.0
+        t = max(0.0, min(1.0, ratio / self.horizon_ref_ratio))
+        return self.horizon_shrink_floor + (1.0 - self.horizon_shrink_floor) * t
 
     def _sigma_multiplier(self, forecast: Forecast) -> float:
         """Shrink the position when the projector's terminal sigma is wider

@@ -67,7 +67,7 @@ def main() -> None:
 
     print()
     print(f"  Adversarial run: {report.run_id}")
-    print(f"  Day: {report.day}  ·  Symbol: {report.symbol}")
+    print(f"  Day: {report.day}  -  Symbol: {report.symbol}")
     print(f"  Anchor offset: {report.anchor_offset_s}s into day")
     print(f"  Fixtures: {len(report.fixtures)}")
     print()
@@ -76,7 +76,7 @@ def main() -> None:
     for fr in report.fixtures:
         n_skep = sum(1 for t in fr.tribes if t.skeptical)
         n_total = len(fr.tribes)
-        marker = "OK " if fr.council_skeptical else "BAD"
+        marker = "OK " if fr.council_skeptical else "ERR"
         print(f"  {fr.fixture_id:<40} {fr.bait_side:<5} "
               f"{marker} {fr.council_signed:+8.2f}  {n_skep:>3}/{n_total:<3}")
     print()

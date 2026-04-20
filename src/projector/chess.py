@@ -46,7 +46,7 @@ from datetime import datetime, timedelta, timezone
 from loguru import logger
 
 from ..aggregator.voting import aggregate_votes
-from ..core.types import Forecast
+from ..core.types import Forecast, Side
 from ..tribes.market_state import MarketState
 from ..tribes.tribe import Tribe
 from .behavioral_dna import (
@@ -86,6 +86,8 @@ _TRIBE_CATEGORY: dict[str, str] = {
     "options_hedger_proxy": "hedger",
     "leverage_cycle": "hedger",
     "microstructure_prober": "microstructure",
+    "mev_frontrunner": "mev",
+    "passive_whale_twap": "whale",
 }
 # Rows: regime label (see regime.classifier.RegimeLabel).
 # Columns: tribe category.
@@ -98,13 +100,39 @@ _TRIBE_CATEGORY: dict[str, str] = {
 #   - CHOP: MM dominate (1.30), arb still present, retail fades, TA patterns
 #     are false-signal-heavy (0.75).
 #   - NORMAL: neutral baseline — every category at 1.0.
+# ── Phase 3b: Dissension Veto ────────────────────────────────────────────
+# A tribe's Vote carries `buy_frac` and `sell_frac` — the fraction of its
+# active membership voting each way. When both sides are close in magnitude
+# (say 45% buy / 55% sell) the "net" vote represents internal disagreement
+# rather than a directional read; averaging it into the council is
+# averaging noise. Any vote where min/max > _DISSENSION_RATIO_THRESHOLD is
+# dropped to abstain — we'd rather have fewer loud voices than many split ones.
+_DISSENSION_RATIO_THRESHOLD: float = 0.82   # 45/55 ≈ 0.82; ≥ this → veto
+
+
+def _is_dissension(vote) -> bool:
+    b = max(0.0, float(vote.buy_frac))
+    s = max(0.0, float(vote.sell_frac))
+    if b <= 1e-9 and s <= 1e-9:
+        return False   # pure abstain — already silent
+    hi = max(b, s)
+    lo = min(b, s)
+    if hi <= 1e-9:
+        return False
+    return (lo / hi) >= _DISSENSION_RATIO_THRESHOLD
+
+
 _REGIME_CATEGORY_MULT: dict[str, dict[str, float]] = {
-    "normal":       {"mm": 1.00, "arb": 1.00, "retail": 1.00, "ta": 1.00, "event": 1.00, "hedger": 1.00, "microstructure": 1.15},
-    "chop":         {"mm": 1.30, "arb": 1.15, "retail": 0.70, "ta": 0.75, "event": 0.80, "hedger": 0.90, "microstructure": 1.40},
-    "trend_up":     {"mm": 0.85, "arb": 1.05, "retail": 1.25, "ta": 1.35, "event": 1.10, "hedger": 1.10, "microstructure": 0.95},
-    "trend_down":   {"mm": 0.85, "arb": 1.05, "retail": 1.25, "ta": 1.35, "event": 1.10, "hedger": 1.10, "microstructure": 0.95},
-    "cascade_up":   {"mm": 0.35, "arb": 1.60, "retail": 1.45, "ta": 1.15, "event": 1.55, "hedger": 1.30, "microstructure": 1.25},
-    "cascade_down": {"mm": 0.35, "arb": 1.60, "retail": 1.45, "ta": 1.15, "event": 1.55, "hedger": 1.30, "microstructure": 1.25},
+    "normal":       {"mm": 1.00, "arb": 1.00, "retail": 1.00, "ta": 1.00, "event": 1.00, "hedger": 1.00, "microstructure": 1.15, "mev": 1.10, "whale": 1.00},
+    "chop":         {"mm": 1.30, "arb": 1.15, "retail": 0.70, "ta": 0.75, "event": 0.80, "hedger": 0.90, "microstructure": 1.40, "mev": 0.80, "whale": 1.05},
+    "trend_up":     {"mm": 0.85, "arb": 1.05, "retail": 1.25, "ta": 1.35, "event": 1.10, "hedger": 1.10, "microstructure": 0.95, "mev": 1.15, "whale": 1.20},
+    "trend_down":   {"mm": 0.85, "arb": 1.05, "retail": 1.25, "ta": 1.35, "event": 1.10, "hedger": 1.10, "microstructure": 0.95, "mev": 1.15, "whale": 1.20},
+    # Cascade is MEV's day job — the liquidation tape is pure extraction
+    # territory. Whales, by contrast, pause/slow their schedule during
+    # visible dislocation so they aren't left holding the bag; the
+    # multiplier dials them down rather than up.
+    "cascade_up":   {"mm": 0.35, "arb": 1.60, "retail": 1.45, "ta": 1.15, "event": 1.55, "hedger": 1.30, "microstructure": 1.25, "mev": 1.70, "whale": 0.60},
+    "cascade_down": {"mm": 0.35, "arb": 1.60, "retail": 1.45, "ta": 1.15, "event": 1.55, "hedger": 1.30, "microstructure": 1.25, "mev": 1.70, "whale": 0.60},
 }
 
 
@@ -186,6 +214,31 @@ class ChessProjector:
         # re-normalization below, no tribe can have more than 1.5× the
         # influence of a neutral peer at any horizon.
         self._weight_max = 1.5
+        # ── Phase 1a: Cross-Correlation Squasher ──────────────────────
+        # Rolling per-tribe signed-conviction history. After enough samples,
+        # pairwise Pearson corr detects redundancy clusters — if three TA
+        # tribes always vote in lockstep, treating them as three independent
+        # voices triple-counts the same signal. The haircut below scales
+        # down the pool weight of tribes whose conviction series correlates
+        # strongly with peers so the combined council voice reflects
+        # *information*, not repeated broadcasts of the same opinion.
+        self._corr_window = 64          # ~5min at 5s ticks
+        self._corr_min_samples = 32
+        self._corr_threshold = 0.8
+        # Max haircut at full-redundancy: cap at 50% — redundancy should
+        # dampen, not silence, a tribe. A tribe that's a perfect copy of
+        # another still contributes a small amount of de-noising.
+        self._corr_max_haircut = 0.5
+        self._conviction_history: dict[str, deque] = {
+            t.spec.id: deque(maxlen=self._corr_window) for t in tribes
+        }
+        # ── Phase 3a: regime smoothing ────────────────────────────────
+        # Track the previous regime label + timestamp of last change so
+        # the category multiplier table can be blended rather than
+        # step-function switched on each tick.
+        self._prev_regime_label: str = "normal"
+        self._regime_change_ts: datetime | None = None
+        self._regime_smoothing_s: float = 7.5   # center of the sigmoid
 
     def project(self, state: MarketState) -> Forecast:
         """Agent-Based Recursive projection with Adaptive Temporal Weighting.
@@ -328,14 +381,52 @@ class ChessProjector:
         # `decayed_by_step` still receives a per-step horizon-decayed copy
         # so the confidence aggregate keeps its meaning (scalpers fade,
         # swing traders persist).
+        #
+        # Phase 3b — Dissension Veto: if a tribe's buy_frac and sell_frac
+        # are too close in magnitude, the tribe's active membership is
+        # split 45/55 (or closer) on direction — the "net" signal is
+        # mostly noise. Drop the vote to abstain so it doesn't get
+        # averaged into the council signal.
         initial_votes: dict[str, tuple] = {}
         for tribe in self.tribes:
             v0 = tribe.project_vote(start_ts, state)
+            if _is_dissension(v0):
+                # Force to neutral — still passes through the aggregator,
+                # but as an abstention rather than a split-direction wash.
+                v0 = replace(v0, side=Side.ABSTAIN,
+                             conviction=0.0, buy_frac=0.0, sell_frac=0.0,
+                             reason=v0.reason + " | DISSENSION_VETO")
             signed = (1.0 if v0.side.value == "buy" else
                       -1.0 if v0.side.value == "sell" else 0.0)
             sk0 = skill.get(tribe.spec.id, 1.0)
             base_strength_pre = v0.conviction * sk0 * effective_gain
             initial_votes[tribe.spec.id] = (v0, signed, base_strength_pre)
+            # Phase 1a — record signed conviction for the redundancy
+            # correlation window. Abstain → 0 (contributes zero variance).
+            signed_conv = signed * v0.conviction
+            hist = self._conviction_history.setdefault(
+                tribe.spec.id, deque(maxlen=self._corr_window))
+            hist.append(signed_conv)
+
+        # Phase 1a — Cross-Correlation Squasher. Build per-tribe redundancy
+        # factor from the rolling conviction history. A tribe whose series
+        # correlates > threshold with many peers contributes mostly
+        # redundant information; haircut its pool weight proportionally.
+        redundancy: dict[str, float] = self._compute_redundancy(
+            [t.spec.id for t in self.tribes])
+
+        # Phase 3a — sigmoid blend between previous regime's category
+        # multiplier table and current one. Captures the realistic fact
+        # that participation doesn't flip instantly when the classifier
+        # label changes — MMs take a few seconds to pull quotes, arb desks
+        # take a few seconds to adjust, etc.
+        if self.regime_label != self._prev_regime_label:
+            self._regime_change_ts = start_ts
+            prev_label_for_blend = self._prev_regime_label
+            self._prev_regime_label = self.regime_label
+        else:
+            prev_label_for_blend = self._prev_regime_label
+        regime_blend_alpha = self._regime_blend_alpha(start_ts)
 
         # ── 4. Pre-compute each tribe's perceived shock pipeline ──
         # Latency shifts h_origin → h_origin + latency_steps; visibility
@@ -439,12 +530,26 @@ class ChessProjector:
         # current tape. In a cascade, MM tribes drop to 0.35× while arb and
         # event tribes rise to 1.55–1.60× — the consensus reflects who is
         # *actually* trading, not who nominally holds inventory.
-        regime_tbl = _REGIME_CATEGORY_MULT.get(self.regime_label) \
+        #
+        # Phase 3a — the category multiplier is a sigmoid-blend between
+        # previous and current regime so weights don't jitter on a noisy
+        # classifier flapping between `normal` and `chop`.
+        # Phase 1a — redundancy haircut applied on top: a tribe whose
+        # conviction series correlates heavily with peers gets its pool
+        # weight damped, preventing any single cluster (3 TA tribes voting
+        # identically) from triple-counting the same information.
+        cur_tbl = _REGIME_CATEGORY_MULT.get(self.regime_label) \
+            or _REGIME_CATEGORY_MULT["normal"]
+        prev_tbl = _REGIME_CATEGORY_MULT.get(prev_label_for_blend) \
             or _REGIME_CATEGORY_MULT["normal"]
         pool_w: dict[str, float] = {}
         for t in self.tribes:
             cat = _TRIBE_CATEGORY.get(t.spec.id, "ta")
-            pool_w[t.spec.id] = float(t.weight) * regime_tbl.get(cat, 1.0)
+            mult_cur = cur_tbl.get(cat, 1.0)
+            mult_prev = prev_tbl.get(cat, 1.0)
+            mult = mult_prev + regime_blend_alpha * (mult_cur - mult_prev)
+            haircut = 1.0 - self._corr_max_haircut * redundancy.get(t.spec.id, 0.0)
+            pool_w[t.spec.id] = float(t.weight) * mult * haircut
         steps_bps: list[float] = []
         for h in range(n_steps):
             num = 0.0
@@ -484,7 +589,24 @@ class ChessProjector:
         ) / k_sum
         abs_activity = sum(abs(b) * w for b, w in zip(step_bps_list, kernel))
         directional = abs(expected_move_bps) / abs_activity if abs_activity > 0 else 0.0
-        final_conf = max(0.0, min(1.0, signal_quality * directional))
+        base_conf = max(0.0, min(1.0, signal_quality * directional))
+
+        # Phase 1b — Council entropy / diversity score. Compute once the
+        # consensus direction is known, then scale confidence by it: a high
+        # signal coming from a single category (e.g. 4 TA tribes agreeing)
+        # is worth less than the same signal coming from 4 orthogonal
+        # categories. Floor at 0.6× so a true single-bloc call still fires
+        # when the signal itself is clear.
+        consensus_sign = 1.0 if expected_move_bps >= 0 else -1.0
+        diversity_score, category_mass = self._diversity_and_breakdown(
+            initial_votes, pool_w, consensus_sign,
+        )
+        diversity_mult = 0.6 + 0.4 * diversity_score
+        final_conf = max(0.0, min(1.0, base_conf * diversity_mult))
+
+        # Phase 3c — weighted-average voter horizon. Short-horizon-dominated
+        # councils signal panic-scalping; engine uses this to deleverage.
+        avg_voter_horizon_s = self._weighted_avg_horizon(initial_votes, pool_w)
 
         steps_sigma_bps = self._sigma_per_step(n_steps)
 
@@ -517,7 +639,165 @@ class ChessProjector:
             directional_agreement=directional_agreement,
             sample_terminals_bps=terminals,
             sample_paths_tribe_ids=per_tribe_ids,
+            diversity_score=diversity_score,
+            category_mass=category_mass,
+            avg_voter_horizon_s=avg_voter_horizon_s,
         )
+
+    # -- Phase 1a: redundancy / cross-correlation ------------------------
+
+    def _compute_redundancy(self, tribe_ids: list[str]) -> dict[str, float]:
+        """For each tribe, compute the mean of |ρ(i,j)| across peers where
+        |ρ| exceeds `_corr_threshold`. The resulting redundancy factor is
+        in [0, 1]: 0 = this tribe's conviction series is uncorrelated with
+        any peer; 1 = it moves in lockstep with everybody above threshold.
+        Returns an empty dict when history is too short — callers interpret
+        missing keys as zero redundancy (full pool weight)."""
+        # Assemble aligned series — only tribes with a full window contribute.
+        series: dict[str, list[float]] = {}
+        for tid in tribe_ids:
+            h = self._conviction_history.get(tid)
+            if h is None:
+                continue
+            if len(h) < self._corr_min_samples:
+                continue
+            series[tid] = list(h)
+        n = len(series)
+        if n < 2:
+            return {}
+        # Truncate all series to the shortest length — the first few ticks
+        # after startup have mixed history lengths, and zipping corr across
+        # different windows would bias toward tribes that started earlier.
+        min_len = min(len(v) for v in series.values())
+        for tid in series:
+            series[tid] = series[tid][-min_len:]
+        # Pre-compute means + stddevs for Pearson.
+        stats: dict[str, tuple[float, float]] = {}
+        for tid, xs in series.items():
+            m = sum(xs) / min_len
+            var = sum((x - m) ** 2 for x in xs) / min_len
+            sd = math.sqrt(var) if var > 0 else 0.0
+            stats[tid] = (m, sd)
+        out: dict[str, float] = {}
+        ids = list(series.keys())
+        for i_idx, i_tid in enumerate(ids):
+            xs = series[i_tid]
+            mi, si = stats[i_tid]
+            if si == 0.0:
+                out[i_tid] = 0.0
+                continue
+            high_corrs: list[float] = []
+            for j_idx, j_tid in enumerate(ids):
+                if j_idx == i_idx:
+                    continue
+                ys = series[j_tid]
+                mj, sj = stats[j_tid]
+                if sj == 0.0:
+                    continue
+                cov = sum((xs[k] - mi) * (ys[k] - mj) for k in range(min_len)) / min_len
+                rho = cov / (si * sj)
+                if abs(rho) > self._corr_threshold:
+                    high_corrs.append(abs(rho))
+            if not high_corrs:
+                out[i_tid] = 0.0
+            else:
+                # Mean of the above-threshold correlations, rescaled so
+                # `_corr_threshold`→0 haircut, 1.0→full haircut. Below the
+                # threshold contributes nothing; at the threshold the
+                # factor is zero (ignore); at perfect correlation, factor=1.
+                avg = sum(high_corrs) / len(high_corrs)
+                out[i_tid] = max(0.0, min(1.0,
+                    (avg - self._corr_threshold) / max(1e-6, 1.0 - self._corr_threshold)))
+        return out
+
+    # -- Phase 3a: sigmoid regime smoothing -----------------------------
+
+    def _regime_blend_alpha(self, now_ts: datetime) -> float:
+        """Fraction of the way from the previous regime's multiplier table
+        to the current one, using a sigmoid centered on `_regime_smoothing_s`.
+        Returns 1.0 when enough time has elapsed since the last change
+        (fully in the new regime), 0.0 right after a change (still mostly
+        in the old one). When no change is tracked yet, returns 1.0."""
+        if self._regime_change_ts is None:
+            return 1.0
+        elapsed = (now_ts - self._regime_change_ts).total_seconds()
+        if elapsed <= 0:
+            return 0.0
+        # Logistic: α(t) = 1 / (1 + exp(-(t - t_mid) / k))
+        # k controls how sharp the transition is; pick k = t_mid/3 so the
+        # sigmoid spans ~10s of useful transition around the center.
+        k = max(0.5, self._regime_smoothing_s / 3.0)
+        x = (elapsed - self._regime_smoothing_s) / k
+        # Saturate cleanly far from the midpoint.
+        if x > 20:
+            return 1.0
+        if x < -20:
+            return 0.0
+        return 1.0 / (1.0 + math.exp(-x))
+
+    # -- Phase 1b/1c/3c: diversity, category breakdown, voter horizon ---
+
+    def _diversity_and_breakdown(
+        self,
+        initial_votes: dict[str, tuple],
+        pool_w: dict[str, float],
+        consensus_sign: float,
+    ) -> tuple[float, dict[str, dict[str, float]]]:
+        """Returns (diversity_score, category_mass). Diversity is Shannon
+        entropy over tribe categories, computed against the dominant-side
+        directional mass only, and normalized by log(n_active_categories).
+        `category_mass` exposes the full per-category {buy, sell} breakdown
+        so the decision engine can detect crowded trades."""
+        category_mass: dict[str, dict[str, float]] = {}
+        for tid, (v, _signed, _strength) in initial_votes.items():
+            cat = _TRIBE_CATEGORY.get(tid, "ta")
+            pw = pool_w.get(tid, 0.0)
+            bucket = category_mass.setdefault(cat, {"buy": 0.0, "sell": 0.0})
+            bucket["buy"] += pw * v.buy_frac
+            bucket["sell"] += pw * v.sell_frac
+        # Pick out the dominant-side mass per category.
+        key = "buy" if consensus_sign >= 0 else "sell"
+        active_shares = [m[key] for m in category_mass.values() if m[key] > 0]
+        total = sum(active_shares)
+        if total <= 0 or len(active_shares) <= 1:
+            return 0.0, category_mass
+        probs = [s / total for s in active_shares]
+        entropy = -sum(p * math.log(p) for p in probs if p > 0)
+        norm = math.log(len(active_shares))
+        diversity = entropy / norm if norm > 0 else 0.0
+        return max(0.0, min(1.0, diversity)), category_mass
+
+    def _weighted_avg_horizon(
+        self,
+        initial_votes: dict[str, tuple],
+        pool_w: dict[str, float],
+    ) -> float | None:
+        """Pool-weighted mean of each active tribe's horizon_seconds. Returns
+        None when no tribe has active mass (council fully silent). Weight
+        uses (buy_frac + sell_frac) * pool_w — abstaining tribes don't
+        influence the mean. The decision engine uses this to detect a
+        scalp-dominated council and deleverage accordingly."""
+        num = 0.0
+        den = 0.0
+        for tid, (v, _s, _bs) in initial_votes.items():
+            active = float(v.buy_frac + v.sell_frac)
+            if active <= 0:
+                continue
+            pw = pool_w.get(tid, 0.0)
+            w = active * pw
+            if w <= 0:
+                continue
+            hs = float(getattr(v, "horizon_seconds", 0) or 0)
+            if hs <= 0:
+                # Fall back to the cached spec horizon; scalper tribes
+                # sometimes report horizon_seconds=0 on idle votes and we
+                # don't want that to collapse the mean to zero.
+                hs = self._tribe_horizon_s.get(tid, self.default_horizon_seconds)
+            num += w * hs
+            den += w
+        if den <= 0:
+            return None
+        return num / den
 
     # -- wiggly-path helpers ---------------------------------------------
 

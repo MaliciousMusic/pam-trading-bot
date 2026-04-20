@@ -189,6 +189,22 @@ async def _run_one_fixture(
     tribes, state, projector, decision, executor, regime_clf = _build_stack(
         cfg, ledger_dir=ledger_dir, rng_seed=seed, tribes_dir=tribes_dir,
     )
+    # Adversarial clean slate: each fixture is an isolated stress test, not
+    # a real account. Disable every risk-halt knob so a single bad spoof
+    # outcome can't deactivate the executor for the rest of the fixture's
+    # tick stream (and so the per-tribe skepticism score reflects the
+    # tribes' reaction to the bait, not the engine's risk plumbing).
+    executor.max_drawdown_from_peak_pct = 0.0
+    executor.max_daily_loss_pct = 0.0
+    executor.max_session_dd_pct = 0.0
+    executor.max_position_loss_pct = 0.0
+    executor.black_swan_sigma = 0.0
+    executor._halt_reason = None
+    executor._session_halted = False
+    executor._session_halt_ts = None
+    executor._session_halt_reason = None
+    executor._black_swan_cooldown_until = None
+    executor._black_swan_resumed_at = None
     base = build_event_stream(sliced_bars, sliced_funding,
                               synth_rate=synth_rate, symbol=symbol)
     merged = inject_spoof(base, fixture, anchor_ts, symbol=symbol)
@@ -291,7 +307,7 @@ async def run_adversarial(
         logger.info(
             "[adversarial] {} council={} ({:+.2f})  tribes_skeptical={}/{}",
             fx.id,
-            "✓" if res.council_skeptical else "✗",
+            "OK" if res.council_skeptical else "ERR",
             res.council_signed,
             n_skep, len(res.tribes),
         )
@@ -365,8 +381,8 @@ def render_adversarial_md(report: AdversarialReport) -> str:
         "",
         "## Council vs spoof",
         "",
-        "| fixture | bait | real outcome | council Δ | council ✓ | tribes ✓ |",
-        "|---------|------|--------------|-----------|-----------|----------|",
+        "| fixture | bait | real outcome | council delta | council OK | tribes OK |",
+        "|---------|------|--------------|---------------|------------|-----------|",
     ]
     for fr in report.fixtures:
         n_skep = sum(1 for t in fr.tribes if t.skeptical)
@@ -374,27 +390,27 @@ def render_adversarial_md(report: AdversarialReport) -> str:
             f"| {fr.fixture_id} | {fr.bait_side} "
             f"| {fr.real_outcome_bps:+.0f} bps "
             f"| {fr.council_signed:+.2f} "
-            f"| {'✓' if fr.council_skeptical else '✗'} "
+            f"| {'OK' if fr.council_skeptical else 'ERR'} "
             f"| {n_skep}/{len(fr.tribes)} |"
         )
     lines += [
         "",
-        "_Council ✓ means the council's net signed conviction during the "
-        "scoring window pointed AGAINST the bait — i.e. the council "
-        "wasn't fooled. Tribes ✓ counts how many individual tribes did "
+        "_Council OK means the council's net signed conviction during the "
+        "scoring window pointed AGAINST the bait - i.e. the council "
+        "wasn't fooled. Tribes OK counts how many individual tribes did "
         "the same._",
         "",
         "## Per-tribe skepticism",
         "",
         "Fraction of fixtures where each tribe voted against the bait. "
-        "0.0 = always fooled · 1.0 = always skeptical.",
+        "0.0 = always fooled - 1.0 = always skeptical.",
         "",
         "| tribe | skepticism |",
         "|-------|-----------|",
     ]
     for tid, score in sorted(report.skepticism_by_tribe.items(),
                              key=lambda x: -x[1]):
-        bar = "█" * int(round(score * 20))
+        bar = "#" * int(round(score * 20))
         lines.append(f"| `{tid}` | {score:.2f}  {bar} |")
     lines += [
         "",
@@ -418,7 +434,7 @@ def render_adversarial_md(report: AdversarialReport) -> str:
             "|-------|------------------:|-----:|------:|--------|",
         ]
         for t in fr.tribes:
-            mark = "✓" if t.skeptical else "✗"
+            mark = "OK" if t.skeptical else "ERR"
             lines.append(
                 f"| `{t.tribe_id}` | {t.net_signed_conviction:+.2f} "
                 f"| {t.n_buy_votes} | {t.n_sell_votes} | {mark} |"
