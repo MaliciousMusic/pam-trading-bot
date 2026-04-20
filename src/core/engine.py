@@ -28,6 +28,7 @@ from ..core.types import Event, Side
 from ..decision.engine import DecisionEngine
 from ..execution.base import Executor
 from ..execution.ledger import Ledger
+from ..execution.shadow import TribeShadowLedger
 from ..projector.chess import ChessProjector
 from ..projector.kernel_calibrator import KernelCalibrator
 from ..regime.classifier import RegimeClassifier
@@ -56,6 +57,8 @@ class TradingEngine:
         calibrator: TribeCalibrator | None = None,
         kernel_calibrator: KernelCalibrator | None = None,
         regime_classifier: RegimeClassifier | None = None,
+        shadow_ledgers: dict[str, TribeShadowLedger] | None = None,
+        tribe_scorer=None,
     ) -> None:
         self.bus = bus
         self.tribes = tribes
@@ -70,6 +73,8 @@ class TradingEngine:
         self.calibrator = calibrator
         self.kernel_calibrator = kernel_calibrator
         self.regime_classifier = regime_classifier
+        self.shadow_ledgers = shadow_ledgers or {}
+        self.tribe_scorer = tribe_scorer
         self._tick_count = 0
         self._starting_equity: float = executor.equity_usd
         # Prediction anchors. Each is (label, step_index) where step_index is
@@ -205,10 +210,16 @@ class TradingEngine:
         # skill multiplier before aggregation. Multiplier is 1.0 when the
         # overlay is disabled or the tribe has too few resolved samples,
         # so this is a no-op until there's real data and `apply=True`.
+        # Trading overlay: side-aware multiplier from the tribe scorer's
+        # shadow-ledger EWMA. Stacks on top of the signal-skill mult so a
+        # tribe that predicts direction but bleeds in execution gets muted
+        # even when its signal is statistically sound, and vice versa.
         if self.calibrator is not None:
             votes = []
             for v in raw_votes:
-                m = self.calibrator.skill_multiplier(v.tribe_id, regime_label_now)
+                m_skill = self.calibrator.skill_multiplier(v.tribe_id, regime_label_now)
+                m_trade = self.calibrator.trading_multiplier(v.tribe_id, v.side)
+                m = m_skill * m_trade
                 if m != 1.0 and v.side is not Side.ABSTAIN:
                     new_conv = max(0.0, min(1.0, v.conviction * m))
                     # Recompute internal distribution fractions so they stay
@@ -224,9 +235,10 @@ class TradingEngine:
                             nb = act_est * max(0.0, 0.5 - raw_new / 2.0)
                     else:
                         nb, ns = v.buy_frac, v.sell_frac
+                    note = f" | skill×{m_skill:.2f} trading_m={m_trade:.2f}"
                     votes.append(replace(v, conviction=new_conv,
                                          buy_frac=nb, sell_frac=ns,
-                                         reason=v.reason + f" | skill×{m:.2f}"))
+                                         reason=v.reason + note))
                 else:
                     votes.append(v)
             # Record the RAW vote (pre-multiplier) as the skill signal —
@@ -266,6 +278,37 @@ class TradingEngine:
 
         # 3) Max-hold backstop (time-based hard cap, independent of forecast).
         self.executor.mark_to_market(ts, self.state.last_price)
+
+        # 3b) Per-tribe shadow ledgers — each archetype runs its own isolated
+        #     paper account using its own vote for entries and the council
+        #     forecast for the same 6-layer exit engine. Black-swan state is
+        #     borrowed from the real executor so shadows freeze in detonations.
+        if self.shadow_ledgers:
+            bs_active = bool(getattr(self.executor, "black_swan_active", False))
+            vote_by_tid = {v.tribe_id: v for v in raw_votes}
+            for tid, ledger in self.shadow_ledgers.items():
+                vote = vote_by_tid.get(tid)
+                if vote is None:
+                    continue
+                tribe = next((t for t in self.tribes if t.spec.id == tid), None)
+                tribe_rng = getattr(tribe, "_rng", None) if tribe else None
+                ledger.on_tick(
+                    ts, self.state.last_price, vote, forecast,
+                    regime_label=regime_label_now,
+                    rng=tribe_rng,
+                    black_swan_active=bs_active,
+                )
+            if self.tribe_scorer is not None:
+                for ledger in self.shadow_ledgers.values():
+                    closed = ledger.drain_pending()
+                    if closed:
+                        self.tribe_scorer.ingest_closed(closed)
+                    self.tribe_scorer.ingest_mark(
+                        ledger.tribe_id,
+                        ledger.equity_usd,
+                        ledger.unrealized_pnl_bps(self.state.last_price),
+                        ledger.peak_equity_usd,
+                    )
 
         intent = self.decision.decide(
             ts, forecast, self.state, equity_usd=self.executor.equity_usd,
@@ -351,6 +394,12 @@ class TradingEngine:
             logger.info("[fitness] tick={} Δequity=${:+.2f} ({:+.2%})  trades={}",
                         self._tick_count, delta, pct,
                         getattr(self.executor, "trades_completed", 0))
+            for tid, ledger in self.shadow_ledgers.items():
+                logger.info(
+                    "[SHADOW] tribe={} eq=${:,.2f} pnl={:+.1f}bps trades={} open={}",
+                    tid, ledger.equity_usd, ledger.pnl_bps_vs_start(),
+                    ledger.trades_completed, len(ledger.positions),
+                )
 
         if self.broadcaster is not None:
             positions = self.executor.positions
@@ -440,4 +489,17 @@ class TradingEngine:
                 "regime": regime_snapshot,
                 "risk": (self.executor.risk_snapshot()
                          if hasattr(self.executor, "risk_snapshot") else None),
+                # Per-tribe shadow ledger equity snapshot — one row per tribe
+                # with equity, pnl_bps, trades, and open-position count. Feeds
+                # the Tribe Trading Heatmap in the UI.
+                "shadow_ledgers": (
+                    [ledger.snapshot() for ledger in self.shadow_ledgers.values()]
+                    if self.shadow_ledgers else None
+                ),
+                # Tribe scorer composite metrics (EWMA long/short skill,
+                # realized/unrealized PnL, Sharpe, SL-discipline, etc.).
+                "tribe_trading": (
+                    self.tribe_scorer.snapshot()
+                    if self.tribe_scorer is not None else None
+                ),
             })

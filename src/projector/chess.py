@@ -242,6 +242,12 @@ class ChessProjector:
         self._prev_regime_label: str = "normal"
         self._regime_change_ts: datetime | None = None
         self._regime_smoothing_s: float = 7.5   # center of the sigmoid
+        # Task 4e / PIECE 3 — top-quartile harvest inflation. Each contrarian
+        # tribe in the scorer's top-25% composite cohort has its pool-weight
+        # contribution to harvest_mass scaled by this factor. 1.0 = no extra
+        # boost (original behavior); 2.0 = double. Wired from config via
+        # run_bot_ui at construction and mutable afterward.
+        self._harvest_top_quartile_boost: float = 2.0
 
     def project(self, state: MarketState) -> Forecast:
         """Agent-Based Recursive projection with Adaptive Temporal Weighting.
@@ -414,16 +420,23 @@ class ChessProjector:
         # split 45/55 (or closer) on direction — the "net" signal is
         # mostly noise. Drop the vote to abstain so it doesn't get
         # averaged into the council signal.
-        # Task 2 — TA Cemetery / Contrarian Inversion. Pre-compute which
-        # tribes are reliably-worse-than-chance this window. Their vote
-        # directions get flipped downstream: a tribe hitting 38% is a
-        # 62%-accurate contrarian signal. Cached once per tick to avoid
-        # hammering the calibrator's ewma_fast on every vote.
+        # Task 2 — TA Cemetery / Contrarian Inversion, now surgical on the
+        # (tribe × regime × horizon) cube. A tribe can be reliably-worse-
+        # than-chance in cascade-down at 5m while remaining skilled in
+        # trend-up at 1m — the 3-D mask catches the bad slice without
+        # punishing the good one. Falls back to the scalar candidate test
+        # when the cube mask is False (not-yet-enough samples) so existing
+        # global losers still get flipped during cold-start.
         contrarian_tids: set[str] = set()
         if self.calibrator is not None:
+            projector_horizon_s = float(self.default_horizon_seconds)
             for t in self.tribes:
                 try:
-                    if self.calibrator.is_contrarian_candidate(t.spec.id):
+                    cube_hit = self.calibrator.contrarian_mask(
+                        t.spec.id, self.regime_label, projector_horizon_s,
+                    )
+                    scalar_hit = self.calibrator.is_contrarian_candidate(t.spec.id)
+                    if cube_hit or scalar_hit:
                         contrarian_tids.add(t.spec.id)
                 except Exception:
                     pass
@@ -639,10 +652,33 @@ class ChessProjector:
         # mass actually exists.
         harvest_scale = 0.5
         total_mass = sum(pool_w.values())
-        harvest_mass = sum(pool_w.get(tid, 0.0) for tid in contrarian_tids)
+        # Top-quartile boost — tribes whose shadow-ledger composite score
+        # sits in the top 25% get their contrarian harvest contribution
+        # doubled. The projector asks the attached calibrator for the scorer;
+        # falls back to no boost when the scorer isn't attached yet (cold
+        # start, < min_trades on everyone). Default factor comes from config
+        # but is hard-stopped at 4× here so a misconfig can't explode mass.
+        top_quartile: set[str] = set()
+        try:
+            scorer = getattr(self.calibrator, "_trading_scorer", None)
+            if scorer is not None:
+                top_quartile = set(scorer.top_quartile_tribes())
+        except Exception:
+            top_quartile = set()
+        hq_boost = max(1.0, min(4.0, float(self._harvest_top_quartile_boost)))
+        harvest_mass = 0.0
+        for tid in contrarian_tids:
+            mass = pool_w.get(tid, 0.0)
+            if tid in top_quartile:
+                mass *= hq_boost
+            harvest_mass += mass
         harvest_mass_ratio = (
             harvest_mass / total_mass if total_mass > 0.0 else 0.0
         )
+        # Clamp the ratio so the top-quartile inflation can't push the
+        # conviction_boost past 1.0 + harvest_scale (preserves the original
+        # 1.5× cap).
+        harvest_mass_ratio = max(0.0, min(1.0, harvest_mass_ratio))
         conviction_boost = 1.0 + harvest_scale * harvest_mass_ratio
 
         steps_bps: list[float] = []

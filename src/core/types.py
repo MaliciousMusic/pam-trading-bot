@@ -157,6 +157,10 @@ class Position:
     # move peaked. Executor closes the position if held significantly past
     # this point (see PaperExecutor.shape_grace_seconds). 0 disables.
     peak_favorable_s: int = 0
+    # Shadow-ledger ownership. None on the real council portfolio; set to the
+    # tribe id when the position lives inside a TribeShadowLedger so audit/UI
+    # can split equity curves without threading a second Position subclass.
+    tribe_id: str | None = None
 
     @property
     def is_flat(self) -> bool:
