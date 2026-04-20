@@ -77,9 +77,6 @@ _TRIBE_CATEGORY: dict[str, str] = {
     "retail_app_newbie": "retail",
     "copy_trader": "retail",
     "ta_day_trader": "ta",
-    "ta_day_trader_us": "ta",
-    "ta_day_trader_eu": "ta",
-    "ta_day_trader_asia": "ta",
     "swing_trend_follower": "ta",
     "liquidation_hunter": "event",
     "news_fader": "event",
@@ -107,7 +104,11 @@ _TRIBE_CATEGORY: dict[str, str] = {
 # rather than a directional read; averaging it into the council is
 # averaging noise. Any vote where min/max > _DISSENSION_RATIO_THRESHOLD is
 # dropped to abstain — we'd rather have fewer loud voices than many split ones.
-_DISSENSION_RATIO_THRESHOLD: float = 0.82   # 45/55 ≈ 0.82; ≥ this → veto
+_DISSENSION_RATIO_THRESHOLD: float = 0.82
+# Boundary examples (lo/hi ratio):
+#   45/55 → 0.818 — passes (vote kept, boundary case just under threshold)
+#   46/54 → 0.852 — vetoed (vote dropped to abstain, too internally split)
+#   50/50 → 1.000 — always vetoed (perfect split, no directional signal)
 
 
 def _is_dissension(vote) -> bool:
@@ -235,6 +236,18 @@ class ChessProjector:
         self._conviction_history: dict[str, deque] = {
             t.spec.id: deque(maxlen=self._corr_window) for t in tribes
         }
+        self._last_capitulation_triggers: int = 0
+        # Validate that the capitulation trio exists — if any of these IDs
+        # are missing the capitulation logic silently no-ops, which would
+        # disable a core contrarian-mass amplification pathway. Warn loud.
+        _known_tids = {t.spec.id for t in tribes}
+        for _cap_tid in ("liquidation_hunter", "retail_grid_bot", "capitulation_buyer"):
+            if _cap_tid not in _known_tids:
+                from loguru import logger as _cap_logger
+                _cap_logger.warning(
+                    "[projector] capitulation tribe '{}' missing from tribe set; "
+                    "capitulation multiplier will not fire", _cap_tid,
+                )
         # ── Phase 3a: regime smoothing ────────────────────────────────
         # Track the previous regime label + timestamp of last change so
         # the category multiplier table can be blended rather than
@@ -613,6 +626,34 @@ class ChessProjector:
             mult = mult_prev + regime_blend_alpha * (mult_cur - mult_prev)
             haircut = 1.0 - self._corr_max_haircut * redundancy.get(t.spec.id, 0.0)
             pool_w[t.spec.id] = float(t.weight) * mult * haircut
+
+        # ── Capitulation Multiplier ───────────────────────────────────
+        # When the two cascade-follower losers (liquidation_hunter +
+        # retail_grid_bot) are both in contrarian mode AND post-flip
+        # voting BUY with high conviction — i.e. their pre-flip signal
+        # was a high-conviction panic-SELL into a cascade they're
+        # losing on — hand the microphone to capitulation_buyer, the
+        # tribe architecturally designed to fade exactly this. Pure
+        # weight reallocation, no new strategy. Produces Mean Reversion
+        # Long via the existing harvest path.
+        LOSER_TIDS = ("liquidation_hunter", "retail_grid_bot")
+        CAP_TID = "capitulation_buyer"
+        cap_triggers = 0
+        if CAP_TID in pool_w:
+            for loser_tid in LOSER_TIDS:
+                if loser_tid not in contrarian_tids:
+                    continue
+                iv = initial_votes.get(loser_tid)
+                if iv is None:
+                    continue
+                v_loser = iv[0]
+                if v_loser.side is Side.BUY and v_loser.conviction >= 0.5:
+                    cap_triggers += 1
+            if cap_triggers >= 2:
+                pool_w[CAP_TID] *= 3.0
+            elif cap_triggers == 1:
+                pool_w[CAP_TID] *= 1.5
+        self._last_capitulation_triggers = cap_triggers
 
         # ── Task 4d: TA Family Redundancy Cap ─────────────────────────
         # The 5 TA tribes (4 day-traders + swing_trend_follower) read the

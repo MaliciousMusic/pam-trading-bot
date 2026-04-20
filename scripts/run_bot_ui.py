@@ -64,6 +64,21 @@ async def main() -> None:
     sources_cfg = data_sources()["sources"]
     ds = sources_cfg["binance_perps_ws"]
 
+    # Wire the logging block so the yaml actually controls loguru verbosity
+    # and sink directory. Prior to this, settings.logging was decorative.
+    log_cfg = cfg.get("logging", {}) or {}
+    log_level = str(log_cfg.get("level", "INFO")).upper()
+    log_dir = log_cfg.get("dir")
+    if log_level:
+        import sys as _sys
+        logger.remove()
+        logger.add(_sys.stderr, level=log_level)
+        if log_dir:
+            from pathlib import Path as _Path
+            _Path(log_dir).mkdir(parents=True, exist_ok=True)
+            logger.add(f"{log_dir}/bot_{{time:YYYY-MM-DD}}.log",
+                       level=log_level, rotation="1 day", retention="14 days")
+
     tribes = load_all()
     if not tribes:
         logger.error("no tribes loaded; aborting")

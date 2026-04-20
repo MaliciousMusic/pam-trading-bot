@@ -44,14 +44,45 @@
   #conn.dead{background:var(--sell);color:#000}
   .curve-badge{font-family:var(--mono);font-size:9.5px;padding:1px 6px;
     border-radius:2px;background:var(--bg3);color:var(--accent);letter-spacing:.07em}
+  /* Capitulation-trigger chip states — warm (1 loser in panic-SELL),
+     hot (both losers — capitulation_buyer gets ×3.0 pool boost). */
+  #hdr-cap{transition:background .4s,box-shadow .4s}
+  #hdr-cap.capi-warm{background:rgba(200,168,75,.18);
+    box-shadow:0 0 8px rgba(200,168,75,.35);border-radius:2px;padding:1px 4px}
+  #hdr-cap.capi-warm .v{color:var(--accent);font-weight:700}
+  #hdr-cap.capi-hot{background:rgba(217,79,79,.22);
+    box-shadow:0 0 12px rgba(217,79,79,.55);border-radius:2px;padding:1px 4px;
+    animation:capi-pulse 1.2s ease-in-out infinite}
+  #hdr-cap.capi-hot .v{color:#ffb3b3;font-weight:800}
+  @keyframes capi-pulse{
+    0%,100%{box-shadow:0 0 10px rgba(217,79,79,.45)}
+    50%{box-shadow:0 0 18px rgba(217,79,79,.75)}
+  }
 
-  /* ── MAIN 3-COLUMN GRID ─────────────── */
+  /* ── MAIN — council strip over charts+sidebar, heatmaps pinned at bottom */
   main{flex:1;display:grid;width:100%;
-    grid-template-columns:minmax(150px,200px) 1fr minmax(190px,248px);
-    grid-template-rows:1fr;
+    grid-template-columns:1fr minmax(210px,270px);
+    grid-template-rows:auto 1fr auto;
+    grid-template-areas:
+      "council council"
+      "charts  sidebar"
+      "heatmaps heatmaps";
     gap:1px;background:var(--border);overflow:hidden;min-height:0;min-width:0}
 
-  /* ── LEFT — Council (passive, compact) ─ */
+  /* ── TOP — Council line-up (full-width horizontal strip) */
+  .council-strip{grid-area:council;display:flex;align-items:stretch;
+    background:var(--bg);min-height:0;overflow:hidden}
+  .council-strip .stage{flex:1;position:relative;min-width:0;
+    height:128px;overflow:hidden}
+  .council-strip .stage svg{width:100%;height:100%;display:block}
+  .council-meta-strip{flex:0 0 auto;width:260px;border-left:1px solid var(--border);
+    padding:6px 8px;display:flex;flex-direction:column;gap:4px;background:var(--bg2);
+    font-size:9px}
+  .council-meta-strip .gauge{height:28px}
+  .council-meta-strip .metrics,.council-meta-strip .metrics-phase15{display:grid;
+    grid-template-columns:repeat(4,1fr);gap:3px}
+
+  /* ── LEFT panel kept for back-compat but not used as column anymore */
   .left-panel{display:flex;flex-direction:column;background:var(--bg);min-height:0;min-width:0}
   .stage{flex:1;position:relative;overflow:hidden;min-height:0}
   .stage svg{width:100%;height:100%;display:block}
@@ -71,17 +102,17 @@
   .stage-legend i{width:5px;height:5px;border-radius:50%}
   .lb{background:var(--buy)}.ls{background:var(--sell)}.la{background:var(--neutral)}
 
-  /* tribe nodes — scaled for compact column */
+  /* tribe nodes — compact line-up; names rotated diagonally to avoid overlap */
   .tribe .body{fill:#090909;stroke:#252525;stroke-width:1.5;transition:stroke .35s,fill .35s}
   .tribe.buy .body{stroke:var(--buy);fill:#090f0b}
   .tribe.sell .body{stroke:var(--sell);fill:#0f0909}
-  .tribe .pie-bg{fill:none;stroke:rgba(80,80,80,.12);stroke-width:4}
-  .tribe .pie-seg{fill:none;stroke-width:4;transition:stroke-dasharray .4s,stroke-dashoffset .4s}
+  .tribe .pie-bg{fill:none;stroke:rgba(80,80,80,.12);stroke-width:3}
+  .tribe .pie-seg{fill:none;stroke-width:3;transition:stroke-dasharray .4s,stroke-dashoffset .4s}
   .tribe .emoji{font-size:15px;text-anchor:middle;dominant-baseline:central;
     user-select:none;pointer-events:none}
   .tribe{transition:opacity .5s}
-  .tribe .name{font-size:7px;fill:var(--muted);text-anchor:middle;
-    letter-spacing:.08em;text-transform:uppercase;font-family:var(--mono)}
+  .tribe .name{font-size:7px;fill:var(--muted);text-anchor:end;
+    letter-spacing:.06em;text-transform:uppercase;font-family:var(--mono)}
   .tribe .weight{font-size:6px;fill:var(--dim);text-anchor:middle;font-family:var(--mono)}
   .tribe .tz{font-size:5.5px;fill:var(--dim);text-anchor:middle;font-family:var(--mono);
     letter-spacing:.07em;text-transform:uppercase;opacity:.6}
@@ -134,14 +165,31 @@
     font-family:var(--mono);font-size:6.5px;color:var(--fg);
     text-shadow:0 0 2px rgba(0,0,0,.7);pointer-events:none;text-transform:uppercase}
 
-  /* ── CENTER — Charts ─────────────────── */
-  .charts-panel{display:flex;flex-direction:column;
+  /* ── CENTER — Charts (price + equity only; heatmaps moved to bottom row) */
+  .charts-panel{grid-area:charts;display:flex;flex-direction:column;
     gap:1px;background:var(--border);min-height:0;min-width:0;overflow:hidden}
   .charts-panel>*{background:var(--bg)}
   .chart-box{display:flex;flex-direction:column;padding:10px 14px;min-height:0;overflow:hidden}
   .chart-box.price{flex:1}
   .chart-box.equity{flex-shrink:0;height:88px}
   .chart-box.accmap{flex-shrink:0;padding:6px 10px 7px}
+
+  /* ── BOTTOM — Heatmaps row (both scrollable on both axes) */
+  .heatmaps-row{grid-area:heatmaps;display:grid;
+    grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+    gap:1px;background:var(--border);
+    height:clamp(220px,30vh,340px);min-height:0;overflow:hidden}
+  .heatmaps-row>.chart-box{background:var(--bg);height:100%;overflow:hidden;
+    padding:6px 10px 7px}
+  .heatmaps-row .accmap-grid,
+  .heatmaps-row .trading-grid{max-height:none;flex:1 1 0;min-height:0;
+    overflow:auto;scrollbar-width:thin;scrollbar-color:var(--bg3) transparent}
+  .heatmaps-row .accmap-grid::-webkit-scrollbar,
+  .heatmaps-row .trading-grid::-webkit-scrollbar{width:5px;height:5px}
+  .heatmaps-row .accmap-grid::-webkit-scrollbar-thumb,
+  .heatmaps-row .trading-grid::-webkit-scrollbar-thumb{background:var(--bg3);border-radius:2px}
+  .heatmaps-row .accmap-grid::-webkit-scrollbar-track,
+  .heatmaps-row .trading-grid::-webkit-scrollbar-track{background:transparent}
   /* Unified per-row grid: each row is a self-contained strip with its label
      + tick cells in the same DOM row, so they can never drift out of
      alignment. Labels sit in a fixed-width left column; ticks flex-fill
@@ -306,7 +354,11 @@
   .trade-legend span{display:inline-flex;align-items:center;gap:3px}
 
   /* ── RIGHT SIDEBAR ───────────────────── */
-  .sidebar{padding:7px;overflow:hidden;display:flex;flex-direction:column;gap:5px;background:var(--bg);min-width:0;min-height:0}
+  .sidebar{grid-area:sidebar;padding:7px;overflow-y:auto;overflow-x:hidden;
+    display:flex;flex-direction:column;gap:5px;background:var(--bg);min-width:0;min-height:0;
+    scrollbar-width:thin;scrollbar-color:var(--bg3) transparent}
+  .sidebar::-webkit-scrollbar{width:4px}
+  .sidebar::-webkit-scrollbar-thumb{background:var(--bg3);border-radius:2px}
   .sidebar .box{display:flex;flex-direction:column;min-height:0}
   .sidebar #pos-box{flex:0 0 auto}
   .sidebar #th-box{flex:1 1 0;min-height:0}
@@ -430,51 +482,76 @@
   .f-social_pulse.bull{color:var(--buy)}
   .f-sentiment{color:var(--accent)}
 
-  /* ── RESPONSIVE ─────────────────────── */
+  /* ── RESPONSIVE ───────────────────────
+     Layout is now: council (full width) / charts + sidebar / heatmaps (full width).
+     We tighten dims at narrower viewports, then collapse sidebar and stack heatmaps. */
+
   /* Short viewport: shrink chrome so charts get more vertical space */
   @media (max-height:680px){
     header{padding:4px 12px;gap:10px}
     .hdr-item .v{font-size:12px}
     footer{height:32px;padding:4px 12px}
-    .chart-box.equity{height:64px}
-    .chart-box.equity canvas{height:28px}
+    .council-strip .stage{height:108px}
+    .chart-box.equity{height:58px}
+    .chart-box.equity canvas{height:26px}
+    .heatmaps-row{min-height:190px;max-height:230px}
   }
-  /* Mid-width: keep the 3-column grid but tighten column widths so the
-     whole dashboard still fits in the viewport without a right scrollbar.
-     The goal is to NEVER need to scroll — every component visible at once.
-     We only fall back to a stacked layout at phablet-or-narrower widths. */
+
+  /* Mid-width: tighten sidebar column width and reduce heatmap height */
   @media (max-width:1280px){
-    main{grid-template-columns:minmax(140px,180px) 1fr minmax(180px,230px)}
-    .chart-box.equity{height:60px}
-    .chart-box.equity canvas{height:28px}
+    main{grid-template-columns:1fr minmax(200px,240px)}
+    .council-meta-strip{width:220px;font-size:8.5px}
+    .chart-box.equity{height:54px}
+    .chart-box.equity canvas{height:24px}
   }
   @media (max-width:1060px){
-    main{grid-template-columns:minmax(130px,160px) 1fr minmax(170px,210px)}
-    .chart-box.equity{height:48px}
-    .chart-box.equity canvas{height:22px}
+    main{grid-template-columns:1fr minmax(180px,210px)}
+    .council-meta-strip{width:190px;font-size:8px}
+    .council-strip .stage{height:112px}
+    .chart-box.equity{height:46px}
+    .chart-box.equity canvas{height:20px}
     .hdr-item .v{font-size:11px}
     .hdr-item .k{font-size:7.5px}
+    .heatmaps-row{min-height:180px}
   }
-  /* Phablet / large mobile */
-  @media (max-width:720px){
+
+  /* Tablet: sidebar drops below charts; heatmaps still side-by-side */
+  @media (max-width:900px){
     body{overflow:auto;height:auto;min-height:100vh}
+    main{grid-template-columns:1fr;grid-template-rows:auto auto auto auto;
+      grid-template-areas:
+        "council"
+        "charts"
+        "sidebar"
+        "heatmaps";
+      overflow:visible}
+    .council-strip{flex-direction:column}
+    .council-strip .stage{height:124px}
+    .council-meta-strip{width:100%;border-left:none;border-top:1px solid var(--border)}
+    .sidebar{flex-direction:row;flex-wrap:wrap;max-height:none}
+    .sidebar .box{flex:1 1 240px;min-width:220px}
+    .charts-panel{min-height:360px}
+    .chart-box.price{min-height:240px}
+    .heatmaps-row{min-height:260px;max-height:none}
+  }
+
+  /* Phablet: heatmaps stack vertically and council labels shrink */
+  @media (max-width:720px){
     header{flex-wrap:wrap;gap:5px 8px;padding:5px 8px}
     .brand{flex-basis:100%}
-    main{grid-template-columns:1fr;grid-template-rows:auto auto auto;overflow:visible}
-    .left-panel,.charts-panel,.sidebar{grid-column:1;grid-row:auto;min-height:0}
-    .left-panel{min-height:380px}
-    .stage{min-height:260px}
-    .charts-panel{min-height:400px;overflow:visible}
-    .chart-box.price{min-height:260px}
-    .sidebar{flex-direction:column}
-    .sidebar .box{min-width:0;flex:1 1 auto}
-    footer{height:auto;padding:5px 10px}
+    .heatmaps-row{grid-template-columns:1fr;grid-template-rows:1fr 1fr}
+    .council-strip .stage{height:104px}
+    .sidebar .box{flex:1 1 100%}
+    footer{height:auto;padding:5px 10px;flex-wrap:wrap}
   }
-  /* Small mobile */
+
+  /* Small mobile: hide low-priority header metrics and stack everything tight */
   @media (max-width:480px){
     .hdr-item:has(#h-tick),.hdr-item:has(#h-curve){display:none}
-    .chart-box.equity{height:56px}
-    .council-meta .metrics{grid-template-columns:1fr 1fr}
+    .chart-box.equity{height:50px}
+    .council-meta-strip .metrics,
+    .council-meta-strip .metrics-phase15{grid-template-columns:1fr 1fr}
+    .council-strip .stage{height:92px}
   }
 
   /* ── Replay amber banner ─────────────────────────────────────── */
@@ -635,6 +712,8 @@
   <div class="hdr-item"><span class="k">Equity</span><span class="v" id="h-equity">—</span></div>
   <div class="hdr-item"><span class="k">Session P&amp;L</span><span class="v" id="h-fitness">—</span></div>
   <div class="hdr-item"><span class="k">W / Trades</span><span class="v" id="h-trades">—</span></div>
+  <div class="hdr-item" title="Long / Short opened this session"><span class="k">L / S</span><span class="v" id="h-ls">—</span></div>
+  <div class="hdr-item" id="hdr-cap" title="Capitulation Multiplier — triggers when liquidation_hunter + retail_grid_bot are both in contrarian panic-SELL. Boosts capitulation_buyer's pool weight ×1.5 (one loser) or ×3.0 (both)."><span class="k">Capi</span><span class="v" id="h-cap">—</span></div>
   <div class="hdr-item"><span class="k">Tick</span><span class="v" id="h-tick">—</span></div>
   <div class="hdr-item"><span class="k">Sizing</span><span class="v curve-badge" id="h-curve">—</span></div>
   <span class="spacer"></span>
@@ -713,8 +792,8 @@
 </div>
 
 <main>
-  <!-- Left: Council (passive, compact) -->
-  <div class="left-panel">
+  <!-- Top: Council line-up (full-width horizontal strip) -->
+  <div class="council-strip">
     <section class="stage">
       <div class="stage-label">Council</div>
       <div class="stage-sub" id="s-sub">awaiting first vote…</div>
@@ -727,26 +806,20 @@
         <span><i class="ls"></i>SELL</span>
         <span><i class="la"></i>STAY</span>
       </div>
-      <svg id="council" viewBox="-350 -350 700 700" preserveAspectRatio="xMidYMid meet">
+      <svg id="council" viewBox="-500 -60 1000 130" preserveAspectRatio="xMidYMid meet">
         <defs>
           <radialGradient id="hubGlow" cx="0.5" cy="0.5" r="0.5">
             <stop offset="0%" stop-color="rgba(200,168,75,0.08)"/>
             <stop offset="100%" stop-color="rgba(200,168,75,0)"/>
           </radialGradient>
         </defs>
-        <circle class="hub-outer" cx="0" cy="0" r="240"/>
-        <circle class="hub-inner" cx="0" cy="0" r="60"/>
-        <line class="hub-axis" x1="0" y1="-330" x2="0" y2="330"/>
-        <line class="hub-axis" x1="-330" y1="0" x2="330" y2="0"/>
-        <circle cx="0" cy="0" r="60" fill="url(#hubGlow)"/>
-        <line class="output-beam" id="beam" x1="0" y1="0" x2="0" y2="-330"/>
+        <line class="output-beam" id="beam" x1="0" y1="0" x2="0" y2="-40"/>
         <g id="tribes"></g>
         <g id="flows"></g>
         <g id="output"></g>
       </svg>
     </section>
-    <!-- Net pressure + metrics below the SVG -->
-    <div class="council-meta">
+    <div class="council-meta-strip">
       <div class="gauge">
         <span class="gauge-lbl">Net Pressure</span>
         <span class="gauge-val" id="g-val">+0.000</span>
@@ -756,26 +829,27 @@
         <div class="m"><div class="k">E-Move</div><div class="v" id="m-emove">—</div><div class="floor" id="m-emove-floor"></div></div>
         <div class="m"><div class="k">Conf</div><div class="v" id="m-conf">—</div><div class="floor" id="m-conf-floor"></div></div>
         <div class="m"><div class="k">Unc</div><div class="v" id="m-unc">—</div><div class="floor" id="m-unc-ceil"></div></div>
+        <div class="m" title="Shannon entropy of directional mass across orthogonal categories.">
+          <div class="k">Div</div><div class="v" id="m-diversity">—</div><div class="floor" id="m-diversity-floor"></div>
+        </div>
       </div>
       <div class="metrics metrics-phase15">
-        <div class="m" title="Shannon entropy of directional mass across orthogonal categories. 1.0 = perfectly spread; ~0 = one cluster (e.g. TA-bloc).">
-          <div class="k">Diversity</div><div class="v" id="m-diversity">—</div><div class="floor" id="m-diversity-floor"></div>
-        </div>
-        <div class="m" title="Share of dominant-side mass held by crowd-prone categories (retail + TA). High share on a high-conf call triggers the crowded-trade shrink.">
+        <div class="m" title="Share of dominant-side mass held by crowd-prone categories (retail + TA).">
           <div class="k">Crowd</div><div class="v" id="m-crowd">—</div><div class="floor" id="m-crowd-floor"></div>
         </div>
-        <div class="m" title="Weighted-average voter outlook horizon (seconds). Drops below ~50% of nominal trigger the volatility-adjusted deleverage.">
+        <div class="m" title="Weighted-average voter outlook horizon (seconds).">
           <div class="k">Hz</div><div class="v" id="m-avghz">—</div><div class="floor" id="m-avghz-floor"></div>
         </div>
-        <div class="m" title="Path-Integrity. Pool-weight-weighted calibrator skill of tribes voting WITH consensus. ~1.0 = trustworthy drivers; &lt;0.7 caps all size multipliers (TA Cemetery protection).">
+        <div class="m" title="Path-Integrity. Pool-weight-weighted calibrator skill of tribes voting WITH consensus.">
           <div class="k">Driver</div><div class="v" id="m-drvskill">—</div><div class="floor" id="m-drvskill-floor"></div>
         </div>
+        <div class="m"><div class="k"></div><div class="v">&nbsp;</div></div>
       </div>
-      <div class="cat-mass" id="cat-mass" title="Per-category directional mass breakdown (buy vs sell). Hover a bar for the exact buy/sell split."></div>
+      <div class="cat-mass" id="cat-mass" title="Per-category directional mass breakdown (buy vs sell)."></div>
     </div>
   </div>
 
-  <!-- Center: Charts (dominant) -->
+  <!-- Center: Price + Equity (heatmaps moved to bottom row) -->
   <div class="charts-panel">
     <div class="chart-box price">
       <div class="chart-hdr">
@@ -800,35 +874,6 @@
         <span class="v" id="eq-d">—</span>
       </div>
       <canvas id="eq-c"></canvas>
-    </div>
-    <div class="chart-box accmap" style="position:relative">
-      <div class="chart-hdr">
-        <span class="k">Accuracy Heatmap</span>
-        <span class="v" id="acc-d">— tribes × — steps</span>
-        <span class="acc-legend">
-          <i style="background:#d94f4f"></i>malus
-          <i style="background:#3a3a3a"></i>neutre
-          <i style="background:#4dbb6e"></i>bonus
-          <i style="border:1px dashed rgba(255,0,170,.9);background:transparent"></i>[INV]
-        </span>
-      </div>
-      <div class="accmap-grid" id="accmap-grid"></div>
-      <div class="accmap-axis" id="accmap-axis"></div>
-      <div id="accmap-tip"></div>
-    </div>
-    <div class="chart-box trading" style="position:relative"
-         title="Tribe Trading Heatmap — per-tribe shadow-ledger scorecard. Each tribe runs its own paper account with the full 6-layer exit engine on $50k. Columns: long/short hit-rate, realized PnL (bps), Sharpe, SL-discipline, TP-capture, max-DD, edge-over-cost, composite net-score. Gold dot + [TQ] tag marks top-quartile tribes whose harvest-mass contribution is doubled.">
-      <div class="chart-hdr">
-        <span class="k">Tribe Trading Heatmap</span>
-        <span class="v" id="trading-d">— shadow ledgers</span>
-        <span class="acc-legend">
-          <i style="background:#d94f4f"></i>loss
-          <i style="background:#3a3a3a"></i>flat
-          <i style="background:#4dbb6e"></i>win
-          <i style="background:#ffd700"></i>[TQ]
-        </span>
-      </div>
-      <div class="trading-grid" id="trading-grid"></div>
     </div>
   </div>
 
@@ -882,6 +927,39 @@
       <div class="th-list" id="th-list"><div class="th-empty">no closed trades yet</div></div>
     </div>
   </aside>
+
+  <!-- Bottom: Heatmaps row (both scrollable on both axes) -->
+  <div class="heatmaps-row">
+    <div class="chart-box trading" style="position:relative"
+         title="Tribe Trading Heatmap — per-tribe shadow-ledger scorecard. Each tribe runs its own paper account with the full 6-layer exit engine on $50k. Columns: long/short hit-rate, realized PnL (bps), Sharpe, SL-discipline, TP-capture, max-DD, edge-over-cost, composite net-score. Gold dot + [TQ] tag marks top-quartile tribes whose harvest-mass contribution is doubled.">
+      <div class="chart-hdr">
+        <span class="k">Tribe Trading Heatmap</span>
+        <span class="v" id="trading-d">— shadow ledgers</span>
+        <span class="acc-legend">
+          <i style="background:#d94f4f"></i>loss
+          <i style="background:#3a3a3a"></i>flat
+          <i style="background:#4dbb6e"></i>win
+          <i style="background:#ffd700"></i>[TQ]
+        </span>
+      </div>
+      <div class="trading-grid" id="trading-grid"></div>
+    </div>
+    <div class="chart-box accmap" style="position:relative">
+      <div class="chart-hdr">
+        <span class="k">Accuracy Heatmap</span>
+        <span class="v" id="acc-d">— tribes × — steps</span>
+        <span class="acc-legend">
+          <i style="background:#d94f4f"></i>malus
+          <i style="background:#3a3a3a"></i>neutre
+          <i style="background:#4dbb6e"></i>bonus
+          <i style="border:1px dashed rgba(255,0,170,.9);background:transparent"></i>[INV]
+        </span>
+      </div>
+      <div class="accmap-grid" id="accmap-grid"></div>
+      <div class="accmap-axis" id="accmap-axis"></div>
+      <div id="accmap-tip"></div>
+    </div>
+  </div>
 </main>
 
 <footer>
@@ -943,9 +1021,12 @@
   const px=n=>'$'+fmt(n,2);
 
   const HISTORY_LEN=24;
-  const RING_R=22, BODY_R=17;
+  const RING_R=16, BODY_R=12;
   const C_PIE=2*Math.PI*RING_R;
   const ORBIT_R=238;
+  // Horizontal line-up geometry: tribes span X ∈ [-LINEUP_SPAN/2, +LINEUP_SPAN/2]
+  // at Y=LINEUP_Y. viewBox wider than span so rotated labels have room.
+  const LINEUP_SPAN=1000, LINEUP_Y=-12;
 
   const tribeMeta={};
   const voteHistory={};
@@ -972,13 +1053,24 @@
   let posTrackingInit=false;
 
   function tribePos(i,n){
-    const a=(i/n)*2*Math.PI - Math.PI/2;
-    return { x:ORBIT_R*Math.cos(a), y:ORBIT_R*Math.sin(a) };
+    if(n<=1) return {x:0,y:LINEUP_Y};
+    const x = -LINEUP_SPAN/2 + (i/(n-1)) * LINEUP_SPAN;
+    return { x, y:LINEUP_Y };
   }
-  function shortName(s){ return (s||'').toUpperCase().slice(0,14); }
+  function shortName(s){ return (s||'').toUpperCase().slice(0,16); }
 
   async function loadTribes(){
-    const r=await fetch('/api/tribes'); const ts=await r.json();
+    let ts=[];
+    try{
+      const r=await fetch('/api/tribes');
+      if(!r.ok) throw new Error(`HTTP ${r.status}`);
+      ts=await r.json();
+    }catch(e){
+      console.warn('[loadTribes] fetch failed:', e.message||e);
+      const root=$('tribes'); if(root) root.innerHTML='';
+      return;
+    }
+    if(!Array.isArray(ts)) return;
     // Arrange tribes around the council ring in colour-wheel order so
     // neighbours are visually related — red/orange together, then yellow,
     // green, cyan, blue, purple — instead of being reshuffled by weight.
@@ -1027,19 +1119,19 @@
       dot.setAttribute('stroke-width','1');
       g.appendChild(dot);
 
-      const labelY=RING_R+14;
+      const labelY=RING_R+6;
       const nm=document.createElementNS(SVG,'text');
-      nm.setAttribute('class','name'); nm.setAttribute('y',labelY);
+      nm.setAttribute('class','name');
+      nm.setAttribute('x',0); nm.setAttribute('y',labelY);
+      nm.setAttribute('transform',`rotate(-55 0 ${labelY})`);
       nm.textContent=shortName(t.name);
       g.appendChild(nm);
-      const wt=document.createElementNS(SVG,'text');
-      wt.setAttribute('class','weight'); wt.setAttribute('y',labelY+10);
-      wt.textContent='w '+t.weight.toFixed(2);
-      g.appendChild(wt);
-      const tz=document.createElementNS(SVG,'text');
-      tz.setAttribute('class','tz'); tz.setAttribute('y',labelY+19);
-      tz.textContent=t.timezone_label||'';
-      g.appendChild(tz);
+      // Fold weight + timezone into hover tooltip — keeps the strip clean
+      // while preserving the drill-down info.
+      const title=document.createElementNS(SVG,'title');
+      title.textContent=`${t.name}  ·  w ${t.weight.toFixed(3)}`
+        + (t.timezone_label?`  ·  ${t.timezone_label}`:'');
+      g.appendChild(title);
 
       root.appendChild(g);
       tribeMeta[t.id]={name:t.name,weight:t.weight,pos,el:g,tz:t.timezone_label||'',isBot};
@@ -1131,6 +1223,17 @@
     $('h-price').textContent=px(t.price);
     $('h-equity').textContent=px(t.equity_usd);
     $('h-trades').textContent=`${t.wins}/${t.trades}`;
+    const lo=t.longs_opened||0, so=t.shorts_opened||0;
+    const lsEl=$('h-ls');
+    lsEl.textContent=`${lo}/${so}`;
+    lsEl.style.color=lo>so?'var(--buy)':so>lo?'var(--sell)':'var(--fg)';
+    const capN=t.capitulation_triggers||0;
+    const capEl=$('h-cap');
+    const hdrCap=$('hdr-cap');
+    capEl.textContent=capN>0?`⚡${capN}`:'0';
+    if(capN>=2){hdrCap.classList.add('capi-hot');hdrCap.classList.remove('capi-warm');}
+    else if(capN===1){hdrCap.classList.add('capi-warm');hdrCap.classList.remove('capi-hot');}
+    else{hdrCap.classList.remove('capi-hot','capi-warm');}
     $('h-tick').textContent=t.tick;
     const start=t.starting_equity_usd||t.equity_usd;
     const fit=t.equity_usd-start;
@@ -1874,7 +1977,8 @@
       const netPos=tr.net_usd>=0;
       const ep=tr.entry_price>0?tr.entry_price.toLocaleString('fr-FR',{maximumFractionDigits:0}):'—';
       const xp=tr.exit_price>0?tr.exit_price.toLocaleString('fr-FR',{maximumFractionDigits:0}):'—';
-      const heldStr=tr.held_s>=60?`${Math.floor(tr.held_s/60)}m${tr.held_s%60}s`:`${tr.held_s}s`;
+      const heldS=(tr.held_s!=null&&isFinite(tr.held_s))?Math.max(0,Math.round(tr.held_s)):0;
+      const heldStr=heldS>=60?`${Math.floor(heldS/60)}m${heldS%60}s`:`${heldS}s`;
       const netStr=(tr.net_usd>=0?'+':'')+'$'+Math.abs(tr.net_usd).toFixed(2);
       const feeStr=tr.fee_killed?'<span class="th-fee-badge">FEE</span>':'';
       // Shorten reason: strip leading "council " prefix for space
@@ -1982,7 +2086,7 @@
       }
       crowdShare=crowded/domTotal;
     }
-    if(crowdShare==null){ crv.textContent='—'; crv.style.color='var(--fg)'; }
+    if(crowdShare==null||!isFinite(crowdShare)){ crv.textContent='—'; crv.style.color='var(--fg)'; }
     else{
       crv.textContent=(crowdShare*100).toFixed(0)+'%';
       // Matches engine `crowded_share_threshold=0.5` — same boundary users
@@ -2308,10 +2412,15 @@
       // remains the dominant visual.
       if(samplesBps&&samplesBps.length){
         ctx.lineWidth=0.7;
+        const tidLen=Array.isArray(pathTribeIds)?pathTribeIds.length:0;
         for(let k=0;k<samplesBps.length;k++){
           const path=samplesBps[k];
           if(!path||path.length!==projLen) continue;
-          const tid=pathTribeIds&&pathTribeIds[k];
+          // If tribe-id labels are provided but short, skip unlabelled paths
+          // instead of painting mystery grey lines that misrepresent the
+          // council. Zero-length ids → colour all paths with the fallback.
+          const tid=(tidLen>0)?pathTribeIds[k]:undefined;
+          if(tidLen>0 && !tid) continue;
           const col=tribeColor(tid);
           ctx.strokeStyle=col+'33'; // ~0.2 alpha — below ribbon
           ctx.beginPath();
@@ -2604,7 +2713,7 @@
     }
 
     const regEl = document.getElementById(`vpr-${vid}`);
-    if (regEl && m.regime) regEl.textContent = m.regime.label || '';
+    if (regEl) regEl.textContent = (m.regime && m.regime.label) || '';
   }
 
   /* ── Replay banner — ONLY function that touches #replay-banner ── */
@@ -2660,8 +2769,9 @@
     lastForecastSigma=null; lastForecastSamples=null;
     lastForecastPathTribeIds=null;
     knownPositions.clear();
-    ['h-price','h-equity','h-fitness','h-trades','h-tick'].forEach(
+    ['h-price','h-equity','h-fitness','h-trades','h-ls','h-cap','h-tick'].forEach(
       id=>{const el=$(id);if(el)el.textContent='—'});
+    const hdrCapReset=$('hdr-cap');if(hdrCapReset)hdrCapReset.classList.remove('capi-hot','capi-warm');
     // Clear variant panes
     Object.keys(_variantState).forEach(k=>delete _variantState[k]);
     const grid=$('vp-grid');if(grid)grid.innerHTML='';

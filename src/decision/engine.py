@@ -33,13 +33,13 @@ class DecisionEngine:
 
         s = settings.get("sizing", {})
         self.size_min_pct = float(s.get("min_pct_equity", 0.5))
-        self.size_max_pct = float(s.get("max_pct_equity", 4.0))
+        self.size_max_pct = float(s.get("max_pct_equity", 10.0))
         self.size_curve = str(s.get("curve", "linear")).lower()
 
         self.leverage = float(settings.get("leverage", 1.0))
 
         d = settings.get("decision", {})
-        self.min_conf = float(d.get("min_conf", 0.10))
+        self.min_conf = float(d.get("min_conf", 0.05))
         # Sigma-aware sizing — shrink the trade when the projector's terminal
         # uncertainty fan is wide (unpredictable regime), leave it alone when
         # sigma is tight (trend regime). Factor = clamp(ref/sigma, floor, 1.0).
@@ -56,7 +56,7 @@ class DecisionEngine:
         # `htf_max_age_s` (default 2h) treats stale polls as no-signal.
         # Set `htf_counter_strength=0.0` to disable.
         htf = settings.get("htf", {}) or {}
-        self.htf_counter_strength = max(0.0, min(1.0, float(htf.get("counter_strength", 0.0))))
+        self.htf_counter_strength = max(0.0, min(1.0, float(htf.get("counter_strength", 0.6))))
         self.htf_max_age_s = float(htf.get("max_age_seconds", 7200.0))
 
         # Phase 1c — Crowded-trade filter. When the council is highly

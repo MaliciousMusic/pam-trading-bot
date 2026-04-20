@@ -32,6 +32,13 @@ strategy:
   family: news_reactor
   params:
     hold_seconds: 300
+    # Headline/regulation lookback — defaults in code are 1800s; tightening
+    # or widening here changes how far back the tribe sees press items.
+    news_window_s: 1800
+    # |headline score| above this triggers a fade (news crowd overreacting).
+    headline_trigger: 0.6
+    # |regulation pulse| above this triggers a FOLLOW (real regime shift).
+    regulation_trigger: 0.5
     social_window_s: 900         # 15-min rolling sentiment
     min_social_volume: 3         # at least 3 scored posts in window
     extreme_social_score: 2.5    # |summed-score| above this → fade

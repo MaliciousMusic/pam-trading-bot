@@ -195,14 +195,27 @@ class RSSFeedPoller:
                 logger.warning("[rss] seed {} failed: {}", f.id, e)
 
     async def _poll_feed(self, s: aiohttp.ClientSession, f: FeedSpec, *, emit: bool) -> None:
-        try:
-            async with s.get(f.url, timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT_S)) as r:
-                if r.status >= 400:
-                    logger.warning("[rss] {} HTTP {}", f.id, r.status)
-                    return
-                body = await r.text()
-        except asyncio.TimeoutError:
-            logger.warning("[rss] {} timeout", f.id)
+        body: str | None = None
+        # One retry after a short backoff — a single transient timeout
+        # shouldn't drop an entire feed cycle when the whole sweep is only
+        # polling every N minutes.
+        for attempt in (1, 2):
+            try:
+                async with s.get(
+                    f.url, timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT_S),
+                ) as r:
+                    if r.status >= 400:
+                        logger.warning("[rss] {} HTTP {}", f.id, r.status)
+                        return
+                    body = await r.text()
+                break
+            except asyncio.TimeoutError:
+                if attempt == 1:
+                    await asyncio.sleep(1.5)
+                    continue
+                logger.warning("[rss] {} timeout after retry", f.id)
+                return
+        if body is None:
             return
         try:
             root = ET.fromstring(body)
@@ -249,6 +262,11 @@ class RSSFeedPoller:
             # Side from classifier overrides sentiment in both tags and
             # the score (score now ∈ {-1, 0, +1} × ~weight for back-compat).
             score = float(cls.side) * min(1.0, cls.impact_bps / 200.0)
+            logger.info(
+                "[rss] classifier fired: {} side={:+d} impact={:.0f}bps src={} title={}",
+                cls.event_type, int(cls.side), float(cls.impact_bps),
+                f.id, title[:80],
+            )
         side_tag = "news_bull" if score > 0 else "news_bear" if score < 0 else "news_neutral"
         tags = {"news", f.category, side_tag, *f.tags}
         if cls.event_type != "none":
