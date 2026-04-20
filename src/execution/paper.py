@@ -413,12 +413,25 @@ class PaperExecutor(Executor):
         # gated below fees so we never TP into a net loss. This turns a
         # realized forecast into a clean profit-take instead of letting the
         # ratchet give half of it back on the way down.
+        #
+        # Task 1 (de-couple conviction from distance): divide the stamped
+        # expected_move_bps by the harvest conviction_boost recorded at
+        # entry. The boost inflates the projected path by up to 1.5× when
+        # loser-tribe mass is being harvested; using the boosted value as
+        # a TP target pushes the take-profit 50% farther than the council's
+        # unbiased prediction, which shows up as round-trip trades and
+        # inflated time-in-trade. The raw (de-boosted) move is the target
+        # basis; the sanity rail stamped at entry (Task 2) separately
+        # bounds this against realized vol.
         if self.forecast_tp_factor > 0.0 and p.expected_move_bps != 0.0:
-            target = abs(p.expected_move_bps) * p.confidence * self.forecast_tp_factor
+            boost = p.conviction_boost if p.conviction_boost > 0 else 1.0
+            raw_move = p.expected_move_bps / boost
+            target = abs(raw_move) * p.confidence * self.forecast_tp_factor
             target = max(target, self.forecast_tp_min_bps)
             if target >= rt_fees_bps and unreal_bps >= target:
                 return (f"forecast target hit unreal={unreal_bps:+.1f}bps "
-                        f"target={target:.1f}bps")
+                        f"target={target:.1f}bps raw={raw_move:+.1f} "
+                        f"(boost×{boost:.2f})")
 
         # Layer 2c — shape-aware exit. The decision engine stamped each
         # position with the step at which the forecast peaked in its favor;
@@ -708,6 +721,22 @@ class PaperExecutor(Executor):
         self._refresh_risk_state(intent.ts)
         pid = f"t{self._next_id:04d}"
         self._next_id += 1
+        # Task 2 — volatility sanity rail. The council's expected_move_bps
+        # can be inflated up to 1.5× by the predatory harvest-mass boost.
+        # Clamp the stamped move at 1.25× the realized 14-min total-window
+        # sigma so exits never chase a target beyond what market vol has
+        # actually been producing. No-op when no realized vol is available
+        # yet (cold start) or the forecast is already inside the rail.
+        emove_stamped = intent.expected_move_bps
+        rail_bps = intent.realized_vol_bps
+        vol_capped = False
+        if rail_bps is not None and rail_bps > 0:
+            cap = 1.25 * rail_bps
+            mag = abs(emove_stamped)
+            if mag > cap:
+                sign = 1.0 if emove_stamped >= 0 else -1.0
+                emove_stamped = sign * cap
+                vol_capped = True
         pos = Position(
             id=pid,
             side=side,
@@ -717,9 +746,10 @@ class PaperExecutor(Executor):
             tp_price=0.0,
             sl_price=0.0,
             horizon_seconds=intent.horizon_seconds,
-            expected_move_bps=intent.expected_move_bps,
+            expected_move_bps=emove_stamped,
             confidence=intent.confidence,
             peak_favorable_s=intent.peak_favorable_s,
+            conviction_boost=intent.conviction_boost,
         )
         # Stash entry-side metadata on the position for later realized-vs-
         # intended accounting at close time. Using a dict-attached sidecar
@@ -734,20 +764,31 @@ class PaperExecutor(Executor):
             "clipped": clipped,
         }
         self._positions.append(pos)
+        vol_note = ""
+        if vol_capped:
+            vol_note = (f"  [vol-rail {intent.expected_move_bps:+.1f}→"
+                        f"{emove_stamped:+.1f}bps "
+                        f"(1.25×σ={1.25 * rail_bps:.1f})]")
         logger.info(
             "OPEN  {} {:<5} ${:>8.2f} @ {:.2f}  emove={:+.1f}bps conf={:.2f}"
-            "  slip={:.1f}bps fee=${:.2f}  open={} eq=${:.2f}{}",
+            "  slip={:.1f}bps fee=${:.2f}  open={} eq=${:.2f}{}{}",
             pid, side.value.upper(), size_usd, fill,
-            intent.expected_move_bps, intent.confidence,
+            emove_stamped, intent.confidence,
             slip_bps, fee, len(self._positions), self._equity,
             f"  [{clip_note}]" if clipped else "",
+            vol_note,
         )
         self._log({
             "event": "open", "ts": intent.ts, "position_id": pid, "side": side.value,
             "size_usd": size_usd, "fill_price": fill, "mark_price": mark,
             "fee_usd": fee, "slippage_bps": slip_bps, "slippage_usd": slip_usd,
             "equity_usd": self._equity, "reason": intent.reason,
-            "expected_move_bps": intent.expected_move_bps, "confidence": intent.confidence,
+            "expected_move_bps": emove_stamped,
+            "expected_move_bps_raw": intent.expected_move_bps,
+            "conviction_boost": intent.conviction_boost,
+            "realized_vol_bps": rail_bps,
+            "vol_capped": vol_capped,
+            "confidence": intent.confidence,
             "open_positions": len(self._positions),
             "size_usd_requested": requested_size, "capacity_clipped": clipped,
             "capacity_note": clip_note,
