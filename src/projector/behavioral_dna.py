@@ -92,6 +92,21 @@ _PROFILES: dict[str, ShockProfile] = {
         visibility={"macro": 0.8, "micro": 0.4, "sentiment": 1.0, "liquidity": 0.5},
         panic_threshold_bps=15.0,
     ),
+    # MEV / Front-Runner — colocated, sees micro+liquidity before anyone.
+    # Zero latency (acts in the same block as the shock) and elevated
+    # visibility on the two shock kinds that carry immediate flow.
+    "mev": ShockProfile(
+        latency_steps=0,
+        visibility={"macro": 0.2, "micro": 1.8, "sentiment": 0.1, "liquidity": 1.6},
+    ),
+    # Passive Whale / ETF TWAP — price-insensitive, slow, blind to noise.
+    # Long latency (their schedule is set in a planning meeting, not by
+    # the tape) and low shock visibility — a whale slicing $200M over 6h
+    # doesn't accelerate because of a 30bps micro wiggle.
+    "whale": ShockProfile(
+        latency_steps=6,
+        visibility={"macro": 0.4, "micro": 0.0, "sentiment": 0.1, "liquidity": 0.1},
+    ),
 }
 
 
@@ -291,6 +306,47 @@ def hedger_dna(ctx: DNAContext) -> float:
     return intent_drift + contrarian + macro_response
 
 
+def mev_dna(ctx: DNAContext) -> float:
+    """MEV / Front-Runner: pre-positions in the direction of the micro or
+    liquidity shock before arb/MM have fully repriced.
+
+    Geometry: a sharp, same-direction-as-intent push at the instant the
+    shock fires (high-magnitude impulse with zero latency), followed by
+    immediate inventory-flat mean reversion — they extract and leave.
+    Unlike arb, MEV doesn't fade the shock to fair value; they ride it.
+    Unlike retail, they're done by the time retail even notices.
+    """
+    intent_drift  = 0.35 * ctx.base_strength * ctx.signed_intent
+    # Shock response is the alpha — amplified aggressively when the shock
+    # aligns with intent (they're front-running their own read), neutral
+    # when it doesn't (they stand aside rather than fade).
+    shock_raw = _perceived_sum(ctx, {"micro", "liquidity"})
+    shock_response = shock_raw * 1.45 if shock_raw * ctx.signed_intent >= 0 else shock_raw * 0.35
+    # Quick inventory flush — the position doesn't live long.
+    flush = -0.55 * ctx.prev_state_bps
+    return intent_drift + shock_response + flush
+
+
+def whale_dna(ctx: DNAContext) -> float:
+    """Passive Whale / ETF TWAP: inflexible, price-insensitive slicing.
+
+    A whale running a TWAP treats the forecast horizon as ~flat: they
+    contribute a steady signed pressure that doesn't chase prev_delta,
+    doesn't fade state, and barely responds to shocks. The only thing
+    that nudges them is long-latency macro news (fund flows follow
+    headlines on the scale of hours, not seconds). In the 10-minute
+    projection window they look like a constant-velocity lean.
+
+    Geometry: flat line in the direction of intent, minimal curvature.
+    """
+    intent_drift = 0.55 * ctx.base_strength * ctx.signed_intent
+    macro_nudge  = _perceived_sum(ctx, {"macro"}) * 0.15
+    # Tiny anti-runaway so cumulative drift doesn't diverge — but weaker
+    # than every other category, because whales really are price-insensitive.
+    anchor = -0.02 * ctx.prev_state_bps
+    return intent_drift + macro_nudge + anchor
+
+
 def retail_dna(ctx: DNAContext) -> float:
     """Retail: chase prev_delta normally, panic-amplify when shocks
     breach the threshold or cum_bps grows large.
@@ -328,6 +384,8 @@ _DNA_BY_CATEGORY: dict[str, Callable[[DNAContext], float]] = {
     "event":          event_dna,
     "hedger":         hedger_dna,
     "retail":         retail_dna,
+    "mev":            mev_dna,
+    "whale":          whale_dna,
 }
 
 

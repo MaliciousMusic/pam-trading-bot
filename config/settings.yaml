@@ -65,10 +65,18 @@ risk:
   # 5σ is the classic Nassim-Taleb threshold; 30s vs 5-min σ catches
   # sharp liquidation cascades without false-firing on normal chop.
   # Set black_swan_sigma=0 to disable.
+  #
+  # `min_ref_sigma_bps` floors the σ baseline so dead-vol regimes don't
+  # make every twitch look like an ∞-sigma event (which is what was
+  # causing back-to-back 10-min halts on resume). `warmup_s` skips the
+  # breaker for that many seconds after a cooldown clears so σ has time
+  # to repopulate from real post-halt prints.
   black_swan_sigma: 5.0
   black_swan_window_s: 30
   black_swan_sigma_window_s: 300
-  black_swan_cooldown_s: 600
+  black_swan_cooldown_s: 180
+  black_swan_min_ref_sigma_bps: 5.0
+  black_swan_warmup_s: 30
 
 decision:
   # Council-driven entry AND exit. Every non-flat projection opens a trade;

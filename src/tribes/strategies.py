@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from ..core.types import Side, Vote
@@ -697,6 +697,150 @@ def news_reactor(tribe: "Tribe", ts: datetime, state: MarketState) -> Vote:
     return _lean(tribe, signed,
                  reason=f"sentiment quiet (news={news_any:+.2f} fgi={state.fgi_value})",
                  horizon_seconds=int(p.get("hold_seconds", 600)))
+
+
+@register("mev_frontrun")
+def mev_frontrun(tribe: "Tribe", ts: datetime, state: MarketState) -> Vote:
+    """MEV / Front-Runner — competes with liquidation_hunter by acting first.
+
+    We don't have mempool data on the free tier, so the free-tier proxy for
+    "large pending pressure" is the intersection of three observable signals:
+
+      1. Aggressive taker flow in the last `flow_window_seconds` — directional
+         pressure that's already printing.
+      2. Recent liquidation cascade in the opposite direction (longs getting
+         flushed → continuation DOWN → we front-run by selling BEFORE the
+         cascade wave has fully traveled).
+      3. Book imbalance at the top of book — a thin side gets eaten next.
+
+    Any one trigger enters; confluence of two gives max conviction. The
+    position is tiny and short — this tribe pulls liquidity inside 30s and
+    leaves, which is what `extraction_efficiency` and the short hold_seconds
+    encode. `block_priority_fee` scales final conviction (willingness to pay
+    for priority == willingness to take the trade).
+
+    Idle: weak residual lean in the direction of whatever micro-pressure
+    exists — they're never flat, always scoping.
+    """
+    p = tribe.spec.strategy.params
+    flow_win = float(p.get("flow_window_seconds", 10))
+    min_flow = float(p.get("min_net_flow_usd", 400_000))
+    liq_win = float(p.get("liq_window_seconds", 30))
+    min_liq = float(p.get("min_liq_usd", 400_000))
+    imb_thr = float(p.get("imbalance_threshold", 0.60))
+    priority = max(0.0, min(1.0, float(p.get("block_priority_fee", 0.7))))
+    efficiency = max(0.0, min(1.0, float(p.get("extraction_efficiency", 0.6))))
+    horizon = int(p.get("hold_seconds", 30))
+
+    if state.last_price is None:
+        return _offline(tribe, "no price yet")
+
+    net_flow = state.taker_flow_usd(flow_win)
+    liq_net = state.long_liq_usd(liq_win) - state.short_liq_usd(liq_win)
+
+    # Book imbalance — front-runs the side that's about to get eaten.
+    bid_d = state.bid_depth_5bps_usd or 0.0
+    ask_d = state.ask_depth_5bps_usd or 0.0
+    imb_signed = 0.0
+    if bid_d + ask_d > 0:
+        imb = bid_d / (bid_d + ask_d)
+        if imb >= imb_thr or imb <= (1.0 - imb_thr):
+            # Heavy bid side → thin ask → price lifts into the thin ask.
+            imb_signed = (imb - 0.5) / max(imb_thr - 0.5, 1e-6)
+
+    # Score each signal to [-1, +1].
+    flow_signed = (net_flow / max(min_flow, 1.0)) if min_flow > 0 else 0.0
+    # Longs getting liquidated → continuation DOWN → we front-run by selling.
+    liq_signed = -(liq_net / max(min_liq, 1.0)) if min_liq > 0 else 0.0
+
+    triggers = [x for x in (flow_signed, liq_signed, imb_signed) if abs(x) >= 0.5]
+    if triggers:
+        # Average of triggered signals; confluence means bigger magnitudes compound.
+        raw = sum(triggers) / len(triggers)
+        # Priority fee + efficiency scale the extractor's willingness and
+        # hit rate; two confluent triggers get amplified toward the cap.
+        boost = 1.0 + 0.4 * (len(triggers) - 1)
+        signed = max(-1.0, min(1.0, raw * boost * efficiency * (0.5 + 0.5 * priority)))
+        tags = []
+        if abs(flow_signed) >= 0.5: tags.append(f"flow={net_flow:+,.0f}")
+        if abs(liq_signed) >= 0.5: tags.append(f"liq={liq_net:+,.0f}")
+        if abs(imb_signed) >= 0.5: tags.append(f"imb={imb_signed:+.2f}")
+        return _lean(tribe, signed,
+                     reason=f"mev frontrun [{', '.join(tags)}] eff={efficiency:.2f} prio={priority:.2f}",
+                     horizon_seconds=horizon)
+
+    # Idle — residual lean scaled by efficiency (the hit-rate) on the strongest
+    # sub-threshold signal. Never loud; never silent.
+    residual = max((flow_signed, liq_signed, imb_signed), key=abs)
+    signed = max(-1.0, min(1.0, residual * 0.20 * efficiency))
+    return _lean(tribe, signed,
+                 reason=f"mev scoping flow={net_flow:+,.0f} liq={liq_net:+,.0f} imb={imb_signed:+.2f}",
+                 horizon_seconds=horizon)
+
+
+@register("twap_whale")
+def twap_whale(tribe: "Tribe", ts: datetime, state: MarketState) -> Vote:
+    """Passive Whale / ETF TWAP — price-insensitive slicing over the session.
+
+    ETF market-makers and treasury desks run large orders as TWAPs: equal-
+    weight slices across a time window, executed regardless of where the
+    tape is. The whale's direction for the day is fixed by whatever capital
+    flow arrived that morning — our free-tier proxy is the multi-day price
+    drift (persistent inflows tend to track persistent uptrends and vice
+    versa). Conviction is steady and only weakly tied to the tape.
+
+    Two knobs encode the inflexibility:
+      - `twap_remainder`: fraction of the planned slice window still to be
+        executed. Decays linearly across `session_duration_s` anchored on
+        `session_start_utc_hour`. Outside the session window the whale is
+        silent (remainder = 0).
+      - `execution_urgency`: scales conviction. A lazy VWAP runs at 0.3;
+        an aggressive ETF close-auction ramp runs at 0.9.
+
+    Key property: this tribe does NOT respond to short-term price or flow.
+    It deliberately carries a constant per-tick pressure so the council
+    has a voice representing "the steady buyer who's going to keep
+    pressing buttons regardless of what the chart did in the last 60s."
+
+    Idle: silent outside session window (returns ABSTAIN via _offline).
+    """
+    p = tribe.spec.strategy.params
+    session_start = int(p.get("session_start_utc_hour", 13))     # US cash open
+    session_duration = float(p.get("session_duration_s", 6 * 3600.0))  # 6h TWAP
+    drift_window_s = float(p.get("drift_window_s", 86400.0))     # 24h direction read
+    drift_ref_bps = float(p.get("drift_reference_bps", 300.0))
+    urgency = max(0.0, min(1.0, float(p.get("execution_urgency", 0.5))))
+    horizon = int(p.get("hold_seconds", 1800))
+
+    # Where are we in the session?
+    hour = ts.astimezone(timezone.utc).hour
+    minute = ts.astimezone(timezone.utc).minute
+    hours_since_open = ((hour - session_start) % 24) + minute / 60.0
+    session_hours = session_duration / 3600.0
+    if hours_since_open > session_hours:
+        # Outside the programmed window — whale is idle.
+        return _offline(tribe, f"outside TWAP window (h={hour:02d}UTC, since_open={hours_since_open:.1f}h)")
+
+    twap_remainder = max(0.0, 1.0 - hours_since_open / max(session_hours, 1e-6))
+
+    # Direction read: multi-day drift polarity. Zero drift → abstain (no
+    # directional information, they don't invent a trade). Otherwise the
+    # sign sticks for the entire session.
+    drift_bps = state.price_change_bps(drift_window_s)
+    if abs(drift_bps) < drift_ref_bps * 0.25:
+        # Schedule is running but there's no persistent direction to slice
+        # into — rare, but correct behavior (a true ETF order wouldn't exist
+        # without a net inflow to deploy).
+        return _lean(tribe, 0.0, reason=f"TWAP armed but no drift (d={drift_bps:+.0f}bps)",
+                     horizon_seconds=horizon)
+
+    signed_dir = 1.0 if drift_bps > 0 else -1.0
+    # Conviction = urgency × remainder — high early-session and decays to
+    # zero as the slice window closes. Capped; whales are never loud per-tick.
+    conv = max(0.0, min(0.55, urgency * twap_remainder * (0.5 + 0.5 * min(1.0, abs(drift_bps) / drift_ref_bps))))
+    return _vote(tribe, Side.BUY if signed_dir > 0 else Side.SELL, conv, horizon,
+                 reason=(f"TWAP slice urg={urgency:.2f} rem={twap_remainder:.2f} "
+                         f"drift={drift_bps:+.0f}bps"))
 
 
 @register("microstructure_prober")

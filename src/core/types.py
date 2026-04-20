@@ -101,6 +101,22 @@ class Forecast:
     # Tribe id for each entry in `sample_paths_bps` — lets the UI color
     # each wiggly path by its archetype. Parallel-indexed with paths.
     sample_paths_tribe_ids: list[str] | None = None
+    # Phase 1b — Council entropy (diversity score) ∈ [0, 1]. Shannon entropy
+    # of the dominant-side directional mass across tribe categories,
+    # normalized by log(n_active_categories). 1.0 = perfectly spread across
+    # orthogonal categories (MM + Event + Retail + TA all agree); ~0 = one
+    # cluster (e.g. 4 TA tribes). The decision engine derives confidence
+    # shrink from this to defend against 'TA-bloc' dominance.
+    diversity_score: float | None = None
+    # Phase 1c — Per-category directional mass breakdown. Keys are the
+    # categories used in chess._TRIBE_CATEGORY; each value is
+    # {"buy": buy_mass, "sell": sell_mass}. Lets the decision engine
+    # shrink size when a high-conf buy is actually coming from retail only.
+    category_mass: dict[str, dict[str, float]] | None = None
+    # Phase 3c — Weighted-average horizon (seconds) of the voters behind
+    # the initial consensus. Shrinks when the council is dominated by
+    # short-horizon scalpers; used for volatility-adjusted deleveraging.
+    avg_voter_horizon_s: float | None = None
 
 
 @dataclass(slots=True)

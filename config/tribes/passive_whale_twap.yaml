@@ -1,0 +1,121 @@
+id: passive_whale_twap
+name: Passive Whale / ETF TWAP
+description: "Inflexible, price-insensitive slicing of large orders across a
+  programmed session. ETF market-makers, corporate treasury, and OTC desks
+  set a direction and a duration in advance and then execute regardless of
+  the tape — the whale does not chase, does not panic, does not fade. The
+  tribe's directional call is anchored to a long-window drift proxy (24h
+  price change as a stand-in for persistent fund-flow direction) and stays
+  fixed for the session. Steady per-tick pressure; tiny conviction per
+  vote but persistent, so over a 6h window they contribute a meaningful
+  steady bias that no reactive tribe can reproduce."
+demographics:
+  capital_band_usd:
+  - 5000000.0
+  - 500000000.0
+  count_estimate: 30
+  experience_years:
+  - 5.0
+  - 25.0
+  jurisdiction:
+  - NA
+  - EU
+hardware:
+  tier: workstation
+  typical_latency_ms: 500
+  uptime: continuous
+  specs:
+    screens: 1
+    connectivity: business_fiber
+software:
+  platforms:
+  - binance_pro
+  - coinbase_prime
+  - otc_desk
+  tools:
+  - twap_scheduler
+  - vwap_scheduler
+  - smart_router
+  charting: basic
+  order_types_used:
+  - twap
+  - vwap
+  - iceberg
+  data_feeds:
+  - trade
+  - mark_price
+strategy:
+  family: twap_whale
+  params:
+    session_start_utc_hour: 13
+    session_duration_s: 21600
+    drift_window_s: 86400
+    drift_reference_bps: 300.0
+    twap_remainder: 1.0
+    execution_urgency: 0.55
+    hold_seconds: 1800
+  style_notes: "Silent outside 13-19 UTC. Direction fixed by 24h drift. Flat line in projector."
+attention:
+  kinds: []
+  tags: []
+  ignored_tags:
+  - orderbook_tick
+  - news
+  - social
+  - liq_long
+  - liq_short
+  min_severity: 0.0
+personality:
+  risk_tolerance: 0.4
+  fomo: 0.0
+  panic: 0.0
+  patience: 1.0
+  herding: 0.0
+  reaction_mu_seconds: 1800.0
+  reaction_sigma_seconds: 3600.0
+flow:
+  weight: 0.05
+  activation_rate: 0.60
+  typical_hold_seconds:
+  - 3600
+  - 21600
+  default_conviction: 0.45
+  cooldown_seconds: 0
+  strong_vote_conviction: 0.4
+disposition:
+  idle_bias: 0.0
+  idle_conviction: 0.0
+circadian:
+  timezone_label: US cash (ETF window)
+  presence_by_hour_utc:
+  - 0.1
+  - 0.1
+  - 0.1
+  - 0.1
+  - 0.1
+  - 0.1
+  - 0.1
+  - 0.1
+  - 0.1
+  - 0.1
+  - 0.2
+  - 0.3
+  - 0.5
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 0.8
+  - 0.4
+  - 0.2
+  - 0.1
+  - 0.1
+indicators: {}
+indicator_weight: 0.0
+indicator_regime_range: 0.0
+indicator_regime_low_bps: 15.0
+indicator_regime_high_bps: 60.0
+indicator_regime_prefer: high
+indicator_regime_window_s: 300.0

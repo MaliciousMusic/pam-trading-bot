@@ -1,0 +1,137 @@
+id: mev_frontrunner
+name: MEV / Front-Runner
+description: "Colocated extractors who front-run the micro-flow and liquidation
+  cascades that the rest of the council only starts reacting to a step later.
+  On the free tier, mempool-style signals are proxied from observable inputs:
+  aggressive taker flow imbalance, imminent liquidation cluster (funding +
+  OI + liq tape), and top-of-book 5bp imbalance. Competes with liquidation_hunter
+  — but MEV takes the same directional call a full step earlier and is gone
+  by the time the hunter's execution layer prints. Inflexible, short-hold,
+  highly regime-dependent (thrives in cascades, mutes in chop)."
+demographics:
+  capital_band_usd:
+  - 1000000.0
+  - 50000000.0
+  count_estimate: 80
+  experience_years:
+  - 3.0
+  - 12.0
+  jurisdiction:
+  - NA
+  - EU
+hardware:
+  tier: colo
+  typical_latency_ms: 2
+  uptime: continuous
+  specs:
+    screens: 0
+    connectivity: cross_connect
+software:
+  platforms:
+  - binance_pro
+  - bybit
+  - private_relay
+  tools:
+  - custom_extractor
+  - mempool_mirror
+  - private_rpc
+  charting: none
+  order_types_used:
+  - ioc_limit
+  - fok_limit
+  data_feeds:
+  - orderbook_l2
+  - liquidation_feed
+  - aggtrade
+  - funding
+  - oi
+strategy:
+  family: mev_frontrun
+  params:
+    flow_window_seconds: 10
+    min_net_flow_usd: 400000
+    liq_window_seconds: 30
+    min_liq_usd: 400000
+    imbalance_threshold: 0.60
+    block_priority_fee: 0.75
+    extraction_efficiency: 0.65
+    hold_seconds: 30
+  style_notes: "Zero-latency DNA, high micro+liquidity visibility, inventory-flushing curve."
+attention:
+  kinds:
+  - trade
+  - liquidation
+  - orderbook
+  tags:
+  - orderbook_tick
+  - liq_long
+  - liq_short
+  ignored_tags:
+  - news
+  - social
+  min_severity: 0.0
+personality:
+  risk_tolerance: 0.8
+  fomo: 0.1
+  panic: 0.05
+  patience: 0.1
+  herding: 0.05
+  reaction_mu_seconds: 0.8
+  reaction_sigma_seconds: 1.5
+flow:
+  weight: 0.03
+  activation_rate: 0.25
+  typical_hold_seconds:
+  - 10
+  - 120
+  default_conviction: 0.75
+  cooldown_seconds: 15
+  strong_vote_conviction: 0.4
+disposition:
+  idle_bias: 0.0
+  idle_conviction: 0.04
+circadian:
+  timezone_label: 24/7 (colo)
+  presence_by_hour_utc:
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+indicators:
+  liq_imbalance:
+    window_s: 30
+    reference_usd: 400000
+    action: follow
+    weight: 0.6
+  volatility_regime:
+    window_s: 60
+    low_bps: 10
+    high_bps: 80
+    prefer: high
+    weight: 0.5
+indicator_weight: 0.35
+indicator_regime_range: 0.3
+indicator_regime_low_bps: 10.0
+indicator_regime_high_bps: 80.0
+indicator_regime_prefer: high
+indicator_regime_window_s: 60.0

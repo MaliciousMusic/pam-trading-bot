@@ -58,9 +58,11 @@ class PaperExecutor(Executor):
         max_session_dd_pct: float = 0.0,
         max_position_loss_pct: float = 0.0,
         black_swan_sigma: float = 0.0,
-        black_swan_cooldown_s: float = 600.0,
+        black_swan_cooldown_s: float = 180.0,
         black_swan_window_s: float = 30.0,
         black_swan_sigma_window_s: float = 300.0,
+        black_swan_min_ref_sigma_bps: float = 5.0,
+        black_swan_warmup_s: float = 30.0,
         slippage_cap_bps: float = 30.0,
         book_depth_frac_cap: float = 0.25,
         half_spread_bps: float = 0.5,
@@ -119,12 +121,19 @@ class PaperExecutor(Executor):
         # over `black_swan_window_s` are compared to `black_swan_sigma_window_s`-
         # realized stddev; when |Δ| > sigma × ref_sigma we close all positions
         # and suspend new opens for `black_swan_cooldown_s`. sigma=0 disables.
+        # `min_ref_sigma_bps` floors the σ baseline so dead-vol resumes don't
+        # treat any move as ∞-sigma; `warmup_s` skips detection for that many
+        # seconds after a cooldown clears so σ has time to repopulate from
+        # real movement instead of the flat-line that built up during the halt.
         self.black_swan_sigma = max(0.0, float(black_swan_sigma))
         self.black_swan_window_s = max(5.0, float(black_swan_window_s))
         self.black_swan_sigma_window_s = max(60.0, float(black_swan_sigma_window_s))
         self.black_swan_cooldown_s = max(0.0, float(black_swan_cooldown_s))
+        self.black_swan_min_ref_sigma_bps = max(0.0, float(black_swan_min_ref_sigma_bps))
+        self.black_swan_warmup_s = max(0.0, float(black_swan_warmup_s))
         self._black_swan_cooldown_until: datetime | None = None
         self._black_swan_last_fired: datetime | None = None
+        self._black_swan_resumed_at: datetime | None = None
 
         # Phase 11 — realistic execution knobs.
         self.slippage_cap_bps = max(0.0, float(slippage_cap_bps))
@@ -191,7 +200,18 @@ class PaperExecutor(Executor):
             if ts < self._black_swan_cooldown_until:
                 return (f"black-swan cooldown until "
                         f"{self._black_swan_cooldown_until.isoformat()}")
+            # Just resumed — stamp it so the warmup gate below skips
+            # detection until σ has been rebuilt from post-halt prints.
             self._black_swan_cooldown_until = None
+            self._black_swan_resumed_at = ts
+        # Post-resume warmup. The σ baseline was contaminated by a flat-line
+        # during the halt; ignore the breaker for a few seconds so the next
+        # price print isn't compared against an artificially-tiny σ.
+        if (self._black_swan_resumed_at is not None
+                and self.black_swan_warmup_s > 0
+                and ts < self._black_swan_resumed_at + timedelta(
+                    seconds=self.black_swan_warmup_s)):
+            return None
         prices = getattr(state, "prices", None)
         if prices is None or not prices._data:
             return None
@@ -225,6 +245,9 @@ class PaperExecutor(Executor):
         mean = sum(returns_bps) / len(returns_bps)
         var = sum((x - mean) ** 2 for x in returns_bps) / len(returns_bps)
         ref_sigma = var ** 0.5
+        # Floor σ so a quiet regime doesn't make a routine twitch look like
+        # an ∞-sigma event. Anything below the floor is treated as the floor.
+        ref_sigma = max(ref_sigma, self.black_swan_min_ref_sigma_bps)
         if ref_sigma <= 0:
             return None
         threshold = self.black_swan_sigma * ref_sigma

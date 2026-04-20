@@ -12,11 +12,27 @@ When HOLDING: re-evaluates strategy each tick. Hold conviction scales with
   is internally balanced). When strategy flips with enough conviction the
   position closes.
 On CLOSE: fires a brief counter-vote (unwind signal), enters cooldown.
+
+Archetype DNA (Phase 2):
+  - Shadow Inventory: arb/mm/hedger/mev run on finite "simulated capital."
+    Every tick spent on the same side fills the inventory by a small
+    amount; once near capacity the same-direction conviction gets haircut
+    toward zero. Unwinds (voting the opposite side) are untouched. Retail,
+    TA, event-hunters, and whales (who model their capacity differently)
+    bypass this.
+  - Drawdown aggression: retail tribes with several close-in-succession
+    exits enter a "tilt" state — panic knob amplifies conviction. Models
+    revenge-trading after a burn.
+  - Daily budget: event-firing tribes (liquidation_hunter, news_fader,
+    mev_frontrunner) wear out. Each firing debits a per-UTC-day budget;
+    when exhausted, activation decays until midnight resets it. Models
+    "the scanner pros ran out of capital after the third cascade."
 """
 from __future__ import annotations
 
 import math
 import random
+from collections import deque
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
@@ -35,6 +51,49 @@ _FLIP_MIN_CONV = 0.15
 # Exit vote = this fraction of entry conviction, reverse side.
 _EXIT_SCALE = 0.50
 
+# Strategy families that respect a finite simulated inventory. Arb/MM/hedger
+# desks are capital-bounded by definition; MEV extractors likewise have a
+# finite book of risk willingness per block. Retail/TA/event tribes either
+# have crowd-scale collective capital (no single inventory ceiling) or
+# already encode their capacity via other knobs (whale via twap_remainder).
+_CAPACITY_CONSTRAINED_FAMILIES: frozenset[str] = frozenset({
+    "basis_arb", "cross_venue_arb", "funding_fader",
+    "mean_reverter_mm", "grid_bot",
+    "options_hedger_proxy", "leverage_cycle",
+    "mev_frontrun",
+})
+# Per-tick inventory fill while holding (normalized to capacity=1.0). 0.05
+# means a tribe holding for 20 consecutive ticks fills to full capacity —
+# at the cadence the bot runs (5s ticks) that's 100 seconds, a plausible
+# fill window for a ladder of limit orders getting eaten.
+_INVENTORY_FILL_PER_HOLD_TICK: float = 0.05
+# Decay applied to inventory on close — some residual position remains
+# (not every close fully flattens).
+_INVENTORY_CLOSE_DECAY: float = 0.4
+# Same-direction haircut takes effect once inventory exceeds this floor.
+# Below the floor, the tribe votes at full conviction.
+_INVENTORY_HAIRCUT_FLOOR: float = 0.5
+
+# Retail tilt: this many closes inside this many seconds triggers the
+# drawdown_aggression state, amplifying next entry's conviction by
+# `_RETAIL_TILT_BOOST`. Models revenge trading.
+_RETAIL_TILT_WINDOW_S: float = 300.0
+_RETAIL_TILT_MIN_CLOSES: int = 3
+_RETAIL_TILT_BOOST: float = 1.35
+_RETAIL_FAMILIES: frozenset[str] = frozenset({
+    "app_fomo", "momentum_chaser", "copy_trader",
+})
+
+# Event-firing tribes have a per-UTC-day budget. Each close debits 1. When
+# we've fired past the budget, activation rate decays linearly toward zero
+# over the next `_EVENT_FATIGUE_OVERDRAW` firings (then clamps). Reset at
+# UTC midnight.
+_EVENT_DAILY_BUDGET: int = 12
+_EVENT_FATIGUE_OVERDRAW: int = 8
+_EVENT_FAMILIES: frozenset[str] = frozenset({
+    "liquidation_hunter", "news_reactor", "mev_frontrun",
+})
+
 
 class Tribe:
     def __init__(self, spec: TribeSpec, *, rng_seed: int | None = None) -> None:
@@ -50,6 +109,15 @@ class Tribe:
         # property for deterministic replay across variant configurations.
         # rng_seed=None → nondeterministic fresh Random (live behavior).
         self._rng = random.Random(rng_seed) if rng_seed is not None else random.Random()
+        # Phase 2a — Shadow Inventory. Signed ∈ [-1, +1]; positive = net
+        # long. Filled each tick while holding in the held direction, decayed
+        # on close. Non-capacity-constrained families keep this at 0 forever.
+        self._capacity_constrained: bool = spec.strategy.family in _CAPACITY_CONSTRAINED_FAMILIES
+        self._shadow_inventory: float = 0.0
+        # Phase 2b — Tilt (retail) + Daily budget / Fatigue (event).
+        self._recent_close_ts: deque[datetime] = deque(maxlen=_RETAIL_TILT_MIN_CLOSES + 2)
+        self._daily_fire_count: int = 0
+        self._daily_fire_day: datetime | None = None   # UTC date of last fire
 
     @property
     def id(self) -> str:
@@ -135,8 +203,24 @@ class Tribe:
 
     def _apply_weight_and_fractions(self, ts: datetime, v: Vote) -> Vote:
         eff = self.effective_weight(ts)
-        act = max(0.0, min(1.0, float(getattr(self.spec.flow, "activation_rate", 1.0))))
+        act_base = max(0.0, min(1.0, float(getattr(self.spec.flow, "activation_rate", 1.0))))
+        # Phase 2b — daily fatigue for event-firing tribes. Rolls UTC daily.
+        act = act_base * self._fatigue_activation_factor(ts)
         raw_conv = max(0.0, min(1.0, v.conviction))
+        # Phase 2a — Shadow Inventory haircut. Only bites when the tribe is
+        # capacity-constrained AND voting to ADD to its current inventory
+        # (same-sign as _shadow_inventory). Unwinds are untouched: if a
+        # full-long arb tribe votes SELL, we want that exit to fire loud,
+        # not muted.
+        if self._capacity_constrained and v.side is not Side.ABSTAIN:
+            inv = self._shadow_inventory
+            adding = (v.side is Side.BUY and inv > 0) or (v.side is Side.SELL and inv < 0)
+            if adding and abs(inv) > _INVENTORY_HAIRCUT_FLOOR:
+                # room ∈ [0, 1]: 1 when we're right at the floor, 0 at full.
+                room = max(0.0, (1.0 - abs(inv)) / (1.0 - _INVENTORY_HAIRCUT_FLOOR))
+                raw_conv *= room
+        # Phase 2b — retail tilt amplifier.
+        raw_conv = min(1.0, raw_conv * self._retail_tilt_factor(ts))
         new_conv = raw_conv * act
         if v.side is Side.BUY:
             buy_frac = act * (0.5 + raw_conv / 2.0)
@@ -149,6 +233,40 @@ class Tribe:
             sell_frac = 0.0
         return replace(v, weight=eff, conviction=max(0.0, min(1.0, new_conv)),
                        buy_frac=buy_frac, sell_frac=sell_frac)
+
+    def _retail_tilt_factor(self, ts: datetime) -> float:
+        """Retail-only. Returns >1 if the tribe has closed ≥N positions inside
+        the last `_RETAIL_TILT_WINDOW_S` — a "revenge-trading" amplifier that
+        lets the panic knob actually express itself in the voting signal."""
+        if self.spec.strategy.family not in _RETAIL_FAMILIES:
+            return 1.0
+        if len(self._recent_close_ts) < _RETAIL_TILT_MIN_CLOSES:
+            return 1.0
+        # Oldest close among the tracked window.
+        oldest = self._recent_close_ts[0]
+        age_s = (ts - oldest).total_seconds()
+        if age_s > _RETAIL_TILT_WINDOW_S:
+            return 1.0
+        # Scale the boost by the tribe's intrinsic panic knob — so chill
+        # retail tribes (low panic) tilt less than degen ones (high panic).
+        panic = max(0.0, min(1.0, float(self.spec.personality.panic)))
+        return 1.0 + (_RETAIL_TILT_BOOST - 1.0) * (0.5 + 0.5 * panic)
+
+    def _fatigue_activation_factor(self, ts: datetime) -> float:
+        """Event-tribe only. Daily firing budget — once past the budget, the
+        activation rate decays linearly, reaching 0 after `_EVENT_FATIGUE_OVERDRAW`
+        extra firings. Resets on UTC midnight."""
+        if self.spec.strategy.family not in _EVENT_FAMILIES:
+            return 1.0
+        # Day roll → reset counter.
+        today = ts.astimezone(timezone.utc).date()
+        last_day = self._daily_fire_day.date() if self._daily_fire_day else None
+        if last_day is None or today != last_day:
+            return 1.0  # fresh day; counter will reset on next close event
+        if self._daily_fire_count <= _EVENT_DAILY_BUDGET:
+            return 1.0
+        overdraw = self._daily_fire_count - _EVENT_DAILY_BUDGET
+        return max(0.0, 1.0 - overdraw / max(1, _EVENT_FATIGUE_OVERDRAW))
 
     def vote(self, ts: datetime, state: MarketState) -> Vote:
         v = self._lifecycle_vote(ts, state)
@@ -177,6 +295,14 @@ class Tribe:
     def _inposition_vote(self, ts: datetime, state: MarketState) -> Vote:
         assert self._sim_entry_ts is not None
         held_s = (ts - self._sim_entry_ts).total_seconds()
+
+        # Phase 2a — accumulate shadow inventory while holding (only for
+        # capacity-constrained tribes; others ignore the fill).
+        if self._capacity_constrained and self._sim_side is not None:
+            signed_fill = (_INVENTORY_FILL_PER_HOLD_TICK
+                           if self._sim_side is Side.BUY else -_INVENTORY_FILL_PER_HOLD_TICK)
+            self._shadow_inventory = max(-1.0, min(1.0,
+                self._shadow_inventory + signed_fill))
 
         # Fresh strategy signal — used for both exit detection and hold sizing.
         sig = self._fresh_signal(ts, state)
@@ -222,6 +348,19 @@ class Tribe:
         cd = self.spec.flow.cooldown_seconds
         if cd > 0:
             self._cooldown_until = ts + timedelta(seconds=cd)
+
+        # Phase 2a — inventory partial-flush on close.
+        if self._capacity_constrained:
+            self._shadow_inventory *= _INVENTORY_CLOSE_DECAY
+
+        # Phase 2b — bookkeeping for retail tilt and event daily-budget.
+        self._recent_close_ts.append(ts)
+        today = ts.astimezone(timezone.utc).date()
+        last_day = self._daily_fire_day.date() if self._daily_fire_day else None
+        if last_day != today:
+            self._daily_fire_count = 0
+        self._daily_fire_count += 1
+        self._daily_fire_day = ts
 
         self._sim_side = None
         self._sim_entry_ts = None

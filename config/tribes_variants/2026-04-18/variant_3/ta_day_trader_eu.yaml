@@ -73,7 +73,7 @@ personality:
   reaction_mu_seconds: 45.0
   reaction_sigma_seconds: 90.0
 flow:
-  weight: 0.009391708690929734
+  weight: 0.00842287226797881
   activation_rate: 0.25
   typical_hold_seconds:
   - 300
