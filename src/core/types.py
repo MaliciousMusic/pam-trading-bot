@@ -126,6 +126,15 @@ class Forecast:
     # when the path's drivers aren't themselves trustworthy — a loud
     # consensus of bad predictors is still a bad prediction.
     driver_skill_avg: float | None = None
+    # Task 4e — Harvest Mass Boost. `harvest_mass_ratio` is the share of
+    # pool weight currently sitting in contrarian-flipped tribes (∈ [0,1]);
+    # `conviction_boost` is the multiplier applied to the cumulative path
+    # (≥ 1.0, capped at 1.5 by the harvest_scale constant in chess.py).
+    # Published so the UI can surface the "we're harvesting dumb money"
+    # state and the decision engine can audit how much of a move came
+    # from the boost vs. the raw consensus.
+    harvest_mass_ratio: float | None = None
+    conviction_boost: float | None = None
 
 
 @dataclass(slots=True)

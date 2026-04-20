@@ -1063,7 +1063,8 @@
     // hit-rate-per-horizon instead of averaging tribe weights (which
     // always centers on 1.0 and renders as dark grey).
     renderAccuracyHeatmap(t.projector_weights, t.forecast_sample_paths_tribe_ids,
-                          t.backscore && t.backscore.by_horizon);
+                          t.backscore && t.backscore.by_horizon,
+                          t.forecast_steps_bps);
 
     if(e0==null)e0=t.equity_usd;
     eqHist.push(t.equity_usd);
@@ -1144,6 +1145,28 @@
       return `rgba(${r},${g},${b},${a})`;
     }
   }
+  // Map a per-step cumulative-bps value to a color for the Global row.
+  // Saturates at |bps| ≈ 8 so small moves (~1-2 bps) are visible but a
+  // 10-bps forecast renders near full green/red. Uses tanh for smooth
+  // roll-off — no hard clamps at the edges.
+  function _bpsToColor(bps){
+    if(bps==null||!isFinite(bps)) return 'rgba(40,44,52,0.35)';
+    const c=Math.max(-1,Math.min(1,Math.tanh(bps/8.0)));
+    if(c>=0){
+      const g=Math.round(58 + (187-58)*c);
+      const r=Math.round(58 + (77 -58)*c);
+      const b=Math.round(58 + (110-58)*c);
+      const a=0.55 + 0.45*Math.abs(c);
+      return `rgba(${r},${g},${b},${a})`;
+    }else{
+      const t=-c;
+      const r=Math.round(58 + (217-58)*t);
+      const g=Math.round(58 + (79 -58)*t);
+      const b=Math.round(58 + (79 -58)*t);
+      const a=0.55 + 0.45*t;
+      return `rgba(${r},${g},${b},${a})`;
+    }
+  }
   // Per-column hit rate for the Global row. Takes the backscorer's sparse
   // anchor points (15s, 60s, 300s, 600s, 900s) and interpolates across
   // all N projector columns so every cell carries meaningful data.
@@ -1179,7 +1202,7 @@
     }
     return row;
   }
-  function renderAccuracyHeatmap(weights, tribeIds, byHorizon){
+  function renderAccuracyHeatmap(weights, tribeIds, byHorizon, stepsBps){
     if(!weights||typeof weights!=='object') return;
     const ids=Object.keys(weights);
     if(!ids.length) return;
@@ -1204,7 +1227,7 @@
         const div=document.createElement('div');
         if(id==='__global__'){
           div.className='row global';
-          div.title='Council hit-rate per horizon from the backscorer (interpolated across 15s/1m/5m/10m/15m anchors). Green ≈ above chance, red ≈ below.';
+          div.title='True Global path — the weighted-consensus cumulative bps per step that the decision engine is actually trading, after contrarian inversions and the harvest-mass boost. Green = bullish drift, red = bearish drift. Falls back to backscorer hit-rate when no live forecast path is available.';
           div.innerHTML='<i></i><span>Global</span>';
         }else{
           div.className='row';
@@ -1254,16 +1277,23 @@
         return `rgba(${r},${g},${b},${a})`;
       }
     };
-    // Global row: council hit-rate per horizon from the backscorer.
-    // Interpolates across the sparse anchor points (15s/1m/5m/10m/15m)
-    // so all N columns carry meaningful data. Averaging tribe weights
-    // would always center on 1.0 and render as dark grey — the row was
-    // effectively blank. Hit-rate centers on 0.5 (chance) and deviates
-    // visibly as the council learns its edge (or lack of it).
+    // Global row: the True Global path — weighted-consensus cumulative
+    // bps per step, post-inversion and post-harvest-boost. This is
+    // *exactly* the series the decision engine reads for expected_move_bps,
+    // so the heatmap's top row shows the same conviction the trader acts
+    // on. When forecast_steps_bps is unavailable (e.g. old snapshot) we
+    // fall back to the backscorer hit-rate interpolation so the row still
+    // carries a meaningful signal.
     const tickS=(CFG&&CFG.tick_seconds)||5;
-    const hitRow=_globalHitRateRow(byHorizon, nSteps, tickS);
+    const haveBps=Array.isArray(stepsBps)&&stepsBps.length>0;
+    const hitRow=haveBps?null:_globalHitRateRow(byHorizon, nSteps, tickS);
     for(let h=0;h<nSteps;h++){
-      ctx.fillStyle=_hitToColor(hitRow[h]);
+      if(haveBps){
+        const bps=h<stepsBps.length?stepsBps[h]:null;
+        ctx.fillStyle=_bpsToColor(bps);
+      }else{
+        ctx.fillStyle=_hitToColor(hitRow[h]);
+      }
       ctx.fillRect(h*colW, 0, Math.ceil(colW)+0.5, cellH-1);
     }
     // Draw per-tribe rows.

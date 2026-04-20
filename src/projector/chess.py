@@ -445,7 +445,7 @@ class ChessProjector:
                 flipped_side = Side.SELL if v0.side is Side.BUY else Side.BUY
                 v0 = replace(v0, side=flipped_side,
                              buy_frac=v0.sell_frac, sell_frac=v0.buy_frac,
-                             reason=v0.reason + " | CONTRARIAN_FLIP")
+                             reason="[FLIPPED] " + v0.reason)
             signed = (1.0 if v0.side.value == "buy" else
                       -1.0 if v0.side.value == "sell" else 0.0)
             sk0 = skill.get(tribe.spec.id, 1.0)
@@ -624,6 +624,27 @@ class ChessProjector:
                     scale = (ta_cap * non_ta_sum) / max(1e-12, (1.0 - ta_cap) * ta_sum)
                     for tid in ta_tids:
                         pool_w[tid] *= scale
+
+        # ── Task 4e: Harvest Mass Boost ─────────────────────────────────
+        # When a large slice of pool weight sits in the 'Contrarian-Flip'
+        # zone (chronically-wrong tribes whose votes we now invert), the
+        # council is effectively harvesting alpha from dumb money. The raw
+        # weighted-consensus path already rotates these votes, but it does
+        # not reflect the *size* of the opportunity — a loud-and-wrong
+        # bloc is a higher-capacity fade than a quiet-and-wrong one.
+        # Scale the final cumulative path by  1 + harvest_scale × ratio,
+        # where ratio is the share of total pool weight that is currently
+        # flagged contrarian. Cap the boost by construction via the scale
+        # constant (0.5 → max 1.5×), and only apply when some contrarian
+        # mass actually exists.
+        harvest_scale = 0.5
+        total_mass = sum(pool_w.values())
+        harvest_mass = sum(pool_w.get(tid, 0.0) for tid in contrarian_tids)
+        harvest_mass_ratio = (
+            harvest_mass / total_mass if total_mass > 0.0 else 0.0
+        )
+        conviction_boost = 1.0 + harvest_scale * harvest_mass_ratio
+
         steps_bps: list[float] = []
         for h in range(n_steps):
             num = 0.0
@@ -645,6 +666,14 @@ class ChessProjector:
                 num += curve[h] * wv
                 den += wv
             steps_bps.append(num / den if den > 0 else 0.0)
+
+        # Apply the Harvest Mass Boost to the cumulative path. Multiplying
+        # the cumulative series is equivalent to multiplying each forward
+        # step (expected_move_bps is a kernel-weighted sum of step deltas),
+        # so the boost propagates cleanly into step_bps_list and
+        # expected_move_bps below without changing the *shape* of the path.
+        if conviction_boost != 1.0:
+            steps_bps = [b * conviction_boost for b in steps_bps]
 
         # Record this tick's frame for future ledger-based weight updates.
         self._ledger.append({
@@ -751,6 +780,8 @@ class ChessProjector:
             category_mass=category_mass,
             avg_voter_horizon_s=avg_voter_horizon_s,
             driver_skill_avg=driver_skill_avg,
+            harvest_mass_ratio=harvest_mass_ratio,
+            conviction_boost=conviction_boost,
         )
 
     # -- Phase 1a: redundancy / cross-correlation ------------------------
