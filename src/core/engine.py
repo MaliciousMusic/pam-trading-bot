@@ -77,6 +77,11 @@ class TradingEngine:
         self.tribe_scorer = tribe_scorer
         self._tick_count = 0
         self._starting_equity: float = executor.equity_usd
+        # Trade-stall warning state. When aggTrade has been silent for more
+        # than `_trade_stall_warn_s`, we log once so the operator knows the
+        # chart is being kept live by mark-price fallback, not genuine silence.
+        self._trade_stall_warn_s: float = 30.0
+        self._trade_stall_warned: bool = False
         # Prediction anchors. Each is (label, step_index) where step_index is
         # 1-based position into the projector's per-step forecast (step=1 →
         # +tick_seconds into the future). Used by the UI to stamp a colored
@@ -187,6 +192,25 @@ class TradingEngine:
         if self.state.last_price is None:
             logger.info("[tick {:>4}] waiting for market data...", self._tick_count)
             return
+
+        # aggTrade stall telemetry. Binance prints hundreds of trades/sec on
+        # BTC; a >30s silence is almost always a WS hiccup. Mark-price fallback
+        # in MarketState keeps last_price live, but the operator deserves a
+        # heads-up so "why is my chart flat?" has a visible answer in the log.
+        last_trade_ts = getattr(self.state, "_last_trade_ts", None)
+        if last_trade_ts is not None:
+            gap_s = ts.timestamp() - last_trade_ts
+            if gap_s > self._trade_stall_warn_s:
+                if not self._trade_stall_warned:
+                    logger.warning(
+                        "[tick {:>4}] aggTrade silent for {:.0f}s — chart is on "
+                        "mark-price fallback; check upstream WS health",
+                        self._tick_count, gap_s,
+                    )
+                    self._trade_stall_warned = True
+            elif self._trade_stall_warned and gap_s < 2.0:
+                logger.info("[tick {:>4}] aggTrade resumed", self._tick_count)
+                self._trade_stall_warned = False
 
         # 1) Collect votes + forecast first — exits are council-driven so
         #    we need the forecast before deciding what to close.
@@ -480,6 +504,9 @@ class TradingEngine:
                 "starting_equity_usd": self._starting_equity,
                 "trades": getattr(self.executor, "trades_completed", 0),
                 "wins": getattr(self.executor, "wins", 0),
+                "longs_opened": getattr(self.executor, "longs_opened", 0),
+                "shorts_opened": getattr(self.executor, "shorts_opened", 0),
+                "capitulation_triggers": getattr(self.projector, "_last_capitulation_triggers", 0),
                 "recent_trades": list(getattr(self.executor, "recent_trades", [])),
                 "action": intent.action,
                 "reason": intent.reason,

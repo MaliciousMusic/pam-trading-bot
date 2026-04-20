@@ -78,6 +78,10 @@ class BybitPublicWS:
                             await self._handle_raw(raw)
                     finally:
                         ping_task.cancel()
+                        try:
+                            await ping_task
+                        except (asyncio.CancelledError, Exception):
+                            pass
             except asyncio.CancelledError:
                 raise
             except Exception as e:

@@ -58,7 +58,10 @@ class EventRecorder:
                 self._fh = None
 
     def _write(self, ev: Event) -> None:
-        day = ev.ts.astimezone(timezone.utc).strftime("%Y-%m-%d")
+        # Day rotation is wall-clock driven (not ev.ts) so replayed events
+        # with historical timestamps don't force the tape backward into an
+        # old day's file. For live feeds ev.ts ≈ now, so this is a no-op.
+        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         if day != self._current_day:
             if self._fh is not None:
                 self._fh.close()

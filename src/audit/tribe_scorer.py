@@ -102,16 +102,24 @@ class TribeTradingScorer:
 
     def ingest_closed(self, trades: Iterable[_ShadowTrade]) -> None:
         """Fold each closed shadow trade into its tribe's EWMAs. Called by
-        the engine each tick with whatever the ledger drained."""
+        the engine each tick with whatever the ledger drained.
+
+        Forced exits (session halt, max-hold backstop) are folded into
+        realized_bps and totals for honest PnL attribution but NOT into
+        the hit-rate/discipline EWMAs — the tribe didn't choose the close,
+        so counting it against its skill would add noise."""
         for tr in trades:
             sc = self._ensure(tr.tribe_id)
             side = sc.long if tr.side is Side.BUY else sc.short
+            reason_lc = (tr.reason or "").lower()
+            forced = ("session halt" in reason_lc) or reason_lc.startswith("max hold")
             hit = 1.0 if tr.net_usd > 0 else 0.0
             bps = float(tr.realized_bps)
             held = float(tr.held_s)
             a = self._alpha
-            side.n += 1
-            side.hit_ewma += a * (hit - side.hit_ewma)
+            if not forced:
+                side.n += 1
+                side.hit_ewma += a * (hit - side.hit_ewma)
             # Welford-ish streaming variance on EWMA mean — not statistically
             # pure but good enough for a Sharpe rank; the scorer is a sort
             # key, not a p-value.

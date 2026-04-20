@@ -138,6 +138,11 @@ class MarketState:
         self.news = TaggedSeries(7200.0)
         self.last_price: float | None = None
         self.last_mark_price: float | None = None
+        # Epoch seconds of the most recent aggTrade print. Mark price
+        # (1s cadence) refreshes last_price when this goes stale — aggTrade
+        # silence from a WS hiccup / reconnect would otherwise flatline the
+        # chart for seconds to minutes with a frozen last_price.
+        self._last_trade_ts: float | None = None
         self.last_funding_rate: float = 0.0
         self.fgi_value: int | None = None                  # 0..100
         self.fgi_classification: str = ""
@@ -258,6 +263,7 @@ class MarketState:
             if p is not None:
                 self.last_price = p
                 self.prices.add(ev.ts, p)
+                self._last_trade_ts = ev.ts.timestamp()
         elif ev.kind == "liquidation":
             n = ev.payload.get("notional_usd", 0.0)
             if "liq_long" in ev.tags:
@@ -268,7 +274,16 @@ class MarketState:
             mp = ev.payload.get("mark_price")
             if mp:
                 self.last_mark_price = mp
-                if self.last_price is None:
+                # Refresh last_price from mark when the most recent aggTrade
+                # is stale (>5s) or absent. Normal flow: aggTrade fires many
+                # times per second on BTC, so last_price stays trade-driven;
+                # during WS hiccups mark (1s cadence) takes over so the UI
+                # keeps moving instead of flatlining.
+                trade_stale = (
+                    self._last_trade_ts is None
+                    or ev.ts.timestamp() - self._last_trade_ts > 5.0
+                )
+                if self.last_price is None or trade_stale:
                     self.last_price = mp
                 self.prices.add(ev.ts, mp)
             self.last_funding_rate = ev.payload.get("funding_rate", 0.0)

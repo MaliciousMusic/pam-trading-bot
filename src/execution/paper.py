@@ -82,6 +82,8 @@ class PaperExecutor(Executor):
         self.ledger = ledger or Ledger()
         self.trades_completed = 0
         self.wins = 0
+        self.longs_opened = 0
+        self.shorts_opened = 0
         self._next_id = 1
         self._recent_trades: list[dict] = []   # last 60 closed, newest last
 
@@ -267,13 +269,19 @@ class PaperExecutor(Executor):
 
     def manual_unlock(self) -> None:
         """Operator-driven clear of the session-drawdown halt. Leaves the
-        peak-drawdown auto-clear halt untouched (it manages itself)."""
+        peak-drawdown auto-clear halt untouched (it manages itself).
+
+        Also resets the opened-position counters so "post-unlock" session
+        activity is visible as a fresh count rather than buried inside
+        whatever accumulated before the halt."""
         if self._session_halted:
             logger.warning("[session-dd] manually unlocked (was: {})",
                            self._session_halt_reason)
         self._session_halted = False
         self._session_halt_ts = None
         self._session_halt_reason = None
+        self.longs_opened = 0
+        self.shorts_opened = 0
 
     @property
     def session_halted(self) -> bool:
@@ -764,6 +772,10 @@ class PaperExecutor(Executor):
             "clipped": clipped,
         }
         self._positions.append(pos)
+        if side is Side.BUY:
+            self.longs_opened += 1
+        elif side is Side.SELL:
+            self.shorts_opened += 1
         vol_note = ""
         if vol_capped:
             vol_note = (f"  [vol-rail {intent.expected_move_bps:+.1f}→"

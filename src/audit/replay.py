@@ -144,17 +144,20 @@ class ReplayEngine:
             return
         votes = [t.vote(ts, self.state) for t in self.tribes]
         aggregate_votes(votes, ts)  # side-effect-free; kept for parity
+        regime_label: str | None = None
         if self.regime_classifier is not None:
-            self.projector.regime_multiplier = (
-                self.regime_classifier.classify(self.state).multiplier
-            )
+            regime_state = self.regime_classifier.classify(self.state)
+            self.projector.regime_multiplier = regime_state.multiplier
+            regime_label = regime_state.label.value
         forecast = self.projector.project(self.state)
         if hasattr(self.executor, "apply_funding"):
             self.executor.apply_funding(
                 self.state.last_funding_rate or 0.0,
                 float(self.tick_seconds),
             )
-        self.executor.evaluate_exits(ts, self.state.last_price, forecast)
+        self.executor.evaluate_exits(
+            ts, self.state.last_price, forecast, regime_label=regime_label,
+        )
         self.executor.mark_to_market(ts, self.state.last_price)
         intent = self.decision.decide(
             ts, forecast, self.state, equity_usd=self.executor.equity_usd,
