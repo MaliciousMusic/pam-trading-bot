@@ -147,21 +147,33 @@
      alignment. Labels sit in a fixed-width left column; ticks flex-fill
      the rest and draw each horizon as a colored <span> cell. Subtle row-
      hover highlight makes reading across a long tribe row easier. */
+  /* The accmap grows with tribe count (20+ rows) — cap its height and
+     let the tribe rows scroll so the price chart above stays usable on
+     portrait monitors. Live-Forecast + Global-Accuracy rows are pinned
+     via position:sticky so they're always visible at the top. */
   .accmap-grid{display:flex;flex-direction:column;gap:1px;margin-top:4px;
-    font-family:var(--mono);font-size:9.5px;line-height:1;position:relative}
-  .accmap-grid .arow{display:flex;align-items:stretch;height:12px;
+    font-family:var(--mono);font-size:9px;line-height:1;position:relative;
+    max-height:200px;overflow-y:auto;overflow-x:hidden;
+    scrollbar-width:thin;scrollbar-color:var(--bg3) transparent}
+  .accmap-grid::-webkit-scrollbar{width:4px;height:4px}
+  .accmap-grid::-webkit-scrollbar-thumb{background:var(--bg3);border-radius:2px}
+  .accmap-grid::-webkit-scrollbar-track{background:transparent}
+  .accmap-grid .arow{display:flex;align-items:stretch;height:9px;
     border-radius:1px;transition:background .15s}
   .accmap-grid .arow:hover{background:rgba(255,255,255,.04)}
-  .accmap-grid .arow.global{height:14px}
-  .accmap-grid .arow.global.last-top{margin-bottom:3px;padding-bottom:1px;
-    border-bottom:2px solid rgba(200,168,75,.38);
-    box-shadow:0 1px 0 rgba(0,0,0,.35)}
-  .accmap-grid .ar-lbl{display:flex;align-items:center;gap:4px;
-    width:112px;flex:none;padding:0 6px 0 2px;white-space:nowrap;
+  .accmap-grid .arow.global{height:12px;position:sticky;z-index:3;
+    background:var(--bg);box-shadow:0 1px 0 rgba(0,0,0,.4)}
+  .accmap-grid .arow.forecast{top:0}
+  .accmap-grid .arow.accuracy{top:12px}
+  .accmap-grid .arow.global.last-top{margin-bottom:2px;padding-bottom:1px;
+    border-bottom:2px solid rgba(200,168,75,.38)}
+  .accmap-grid .ar-lbl{display:flex;align-items:center;gap:3px;
+    width:104px;flex:none;padding:0 5px 0 2px;white-space:nowrap;
     overflow:hidden;color:var(--muted);background:rgba(255,255,255,.015);
-    border-right:1px solid rgba(255,255,255,.04)}
+    border-right:1px solid rgba(255,255,255,.04);font-size:8.5px}
   .accmap-grid .arow.global .ar-lbl{color:#f0ead4;font-weight:700;
-    background:rgba(200,168,75,.06);border-right-color:rgba(200,168,75,.25)}
+    background:rgba(200,168,75,.08);border-right-color:rgba(200,168,75,.25);
+    font-size:9px}
   .accmap-grid .ar-dot{width:5px;height:5px;border-radius:50%;flex:none}
   .accmap-grid .arow.forecast .ar-dot{background:rgba(100,230,255,.95);
     box-shadow:0 0 4px rgba(100,230,255,.55)}
@@ -2053,30 +2065,50 @@
     boostHdr.textContent = `×${boost.toFixed(2)}`;
     box.classList.remove('lvl-mid','lvl-hi');
     if(_harvestMode==='pnl'){
-      const g=trading && trading.global;
-      const bps=g && g.realized_pnl_bps!=null ? +g.realized_pnl_bps : null;
-      const tot=g ? (g.total_trades||0) : 0;
-      const fill=bps==null ? 0 : Math.max(0,Math.min(1, Math.abs(bps)/25.0));
+      // Three-piece signal: (1) portfolio-return bps across ALL shadow
+      // ledgers combined — this catches tiny per-trade bps that EWMA
+      // smooths to zero on a per-tribe basis; (2) count of active tribes
+      // (with ≥1 trade); (3) win/loss split. Saturates at ±3bps on a
+      // $1M pooled book so early-session trades move the dial visibly.
+      const g = trading && trading.global;
+      const tribes = (trading && trading.tribes) || [];
+      const eq = g && g.equity_usd;
+      const st = g && g.start_equity_usd;
+      const retBps = (eq!=null && st>0) ? ((eq-st)/st*10000) : null;
+      const realized = g && g.realized_pnl_bps;
+      const bps = retBps!=null ? retBps : realized;
+      const totalTrades = g ? (g.total_trades||0) : 0;
+      const active = tribes.filter(r=>(r.total_trades||0)>0);
+      const greens = active.filter(r=>(r.realized_pnl_bps||0)>0).length;
+      const reds = active.filter(r=>(r.realized_pnl_bps||0)<0).length;
+      const fmtBps = v => {
+        if(v==null||!isFinite(v)) return '—';
+        const a=Math.abs(v);
+        const s=v>=0?'+':'';
+        if(a<0.1) return s+v.toFixed(3)+'bps';
+        if(a<1)   return s+v.toFixed(2)+'bps';
+        return s+v.toFixed(1)+'bps';
+      };
+      const fill = bps==null ? 0 : Math.max(0,Math.min(1, Math.abs(bps)/3.0));
       arc.setAttribute('stroke-dasharray', `${(fill*_HR_CIRC).toFixed(2)} ${_HR_CIRC.toFixed(2)}`);
-      const bpsStr = bps==null ? '—' : (bps>=0?'+':'')+bps.toFixed(1);
-      pctEl.textContent = bpsStr;
-      massV.textContent = bps==null ? '—' : bpsStr+'bps';
-      if(bps==null || tot<5){
+      pctEl.textContent = fmtBps(bps).replace('bps','');
+      massV.textContent = fmtBps(bps);
+      if(bps==null || totalTrades<1){
         arc.setAttribute('stroke','rgba(120,120,120,.45)');
         glow.style.opacity='0';
-        hint.textContent = tot<5 ? `Warming up · ${tot} shadow trades` : 'No shadow PnL yet';
+        hint.textContent = `Warming up · ${totalTrades} shadow trades`;
       }else if(bps>=0){
-        const sat=Math.min(1, bps/25.0);
+        const sat=Math.min(1, bps/3.0);
         arc.setAttribute('stroke',`rgba(77,187,110,${(0.55+0.4*sat).toFixed(2)})`);
         glow.style.opacity='0';
-        if(bps>=5) box.classList.add('lvl-mid');
-        hint.textContent = bps>=10 ? 'Shadow ledgers printing' : `Shadow PnL +${bps.toFixed(1)}bps`;
+        if(bps>=1) box.classList.add('lvl-mid');
+        hint.textContent = `${active.length} active · ${greens}🟢 / ${reds}🔴 · ${totalTrades} tr`;
       }else{
-        const sat=Math.min(1, -bps/25.0);
+        const sat=Math.min(1, -bps/3.0);
         arc.setAttribute('stroke',`rgba(217,79,79,${(0.65+0.35*sat).toFixed(2)})`);
         glow.style.opacity=(0.35+0.55*sat).toFixed(2);
         box.classList.add('lvl-hi');
-        hint.textContent = bps<=-10 ? 'Shadow ledgers bleeding' : `Shadow PnL ${bps.toFixed(1)}bps`;
+        hint.textContent = `${active.length} active · ${greens}🟢 / ${reds}🔴 · ${totalTrades} tr`;
       }
       return;
     }
