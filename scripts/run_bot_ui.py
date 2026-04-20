@@ -24,6 +24,7 @@ from src.execution.ledger import Ledger
 from src.execution.paper import PaperExecutor
 from src.ingress.binance_ws import BinancePerpsWS
 from src.ingress.bybit_ws import BybitPublicWS
+from src.ingress.deribit_options import DeribitOptionsPoller
 from src.ingress.event_recorder import EventRecorder
 from src.ingress.fgi import FGIPoller
 from src.ingress.htf_trend_poller import HTFTrendPoller
@@ -31,6 +32,7 @@ from src.ingress.oi_poller import OIPoller
 from src.ingress.okx_ws import OKXPublicWS
 from src.ingress.reddit_rss import RedditRSSPoller
 from src.ingress.rss_feeds import CURATED_FEEDS, RSSFeedPoller
+from src.ingress.stablecoin_supply import StablecoinSupplyPoller
 from src.projector.chess import ChessProjector
 from src.projector.kernel_calibrator import KernelCalibrator
 from src.regime.classifier import RegimeClassifier
@@ -245,6 +247,26 @@ async def main() -> None:
             bus,
             symbol=cfg.get("symbol", "BTCUSDT"),
             poll_seconds=int(oi_cfg.get("poll_seconds", 60)),
+        ).run())
+
+    # Phase G — Deribit BTC options aggregate (OI, P/C ratio, OI-weighted IV).
+    deribit_cfg = sources_cfg.get("deribit_options", {}) or {}
+    if deribit_cfg.get("enabled"):
+        coros.append(DeribitOptionsPoller(
+            bus,
+            currency=str(deribit_cfg.get("currency", "BTC")),
+            poll_seconds=int(deribit_cfg.get("poll_seconds", 120)),
+            retry_seconds=int(deribit_cfg.get("retry_seconds", 60)),
+        ).run())
+
+    # Phase G — stablecoin supply proxy (USDT+USDC circulating supply from
+    # CoinGecko free tier). Change over rolling window = bridge-flow signal.
+    stablecoin_cfg = sources_cfg.get("stablecoin_supply", {}) or {}
+    if stablecoin_cfg.get("enabled"):
+        coros.append(StablecoinSupplyPoller(
+            bus,
+            poll_seconds=int(stablecoin_cfg.get("poll_seconds", 1800)),
+            retry_seconds=int(stablecoin_cfg.get("retry_seconds", 300)),
         ).run())
 
     # Phase F — cross-venue public trade streams. Events land as

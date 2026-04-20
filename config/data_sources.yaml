@@ -70,3 +70,26 @@ sources:
     kind: rest_poll
     poll_seconds: 180
     retry_seconds: 120
+
+  # Phase G — Deribit options aggregate (put/call OI, OI-weighted strike,
+  # mean IV). Free public API, no auth, ~5000 instruments aggregated
+  # client-side into ~8 scalars. 120s cadence is plenty (options OI
+  # moves slowly; faster polling just wastes bandwidth).
+  deribit_options:
+    enabled: true
+    kind: rest_poll
+    poll_seconds: 120
+    retry_seconds: 60
+    currency: BTC
+
+  # Phase G — stablecoin supply proxy for bridge flows. CoinGecko free
+  # endpoints return circulating supply for USDT + USDC; the % change
+  # over 2/6/24h is our free-tier substitute for exchange-resident
+  # stablecoin balances (which would need Glassnode paid or Dune API).
+  # 30min cadence — CoinGecko updates at a similar rate and free-tier
+  # rate limit is 30 req/min (we use 2 req per 30min, trivial).
+  stablecoin_supply:
+    enabled: true
+    kind: rest_poll
+    poll_seconds: 1800
+    retry_seconds: 300

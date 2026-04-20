@@ -1,0 +1,123 @@
+id: cascade_amplifier
+name: Cascade Amplifier
+description: >-
+  Prop shops reading the SECOND derivative of liquidation flow — they don't
+  care about the raw liq notional (that's `liquidation_hunter`), they care
+  about whether the cascade is ACCELERATING. A cascade that's speeding up
+  has more fuel to burn; a cascade that's already decelerating is nearly
+  exhausted. The archetype trades the velocity, not the level. Fills a
+  specific orthogonality gap: before this tribe, the council had zero
+  signal on liq acceleration — a key regime read during flash crashes.
+
+demographics:
+  # Sources: short-horizon prop shops that specialize in cascade amplification
+  # (DV Trading, SIG crypto sleeve, independent prop reading liq streams on
+  # Coinglass Pro). Smaller cohort than classic liq-hunters because this
+  # requires sub-second integration over rolling liq windows.
+  capital_band_usd: [1000000, 50000000]
+  count_estimate: 30
+  experience_years: [3, 15]
+  jurisdiction: [NA, EU, APAC, offshore]
+
+hardware:
+  tier: colo
+  typical_latency_ms: 3
+  uptime: continuous
+  specs:
+    placement: exchange_colo_or_peered
+    feed: liquidation_firehose
+
+software:
+  platforms: [custom_c++_oms, custom_python_strategy]
+  tools: [liq_velocity_estimator, coinglass_pro]
+  charting: minimal
+  order_types_used: [market, ioc, stop_market]
+  data_feeds: [trades, liquidations, orderbook]
+
+strategy:
+  family: cascade_amplifier
+  params:
+    # Two windows — fast vs slow. Fast-window rate > accel_threshold ×
+    # slow-window rate = cascade accelerating → fire.
+    fast_window_s: 15
+    slow_window_s: 60
+    accel_threshold: 1.5
+    # Minimum fast-window liq notional — below this, no meaningful cascade.
+    min_fast_usd: 400000
+    hold_seconds: 90
+  style_notes: >-
+    Acts only when liq rate is ACCELERATING. A steady drip of liquidations
+    without acceleration is a weak idle lean, not a trade.
+
+attention:
+  kinds: [liquidation, trade]
+  tags: [liq_long, liq_short, taker_buy, taker_sell]
+  ignored_tags: [news, social, funding]
+  min_severity: 0.2
+
+personality:
+  # High aggression, zero patience, moderate herding (they often pile
+  # into the same cascades that the rest of the liq-cluster see).
+  risk_tolerance: 0.65
+  fomo: 0.15
+  panic: 0.1
+  patience: 0.1
+  herding: 0.35
+  reaction_mu_seconds: 3.0
+  reaction_sigma_seconds: 4.0
+
+flow:
+  # weight is OVERRIDDEN at load time by derive.py. Value below documents
+  # the pre-derivation hand-tune.
+  weight: 0.04
+  # Only fires on accelerating cascades — rare events, but high-conviction
+  # when they fire. Coinglass cascade frequency data shows ~3-5 events/day
+  # qualifying as "accelerating" by our threshold → ~15-20% activation.
+  activation_rate: 0.18
+  typical_hold_seconds: [30, 120]
+  default_conviction: 0.75
+  cooldown_seconds: 60
+
+disposition:
+  # Flat when no cascade is live.
+  idle_bias: 0.0
+  idle_conviction: 0.04
+
+circadian:
+  # Colo'd algos, always on. Slight evening-APAC lift because leveraged
+  # altcoin-derivative liquidations tend to concentrate during overnight
+  # thin-liquidity windows — the BTC cascade often follows.
+  timezone_label: "24/7 prop"
+  presence_by_hour_utc:
+    [0.95, 1.00, 1.00, 1.00, 0.95, 0.90, 0.90, 0.95,
+     1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00,
+     1.00, 1.00, 1.00, 0.95, 0.90, 0.90, 0.95, 0.95]
+
+# Cascade lens: liq imbalance (follow cascade), vol regime (prefer high —
+# cascades only form in high vol), taker flow (confirms direction).
+indicators:
+  liq_imbalance:
+    window_s: 15
+    reference_usd: 400000
+    action: follow                 # ride the cascade
+    weight: 1.0
+  taker_imbalance:
+    window_s: 30
+    reference_usd: 800000
+    action: follow                 # flow confirms direction
+    weight: 0.6
+  volatility_regime:
+    window_s: 300
+    low_bps: 15
+    high_bps: 70
+    prefer: high                   # cascades need vol
+    use_realized: true
+    weight: 0.5
+indicator_weight: 0.45
+# Cascade amplifiers only trade in HIGH vol — in a dead tape there are
+# no cascades to amplify. Regime gate is prefer=high and tightly bounded.
+indicator_regime_range: 0.30
+indicator_regime_low_bps: 15
+indicator_regime_high_bps: 70
+indicator_regime_prefer: high
+indicator_regime_window_s: 300

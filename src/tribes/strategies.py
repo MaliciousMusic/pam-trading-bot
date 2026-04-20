@@ -203,6 +203,11 @@ def trend_follower(tribe: "Tribe", ts: datetime, state: MarketState) -> Vote:
     blend `regulation_pulse` into the signal so the tribe anticipates the
     next leg rather than waiting for price to confirm.
 
+    HTF confirmation: the 1h trend score from the HTF kline poller is
+    blended in as a regime-alignment signal. When the intraday move agrees
+    with the 1h regime, the tribe scales up; when they disagree, conviction
+    is muted (classic swing discipline — don't fight the higher timeframe).
+
     Idle: sign of the longer-term drift, with weak conviction."""
     p = tribe.spec.strategy.params
     win = float(p.get("trend_window_seconds", 300))
@@ -210,29 +215,35 @@ def trend_follower(tribe: "Tribe", ts: datetime, state: MarketState) -> Vote:
     min_bps = float(p.get("min_persistent_move_bps", 80))
     funding_guard = float(p.get("funding_guard", 0.001))
     reg_weight = float(p.get("regulation_weight", 0.5))
+    htf_weight = float(p.get("htf_weight", 0.35))
 
     move = state.price_change_bps(win)
     f = state.last_funding_rate
     reg = state.regulation_pulse(3600.0)
+    htf = float(getattr(state, "htf_trend_score", 0.0) or 0.0)
 
     if abs(move) >= min_bps:
         if (move > 0 and f > funding_guard) or (move < 0 and f < -funding_guard):
             long_move = state.price_change_bps(long_win)
-            signed = (long_move / (min_bps * 4.0)) * 0.4 + reg * reg_weight * 0.3
+            signed = (long_move / (min_bps * 4.0)) * 0.4 + reg * reg_weight * 0.3 + htf * htf_weight * 0.4
             return _lean(tribe, max(-1.0, min(1.0, signed)),
-                         reason=f"funding blocks trend, reg={reg:+.2f} f={f:.5f}",
+                         reason=f"funding blocks trend, reg={reg:+.2f} htf={htf:+.2f} f={f:.5f}",
                          horizon_seconds=int(p.get("hold_seconds", 3600)))
-        signed = move / (min_bps * 2.5) + reg * reg_weight * 0.2
+        # HTF alignment modulates trending signal: agreement amplifies (×1.15),
+        # disagreement mutes (×0.6). htf=0 (no data) is neutral pass-through.
+        aligned = 1.0 if htf == 0.0 else (1.15 if move * htf > 0 else 0.6)
+        signed = (move / (min_bps * 2.5)) * aligned + reg * reg_weight * 0.2 + htf * htf_weight * 0.3
         return _lean(tribe, max(-1.0, min(1.0, signed)),
-                     reason=f"trend {move:.0f}bps reg={reg:+.2f} f={f:.5f}",
+                     reason=f"trend {move:.0f}bps reg={reg:+.2f} htf={htf:+.2f}×{aligned:.2f} f={f:.5f}",
                      horizon_seconds=int(p.get("hold_seconds", 3600)))
 
-    # Idle: longer-window drift + regulation pulse (even without acute price
-    # movement, a fresh regulatory signal is enough to take a position).
+    # Idle: longer-window drift + regulation pulse + HTF regime (even
+    # without acute price movement, a fresh regulatory signal or a clear
+    # 1h trend is enough to take a position).
     long_move = state.price_change_bps(long_win)
-    signed = (long_move / (min_bps * 3.0)) * 0.3 + reg * reg_weight * 0.4
+    signed = (long_move / (min_bps * 3.0)) * 0.3 + reg * reg_weight * 0.4 + htf * htf_weight * 0.5
     return _lean(tribe, max(-1.0, min(1.0, signed)),
-                 reason=f"quiet; drift={long_move:+.0f}bps reg={reg:+.2f}",
+                 reason=f"quiet; drift={long_move:+.0f}bps reg={reg:+.2f} htf={htf:+.2f}",
                  horizon_seconds=int(p.get("hold_seconds", 3600)))
 
 
@@ -609,13 +620,17 @@ def copy_trader(tribe: "Tribe", ts: datetime, state: MarketState) -> Vote:
         return _offline(tribe, "no price yet")
 
     # Influencer-led: substack/Twitter post + same-direction price nudge.
+    # Cap is intentionally lower than lead-moving tribes (mev/liq hunter): by
+    # the time a copy-trader sees the signal, the lead has already priced it
+    # in. This is a chasing strategy, not a first-mover strategy — higher
+    # caps would model copy-traders as informed leaders, which they aren't.
     inf = state.influencer_pulse(inf_win)
     inf_n = state.news_volume(inf_win, tag="influencer")
     if inf_n >= 1 and abs(inf) >= inf_trigger and (inf * confirm) >= 0:
         signed = inf / (inf_trigger * 1.8)
         return _lean(tribe, signed,
                      reason=f"copy influencer {inf:+.2f} (n={inf_n}) conf={confirm:+.0f}bps",
-                     horizon_seconds=int(p.get("hold_seconds", 900)), cap=0.85)
+                     horizon_seconds=int(p.get("hold_seconds", 900)), cap=0.55)
 
     # Reddit herd + price confirmation.
     soc = state.social_score(sw)
@@ -623,7 +638,7 @@ def copy_trader(tribe: "Tribe", ts: datetime, state: MarketState) -> Vote:
     if vol >= min_vol and abs(soc) >= trigger and (soc * confirm) > 0:
         signed = (soc / (trigger * 2.0))
         return _lean(tribe, signed, reason=f"copy signal {soc:+.1f} conf={confirm:+.0f}bps",
-                     horizon_seconds=int(p.get("hold_seconds", 900)), cap=0.75)
+                     horizon_seconds=int(p.get("hold_seconds", 900)), cap=0.50)
 
     # Idle: herd lean in the direction of short-window drift, with a gentle
     # pull from residual influencer sentiment (even flat drift, people copy
@@ -966,3 +981,406 @@ def microstructure_prober(tribe: "Tribe", ts: datetime, state: MarketState) -> V
     why = " | ".join(label for _, label in contributions)
     return _lean(tribe, avg_signed, reason=f"micro: {why}",
                  horizon_seconds=horizon)
+
+
+@register("cta_systematic_trend")
+def cta_systematic_trend(tribe: "Tribe", ts: datetime, state: MarketState) -> Vote:
+    """Systematic CTA / managed-futures — 60/120d trend-following with vol-
+    adjusted sizing. Reads the HTF regime bias (from the 1h kline poller)
+    and only takes a position when regime + intraday continuation co-sign.
+    Realized vol drives a sizing rail: low vol = full size, high vol =
+    shrunk position.
+
+    Unlike the intraday breakout/momentum tribes, the CTA cares about
+    *persistence* — a brief spike in one direction against a bearish HTF
+    regime is explicitly ignored. Mirrors the live behavior of Man AHL,
+    Winton, AQR Managed Futures: slow, disciplined, regime-aligned.
+
+    Idle: weak lean in the HTF-regime direction — CTAs are effectively
+    always positioned, even when the intraday tape is quiet."""
+    p = tribe.spec.strategy.params
+    vol_window_s = float(p.get("vol_window_s", 840.0))
+    vol_cap_bps = float(p.get("vol_cap_bps", 80.0))
+    htf_threshold = float(p.get("htf_threshold", 0.30))
+    cont_window_s = float(p.get("continuation_window_s", 1200.0))
+    cont_ref_bps = float(p.get("continuation_ref_bps", 40.0))
+    horizon = int(p.get("hold_seconds", 14400))
+
+    if state.last_price is None:
+        return _offline(tribe, "no price yet")
+
+    htf = float(getattr(state, "htf_trend_score", 0.0) or 0.0)
+    cont_bps = state.price_change_bps(cont_window_s)
+
+    # Vol rail: realized-vol in bps → sizing multiplier in [0.2, 1.0].
+    # Low vol → full size. Near/above vol_cap → shrink hard.
+    vol_bps = state.realized_vol_bps(vol_window_s)
+    if vol_bps is None:
+        size_mult = 0.5
+        vol_tag = "vol=?"
+    else:
+        size_mult = max(0.2, min(1.0, 1.0 - (vol_bps / max(vol_cap_bps, 1.0)) * 0.7))
+        vol_tag = f"vol={vol_bps:.0f}bps"
+
+    # Active regime trade: HTF strong AND intraday continues same direction.
+    if abs(htf) >= htf_threshold and htf * cont_bps >= 0:
+        signed = htf * 0.7 + (cont_bps / max(cont_ref_bps, 1.0)) * 0.3
+        signed = max(-1.0, min(1.0, signed)) * size_mult
+        return _lean(tribe, signed,
+                     reason=f"cta regime htf={htf:+.2f} cont={cont_bps:+.0f}bps {vol_tag}×{size_mult:.2f}",
+                     horizon_seconds=horizon)
+
+    # HTF strong but intraday counter — stick with the regime, lightly.
+    if abs(htf) >= htf_threshold and htf * cont_bps < 0:
+        signed = htf * 0.3 * size_mult
+        return _lean(tribe, signed,
+                     reason=f"cta hold htf={htf:+.2f} (counter cont={cont_bps:+.0f}bps)",
+                     horizon_seconds=horizon, cap=0.30)
+
+    # Idle: weak HTF-direction lean.
+    signed = htf * 0.4 * size_mult
+    return _lean(tribe, signed,
+                 reason=f"cta idle htf={htf:+.2f} {vol_tag}",
+                 horizon_seconds=horizon, cap=0.30)
+
+
+@register("news_scalper")
+def news_scalper(tribe: "Tribe", ts: datetime, state: MarketState) -> Vote:
+    """Headline scalper — follows the initial news spike for <60s then exits.
+    Opposite time-horizon from `news_reactor` (which fades the overreaction
+    over 5-10min). The two archetypes consume the same news surface but
+    express orthogonal views: scalper rides the first leg, reactor fades
+    the echo.
+
+    Trigger: severity-weighted pulse in the last ~120s exceeds threshold.
+    Pulse is a weighted blend of regulation, influencer, and general
+    headline scores — regulation weights most (Fed/SEC moves regime),
+    influencer next (Twitter/Substack talkers actually move price in <2min),
+    headline residual fills in.
+
+    Idle: weak residual in the direction of the last-15min news sentiment.
+    Never loud, never silent."""
+    p = tribe.spec.strategy.params
+    fresh_window_s = float(p.get("fresh_window_s", 120.0))
+    trigger_score = float(p.get("trigger_score", 0.3))
+    long_window_s = float(p.get("long_window_s", 900.0))
+    horizon = int(p.get("hold_seconds", 60))
+
+    reg = state.regulation_pulse(fresh_window_s)
+    inf = state.influencer_pulse(fresh_window_s)
+    headlines = state.news_score(fresh_window_s)
+    n_items = state.news_volume(fresh_window_s)
+
+    # Blend: regulation carries most weight, influencer next, residual
+    # headlines (not regulation, not influencer) fill in.
+    residual_headlines = headlines - reg - inf
+    pulse = reg * 1.5 + inf * 0.8 + residual_headlines * 0.5
+    pulse = max(-2.0, min(2.0, pulse))
+
+    if n_items >= 1 and abs(pulse) >= trigger_score:
+        signed = max(-1.0, min(1.0, pulse / (trigger_score * 2.0)))
+        return _lean(tribe, signed,
+                     reason=f"news spike pulse={pulse:+.2f} (n={n_items} in {fresh_window_s:.0f}s)",
+                     horizon_seconds=horizon)
+
+    # Idle — whisper in the direction of residual 15min news sentiment.
+    residual = state.news_score(long_window_s)
+    signed = max(-1.0, min(1.0, residual * 0.4))
+    return _lean(tribe, signed,
+                 reason=f"news quiet pulse={pulse:+.2f} n15={state.news_volume(long_window_s)}",
+                 horizon_seconds=horizon, cap=0.25)
+
+
+@register("cascade_amplifier")
+def cascade_amplifier(tribe: "Tribe", ts: datetime, state: MarketState) -> Vote:
+    """Liq-velocity reader — conviction scales with the SECOND derivative of
+    liquidation flow. The tribe trades the RATE OF CHANGE, not the level.
+
+    Compute two liq-rates: fast (last 15s) and slow (last 60s). When
+    fast_rate / slow_rate >= accel_threshold the cascade is accelerating
+    and we fire HARD — there's more stop-loss fuel still to burn. When the
+    ratio is below threshold the cascade is a steady drip (weak idle lean)
+    or already decelerating (exhausted — no trade).
+
+    Compared to `liquidation_hunter` (which reads net liq notional), this
+    tribe won't fire on a big one-shot liq that happened 45s ago — it fires
+    on the acceleration IN the last 15s. Orthogonality is the acceleration
+    signal itself.
+
+    Idle: weak residual in the direction implied by the slow-window net
+    (follow — if longs were liq'd, continuation is still DOWN)."""
+    p = tribe.spec.strategy.params
+    fast_win = float(p.get("fast_window_s", 15.0))
+    slow_win = float(p.get("slow_window_s", 60.0))
+    accel_threshold = float(p.get("accel_threshold", 1.5))
+    min_fast_usd = float(p.get("min_fast_usd", 400_000))
+    horizon = int(p.get("hold_seconds", 90))
+
+    fast_net = state.long_liq_usd(fast_win) - state.short_liq_usd(fast_win)
+    slow_net = state.long_liq_usd(slow_win) - state.short_liq_usd(slow_win)
+
+    fast_rate = abs(fast_net) / max(fast_win, 1.0)
+    slow_rate = abs(slow_net) / max(slow_win, 1.0)
+
+    if abs(fast_net) >= min_fast_usd and slow_rate > 0:
+        accel_ratio = fast_rate / slow_rate
+        if accel_ratio >= accel_threshold:
+            # Cascade accelerating. Long liqs → continuation DOWN (short).
+            direction = -1.0 if fast_net > 0 else 1.0
+            magnitude = min(1.0, (accel_ratio - 1.0) / (accel_threshold * 2.0))
+            signed = direction * (0.6 + 0.4 * magnitude)
+            return _lean(tribe, signed,
+                         reason=f"cascade accel {accel_ratio:.2f}× fast={fast_net:+,.0f}",
+                         horizon_seconds=horizon)
+
+    # Steady liq flow (no acceleration) → follow weakly.
+    if abs(fast_net) >= min_fast_usd:
+        signed = (-1.0 if fast_net > 0 else 1.0) * 0.35
+        return _lean(tribe, signed,
+                     reason=f"liq steady fast={fast_net:+,.0f}",
+                     horizon_seconds=horizon, cap=0.45)
+
+    # Idle: weak residual follow on slow-window imbalance.
+    residual = slow_net / max(min_fast_usd * 2.0, 1.0)
+    signed = -residual * 0.3
+    return _lean(tribe, signed,
+                 reason=f"no cascade (fast={fast_net:+,.0f} slow={slow_net:+,.0f})",
+                 horizon_seconds=horizon, cap=0.20)
+
+
+@register("capitulation_buyer")
+def capitulation_buyer(tribe: "Tribe", ts: datetime, state: MarketState) -> Vote:
+    """Patient contrarian — FADES liq cascades once they've gone far enough.
+    Closes the directional-bias gap: three tribes (liquidation_hunter,
+    mev_frontrun, cascade_amplifier) all FOLLOW liq direction; this tribe
+    is the balancing force.
+
+    Two gates must BOTH fire:
+      1. Total liq (long+short) notional in window ≥ `min_liq_usd` — it's
+         a real wash-out, not drip liquidations.
+      2. Price has travelled ≥ `stretch_vol_mult` × realized_vol over
+         the same stretch window — truly stretched, not just panicked.
+
+    When both fire, take the OPPOSITE side of the net cascade direction:
+    longs liq'd → BUY; shorts liq'd → SELL the squeeze top. Conviction
+    scales with total-liq intensity and price-stretch factor.
+
+    Idle: patient cash. A very weak contrarian whisper against recent flow,
+    capped tiny."""
+    p = tribe.spec.strategy.params
+    liq_window_s = float(p.get("liq_window_s", 120.0))
+    min_liq_usd = float(p.get("min_liq_usd", 1_200_000))
+    stretch_window_s = float(p.get("stretch_window_s", 600.0))
+    stretch_vol_mult = float(p.get("stretch_vol_mult", 1.3))
+    horizon = int(p.get("hold_seconds", 1800))
+
+    longs = state.long_liq_usd(liq_window_s)
+    shorts = state.short_liq_usd(liq_window_s)
+    net = longs - shorts
+    total = longs + shorts
+
+    move_bps = state.price_change_bps(stretch_window_s)
+    vol_bps = state.realized_vol_bps(stretch_window_s)
+
+    # Both gates: capitulation-sized liq AND price stretched vs realized vol.
+    if total >= min_liq_usd and vol_bps and vol_bps > 0 and \
+            abs(move_bps) >= vol_bps * stretch_vol_mult:
+        # Fade the net-cascade direction.
+        # net>0 (long liqs dominate) → price dumped → BUY.
+        direction = 1.0 if net > 0 else -1.0
+        intensity = min(1.0, total / (min_liq_usd * 3.0))
+        stretch_factor = min(1.0, abs(move_bps) / max(vol_bps * stretch_vol_mult * 2.0, 1.0))
+        signed = direction * (0.5 + 0.5 * intensity) * stretch_factor
+        return _lean(tribe, max(-1.0, min(1.0, signed)),
+                     reason=f"capitulation fade total={total:,.0f} move={move_bps:+.0f}bps vol={vol_bps:.0f}bps",
+                     horizon_seconds=horizon)
+
+    # Large liq but not stretched yet — patience, no active vote.
+    if total >= min_liq_usd:
+        vol_tag = f"vol={vol_bps:.0f}bps" if vol_bps else "vol=?"
+        return _lean(tribe, 0.0,
+                     reason=f"liq cluster, waiting stretch (total={total:,.0f} move={move_bps:+.0f}bps {vol_tag})",
+                     horizon_seconds=horizon)
+
+    # Idle: weak contrarian lean to recent flow, capped tiny. Never aligned
+    # with the herd.
+    flow = state.taker_flow_usd(stretch_window_s)
+    signed = max(-0.15, min(0.15, -flow / 10_000_000.0 * 0.1))
+    return _lean(tribe, signed,
+                 reason=f"waiting capitulation (flow={flow:+,.0f})",
+                 horizon_seconds=horizon, cap=0.15)
+
+
+@register("options_dealer_gamma")
+def options_dealer_gamma(tribe: "Tribe", ts: datetime, state: MarketState) -> Vote:
+    """Options market-maker hedging flow proxy.
+
+    Reads Deribit aggregate OI to estimate the dealer gamma regime, then
+    positions spot accordingly:
+
+      PIN MODE (long-gamma, low realized vol, spot near OI-weighted strike):
+        Dealers mean-revert spot toward the strike via delta hedges. Lean
+        in the direction of (strike − spot), scaled by the deviation.
+
+      AMPLIFY MODE (short-gamma proxy: high realized vol + unbalanced OI):
+        Dealer hedges chase the tape, amplifying moves. Lean with recent
+        taker flow.
+
+      Else: idle (no identifiable regime).
+
+    Idle posture: flat. This tribe only adds directional signal when the
+    options structure is readable — no background bias.
+    """
+    p = tribe.spec.strategy.params
+    vol_window_s = float(p.get("vol_window_s", 900.0))
+    low_vol_bps = float(p.get("low_vol_bps", 25.0))
+    high_vol_bps = float(p.get("high_vol_bps", 80.0))
+    pin_band_bps = float(p.get("pin_band_bps", 150.0))
+    flow_window_s = float(p.get("flow_window_s", 300.0))
+    flow_ref_usd = float(p.get("flow_ref_usd", 2_500_000.0))
+    horizon = int(p.get("hold_seconds", 1200))
+
+    strike = state.last_oi_weighted_strike
+    spot = state.last_price or state.last_mark_price
+    vol_bps = state.realized_vol_bps(vol_window_s) or 0.0
+
+    if strike is None or strike <= 0 or spot is None or spot <= 0:
+        return _lean(tribe, 0.0,
+                     reason="options surface not yet populated",
+                     horizon_seconds=horizon, cap=0.08)
+
+    dev_bps = (spot - strike) / strike * 10_000.0
+
+    # PIN MODE: long-gamma regime, near the strike, calm tape.
+    if vol_bps <= low_vol_bps and abs(dev_bps) <= pin_band_bps:
+        # Lean toward strike — if spot > strike, SELL; if spot < strike, BUY.
+        direction = -1.0 if dev_bps > 0 else 1.0
+        magnitude = min(1.0, abs(dev_bps) / max(pin_band_bps, 1.0))
+        signed = direction * (0.35 + 0.5 * magnitude)
+        return _lean(tribe, max(-1.0, min(1.0, signed)),
+                     reason=f"gamma-pin fade dev={dev_bps:+.0f}bps vol={vol_bps:.0f}bps strike={strike:,.0f}",
+                     horizon_seconds=horizon)
+
+    # AMPLIFY MODE: short-gamma proxy — elevated vol with real OI imbalance.
+    net_delta = state.last_net_delta_exposure_contracts or 0.0
+    if vol_bps >= high_vol_bps and abs(net_delta) > 5_000:
+        flow = state.taker_flow_usd(flow_window_s)
+        if abs(flow) >= flow_ref_usd * 0.5:
+            direction = 1.0 if flow > 0 else -1.0
+            intensity = min(1.0, abs(flow) / max(flow_ref_usd, 1.0))
+            signed = direction * (0.3 + 0.5 * intensity)
+            return _lean(tribe, max(-1.0, min(1.0, signed)),
+                         reason=f"short-gamma amplify flow={flow:+,.0f} vol={vol_bps:.0f}bps net_oi={net_delta:+,.0f}",
+                         horizon_seconds=horizon)
+
+    return _lean(tribe, 0.0,
+                 reason=f"no gamma regime read (dev={dev_bps:+.0f}bps vol={vol_bps:.0f}bps)",
+                 horizon_seconds=horizon, cap=0.05)
+
+
+@register("put_call_fader")
+def put_call_fader(tribe: "Tribe", ts: datetime, state: MarketState) -> Vote:
+    """Contrarian on Deribit put/call ratio.
+
+    High pc_ratio = aggregate option buyers are fear-loaded → FADE → BUY.
+    Low pc_ratio  = call-heavy euphoria → FADE → SELL.
+    Between thresholds: idle (no crowd extreme to fade).
+
+    Conviction scales with distance beyond the threshold, boosted by a
+    recent pc_ratio CHANGE (captures fresh sentiment shocks, not just
+    slow-moving state). No trend-following; pure contrarian.
+    """
+    p = tribe.spec.strategy.params
+    pc_lo = float(p.get("pc_ratio_lo", 0.60))
+    pc_hi = float(p.get("pc_ratio_hi", 1.30))
+    change_window_s = float(p.get("change_window_s", 1800.0))
+    change_ref = float(p.get("change_ref", 0.20))
+    horizon = int(p.get("hold_seconds", 3600))
+
+    pc = state.last_pc_ratio
+    if pc is None or pc <= 0:
+        return _lean(tribe, 0.0,
+                     reason="pc_ratio not yet populated",
+                     horizon_seconds=horizon, cap=0.04)
+
+    pc_delta = state.pc_ratio_change(change_window_s)
+
+    if pc >= pc_hi:
+        # Fear extreme → BUY. Magnitude scales with how far beyond pc_hi.
+        over = pc - pc_hi
+        mag = min(1.0, over / max(pc_hi * 0.4, 1e-6))
+        # A rising pc_ratio (positive delta) reinforces fear → boost conviction.
+        boost = min(0.3, max(0.0, pc_delta) / max(change_ref, 1e-6) * 0.3)
+        signed = 0.45 + 0.45 * mag + boost
+        return _lean(tribe, min(1.0, signed),
+                     reason=f"pc_ratio={pc:.2f} (>{pc_hi:.2f}) fear fade Δ{change_window_s/60:.0f}m={pc_delta:+.2f}",
+                     horizon_seconds=horizon)
+
+    if pc <= pc_lo:
+        # Euphoria extreme → SELL. Magnitude scales with how far below pc_lo.
+        under = pc_lo - pc
+        mag = min(1.0, under / max(pc_lo * 0.4, 1e-6))
+        boost = min(0.3, max(0.0, -pc_delta) / max(change_ref, 1e-6) * 0.3)
+        signed = -(0.45 + 0.45 * mag + boost)
+        return _lean(tribe, max(-1.0, signed),
+                     reason=f"pc_ratio={pc:.2f} (<{pc_lo:.2f}) euphoria fade Δ{change_window_s/60:.0f}m={pc_delta:+.2f}",
+                     horizon_seconds=horizon)
+
+    # Mid-zone — idle.
+    return _lean(tribe, 0.0,
+                 reason=f"pc_ratio={pc:.2f} in neutral band [{pc_lo:.2f}, {pc_hi:.2f}]",
+                 horizon_seconds=horizon, cap=0.05)
+
+
+@register("stablecoin_flow_buyer")
+def stablecoin_flow_buyer(tribe: "Tribe", ts: datetime, state: MarketState) -> Vote:
+    """Macro allocator reading aggregate USDT+USDC circulating supply.
+
+    Expanding supply → fresh fiat bridging to exchanges → bullish bias on
+    BTC over 2-4h. Contracting supply → redemptions / deleveraging → bearish.
+
+    Two-window confirmation: the 6h change must cross a threshold AND the
+    24h trend must agree in sign. This double gate filters out the routine
+    daily minting noise (Tether mints in ~1B batches; we want the
+    multi-batch direction, not single events).
+
+    Idle: slight structural long bias per demographics.
+    """
+    p = tribe.spec.strategy.params
+    flow_window_s = float(p.get("flow_window_s", 21600.0))
+    pos_ref_pct = float(p.get("pos_ref_pct", 0.25))
+    neg_ref_pct = float(p.get("neg_ref_pct", 0.15))
+    trend_window_s = float(p.get("trend_window_s", 86400.0))
+    horizon = int(p.get("hold_seconds", 14400))
+
+    short_pct = state.stablecoin_supply_change_pct(flow_window_s)
+    long_pct = state.stablecoin_supply_change_pct(trend_window_s)
+
+    if state.last_stablecoin_combined is None:
+        return _lean(tribe, 0.0,
+                     reason="stablecoin supply not yet populated",
+                     horizon_seconds=horizon, cap=0.05)
+
+    # Bullish gate: 6h expansion + 24h trend agrees.
+    if short_pct >= pos_ref_pct and long_pct > 0:
+        mag = min(1.0, short_pct / max(pos_ref_pct * 3.0, 1e-6))
+        trend_boost = min(0.25, long_pct / max(pos_ref_pct * 2.0, 1e-6) * 0.25)
+        signed = 0.4 + 0.5 * mag + trend_boost
+        return _lean(tribe, min(1.0, signed),
+                     reason=f"stablecoin expansion 6h={short_pct:+.2f}% 24h={long_pct:+.2f}% → bullish bridge flow",
+                     horizon_seconds=horizon)
+
+    # Bearish gate: 6h contraction + 24h trend agrees.
+    if short_pct <= -neg_ref_pct and long_pct < 0:
+        mag = min(1.0, abs(short_pct) / max(neg_ref_pct * 3.0, 1e-6))
+        trend_boost = min(0.25, abs(long_pct) / max(neg_ref_pct * 2.0, 1e-6) * 0.25)
+        signed = -(0.4 + 0.5 * mag + trend_boost)
+        return _lean(tribe, max(-1.0, signed),
+                     reason=f"stablecoin contraction 6h={short_pct:+.2f}% 24h={long_pct:+.2f}% → redemption pressure",
+                     horizon_seconds=horizon)
+
+    # Mixed signals or within neutral band — idle with tribe's structural
+    # long bias.
+    return _lean(tribe, 0.0,
+                 reason=f"stablecoin flow neutral 6h={short_pct:+.2f}% 24h={long_pct:+.2f}%",
+                 horizon_seconds=horizon, cap=0.10)

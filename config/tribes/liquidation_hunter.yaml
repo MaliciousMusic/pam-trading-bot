@@ -99,6 +99,7 @@ indicators:
     low_bps: 20
     high_bps: 120
     prefer: high              # cascades happen in vol, not calm
+    use_realized: true        # log-return stddev tracks cascade intensity better than range highs
     weight: 0.5
 indicator_weight: 0.5
 # Cascades only exist in high realized vol. Crank up indicator lean when

@@ -105,5 +105,6 @@ indicators:
     low_bps: 10
     high_bps: 80
     prefer: low                 # spread arb prefers calm
+    use_realized: true          # log-return stddev avoids false-calm readings during wick-only chop
     weight: 0.4
 indicator_weight: 0.35

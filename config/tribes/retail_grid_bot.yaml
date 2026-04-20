@@ -100,6 +100,7 @@ indicators:
     low_bps: 10
     high_bps: 50
     prefer: low               # calm markets = grid paradise
+    use_realized: true        # log-return stddev — a single wick shouldn't kick grids out of low-vol mode
     weight: 0.3
 indicator_weight: 0.5
 # Grid bots thrive in chop, bleed in trends. Regime-shift UP in low vol,

@@ -1,0 +1,123 @@
+id: stablecoin_flow_buyer
+name: Stablecoin Flow Buyer
+description: >-
+  Macro-aware crypto allocators (Pantera, Multicoin, ParaFi, Polychain treasury
+  desk, a handful of family offices running crypto overlays) who watch aggregate
+  stablecoin supply as a leading indicator for BTC. Expansion of combined
+  USDT+USDC circulating supply = new fiat bridging to crypto exchanges = fresh
+  bid pressure 2-4h forward (Kaiko/Glassnode 2022-2024 research). Contraction =
+  redemptions = deleveraging flow. Slow structural signal — horizon in hours,
+  not minutes. Closes the "no tribe reads on-chain macro flow" gap.
+
+demographics:
+  # Sources: Pantera Blockchain Letter (monthly allocator disclosures),
+  # Multicoin thesis writeups, Polychain liquid-token fund filings, family
+  # office CIO interviews (Grayscale macro roundtables 2023-2024). ~10 desks
+  # globally run a stablecoin-flow overlay as an allocation driver. Per-desk
+  # BTC-directional sleeve is meaningful (~$20-80M). Geo_mid ~$45M × 10 = ~$450M.
+  capital_band_usd: [10000000, 200000000]
+  count_estimate: 10
+  experience_years: [8, 30]
+  jurisdiction: [NA, EU, APAC]
+
+hardware:
+  tier: workstation
+  typical_latency_ms: 200
+  uptime: daytime_concentrated
+  specs:
+    screens: 2-4
+    connectivity: fiber
+    platform: macro_allocator_desk
+
+software:
+  platforms: [coinbase_prime, binance_otc, fireblocks]
+  tools: [on_chain_flow_monitor, stablecoin_supply_tracker, glassnode_dashboard]
+  charting: advanced
+  order_types_used: [twap, vwap, iceberg]
+  data_feeds: [ohlcv_1h, ohlcv_1d, stablecoin_supply, funding]
+
+strategy:
+  family: stablecoin_flow_buyer
+  params:
+    # Primary flow window — 6h change in combined USDT+USDC supply. Positive
+    # change beyond `pos_ref_pct` triggers a bullish lean.
+    flow_window_s: 21600             # 6h
+    pos_ref_pct: 0.25                # +0.25% over 6h = meaningful expansion
+    neg_ref_pct: 0.15                # -0.15% = redemption pressure
+    # Confirmation window — 24h trend. Must agree in sign for full conviction.
+    trend_window_s: 86400            # 24h
+    hold_seconds: 14400              # 4h hold — slow macro signal
+  style_notes: >-
+    Slow, structural. Never chases intraday. Reads the 6h and 24h stablecoin
+    supply deltas; fires when the 6h change crosses a threshold AND the 24h
+    trend agrees. Conviction scales with the magnitude of the 6h change.
+
+attention:
+  kinds: [stablecoin_supply, trade, funding, oi]
+  tags: [stablecoin, mark_price]
+  ignored_tags: [news, social, liq_long, liq_short]
+  min_severity: 0.0
+
+personality:
+  # Patient, low FOMO, low panic. Allocator mindset — they're not trading
+  # the tape, they're placing directional bets on a multi-hour horizon.
+  risk_tolerance: 0.5
+  fomo: 0.0
+  panic: 0.05
+  patience: 0.95
+  herding: 0.1
+  reaction_mu_seconds: 600.0         # 10min to act on a fresh poll
+  reaction_sigma_seconds: 300.0
+
+flow:
+  weight: 0.08
+  # Stablecoin supply moves produce a meaningful reading in most windows —
+  # but only a fraction of those exceed our thresholds. ~30% activation.
+  activation_rate: 0.30
+  typical_hold_seconds: [7200, 43200]
+  default_conviction: 0.55
+  cooldown_seconds: 600
+
+disposition:
+  # Slight structural long bias — the macro thesis that stablecoin supply
+  # trends have grown long-run makes these desks mildly long-biased when
+  # there's no strong signal either way.
+  idle_bias: 0.1
+  idle_conviction: 0.08
+
+circadian:
+  # Macro allocator desks — heaviest during US hours, continuous presence
+  # elsewhere because the signal is slow and doesn't need immediate action.
+  timezone_label: "macro allocator"
+  presence_by_hour_utc:
+    [0.60, 0.55, 0.55, 0.55, 0.60, 0.65, 0.70, 0.75,
+     0.85, 0.95, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00,
+     0.95, 0.90, 0.85, 0.80, 0.75, 0.70, 0.65, 0.60]
+
+# Macro-flow lens — long-window price momentum + low-vol regime preference
+# (allocators don't lean into chaos; they deploy when the tape is orderly).
+indicators:
+  price_momentum:
+    window_s: 3600
+    ref_bps: 30
+    action: follow
+    weight: 0.5
+  volatility_regime:
+    window_s: 1800
+    low_bps: 20
+    high_bps: 100
+    prefer: low                      # deploy in orderly tape
+    use_realized: true
+    weight: 0.4
+  taker_imbalance:
+    window_s: 1800
+    reference_usd: 3000000
+    action: follow
+    weight: 0.3
+indicator_weight: 0.30
+# Prefers orderly regime — macro allocators don't step in during washouts.
+indicator_regime_range: 0.25
+indicator_regime_low_bps: 15
+indicator_regime_high_bps: 80
+indicator_regime_prefer: low
+indicator_regime_window_s: 1800

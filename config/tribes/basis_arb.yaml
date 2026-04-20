@@ -111,5 +111,6 @@ indicators:
     low_bps: 10
     high_bps: 80
     prefer: low                    # they want calm — cascades are ENEMIES of basis trades
+    use_realized: true             # log-return stddev is noise-robust vs wick-driven range
     weight: 0.4
 indicator_weight: 0.4              # strategy math carries most of the weight

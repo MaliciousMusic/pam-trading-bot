@@ -1,0 +1,134 @@
+id: news_scalper
+name: News Scalper
+description: >-
+  Headline-driven scalpers. Unlike `news_reactor` (which FADES overreactions
+  over a 5-10min window), this tribe FOLLOWS the initial spike for 30-90s
+  and exits before the fade. The two sides of the news-flow market: scalpers
+  ride the first leg, reactors fade the echo. Without this archetype, the
+  council is structurally blind to the fast-money headline-reaction flow
+  that often moves price before any "slow reader" has time to vote.
+
+demographics:
+  # Sources: NLP-driven headline-trading desks (Two Sigma, DE Shaw, Jump's
+  # "event" sleeve, dedicated RavenPack/Bloomberg-terminal scalpers). Small
+  # cohort — this requires custom NLP + sub-second order path. The retail
+  # cohort that tries this (TradingView alerts + discord) is captured in
+  # `ta_day_trader` already.
+  capital_band_usd: [5000000, 150000000]
+  count_estimate: 20
+  experience_years: [3, 20]
+  jurisdiction: [NA, EU, APAC]
+
+hardware:
+  tier: colo
+  typical_latency_ms: 2
+  uptime: continuous
+  specs:
+    placement: exchange_colo_or_peered
+    nlp: bloomberg_ravenpack_or_custom
+    feed: news_firehose
+
+software:
+  platforms: [custom_c++_oms, custom_python_strategy]
+  tools: [news_classifier, sentiment_nlp, event_calendar]
+  charting: minimal
+  order_types_used: [ioc, market, stop_market]
+  data_feeds: [news_rss, twitter_firehose, trades, funding]
+
+strategy:
+  family: news_scalper
+  params:
+    # Freshness window — news items older than this don't trigger the scalp.
+    # 2min captures the acute spike; the echo (past 2min) is `news_reactor`'s
+    # territory.
+    fresh_window_s: 120
+    # Pulse magnitude (severity × score) required to enter.
+    trigger_score: 0.3
+    # Residual-lean window (idle posture — how far back they read the tape
+    # when no fresh news is live).
+    long_window_s: 900
+    hold_seconds: 60               # exit in 60s — this is a scalp
+  style_notes: >-
+    Follows fresh severity-weighted news pulse. Exits inside 60s. Shares the
+    news surface with `news_reactor` but with opposite time-horizon and
+    direction (follow vs fade).
+
+attention:
+  kinds: [news, trade]
+  tags: [regulation, influencer, twitter, macro, business, mainstream]
+  ignored_tags: [liq_long, liq_short, taker_buy, taker_sell]
+  min_severity: 0.3
+
+personality:
+  # Hair-trigger on headlines, zero patience, minimal herding (they act
+  # faster than the herd). No FOMO, because it's not about missing moves —
+  # it's about classifying the headline correctly.
+  risk_tolerance: 0.55
+  fomo: 0.0
+  panic: 0.0
+  patience: 0.0
+  herding: 0.0
+  reaction_mu_seconds: 2.0
+  reaction_sigma_seconds: 3.0
+
+flow:
+  # weight is OVERRIDDEN at load time by derive.py. Value below documents
+  # the pre-derivation hand-tune.
+  weight: 0.06
+  # Only fires on fresh news; idle posture is a tiny residual lean.
+  # RavenPack disclosures: NLP-triggered orders fire on ~15-25% of market
+  # hours (weighted by news-heavy Tue/Wed/Thu during US session).
+  activation_rate: 0.20
+  typical_hold_seconds: [30, 120]
+  default_conviction: 0.70
+  cooldown_seconds: 30
+
+disposition:
+  # Flat between headlines — no structural view.
+  idle_bias: 0.0
+  idle_conviction: 0.03
+
+circadian:
+  # Continuous algo; activity concentrated in US + EU news windows where
+  # regulatory/macro headlines actually land (SEC files during US business
+  # hours, ECB/Fed through EU afternoon).
+  timezone_label: "US+EU news windows"
+  presence_by_hour_utc:
+    [0.40, 0.35, 0.35, 0.40, 0.50, 0.65, 0.80, 0.95,
+     1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00,
+     1.00, 0.95, 0.85, 0.70, 0.55, 0.50, 0.45, 0.40]
+
+# Scalper lens: the news signal carries the vote; indicators tune urgency.
+# Volatility prefer=high (scalpers want movement) and taker confirmation.
+indicators:
+  news_pulse:
+    window_s: 120
+    reference: 0.8
+    action: follow
+    weight: 1.0
+  news_pulse:regulation:
+    window_s: 120
+    tag: regulation
+    reference: 0.6
+    action: follow
+    weight: 0.7
+  price_momentum:
+    window_s: 60
+    ref_bps: 10
+    action: follow                 # confirms tape is already moving
+    weight: 0.5
+  volatility_regime:
+    window_s: 300
+    low_bps: 15
+    high_bps: 70
+    prefer: high                   # scalpers need vol
+    use_realized: true
+    weight: 0.4
+indicator_weight: 0.55
+# News scalpers activate only when realized vol is elevated (news in dead
+# tape rarely moves — trade needs a tape that's willing to trend for 60s).
+indicator_regime_range: 0.25
+indicator_regime_low_bps: 15
+indicator_regime_high_bps: 70
+indicator_regime_prefer: high
+indicator_regime_window_s: 300

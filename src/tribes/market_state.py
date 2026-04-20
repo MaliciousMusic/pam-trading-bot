@@ -188,6 +188,27 @@ class MarketState:
         self.htf_trend_score: float = 0.0
         self.htf_trend_tf: str = ""
         self.htf_trend_ts: datetime | None = None
+        # Phase G — Deribit options aggregate (polled every ~120s). Last-seen
+        # scalars plus a rolling series of put/call ratio and OI-weighted IV
+        # so tribes can read trend direction, not just latest value.
+        self.last_pc_ratio: float | None = None
+        self.last_net_delta_exposure_contracts: float | None = None
+        self.last_oi_weighted_strike: float | None = None
+        self.last_oi_weighted_iv: float | None = None
+        self.last_total_call_oi: float | None = None
+        self.last_total_put_oi: float | None = None
+        self.last_options_spot_ref: float | None = None
+        self.last_options_ts: datetime | None = None
+        self.pc_ratio_series = RollingSeries(7200.0)         # 2h history
+        self.iv_series = RollingSeries(7200.0)
+        # Phase G — stablecoin supply series (USDT + USDC combined). Polled
+        # every ~1800s, so 48h of history = 96 samples — comfortably enough
+        # for % change queries over 2/6/24h windows.
+        self.stablecoin_supply_series = RollingSeries(172800.0)  # 48h
+        self.last_usdt_supply: float | None = None
+        self.last_usdc_supply: float | None = None
+        self.last_stablecoin_combined: float | None = None
+        self.last_stablecoin_ts: datetime | None = None
 
     # -- derived signals ------------------------------------------------
 
@@ -296,6 +317,47 @@ class MarketState:
                 self.htf_trend_score = max(-1.0, min(1.0, float(sc)))
                 self.htf_trend_tf = str(ev.payload.get("timeframe") or "")
                 self.htf_trend_ts = ev.ts
+        elif ev.kind == "options_stats":
+            # Deribit options aggregate — put/call ratio, net delta exposure,
+            # OI-weighted strike + IV. Consumed by the gamma / pc_fader tribes.
+            p = ev.payload
+            pc = p.get("pc_ratio")
+            if isinstance(pc, (int, float)) and pc >= 0:
+                self.last_pc_ratio = float(pc)
+                self.pc_ratio_series.add(ev.ts, float(pc))
+            iv = p.get("oi_weighted_iv")
+            if isinstance(iv, (int, float)) and iv > 0:
+                self.last_oi_weighted_iv = float(iv)
+                self.iv_series.add(ev.ts, float(iv))
+            nde = p.get("net_delta_exposure_contracts")
+            if isinstance(nde, (int, float)):
+                self.last_net_delta_exposure_contracts = float(nde)
+            ows = p.get("oi_weighted_strike")
+            if isinstance(ows, (int, float)) and ows > 0:
+                self.last_oi_weighted_strike = float(ows)
+            tco = p.get("total_call_oi")
+            if isinstance(tco, (int, float)):
+                self.last_total_call_oi = float(tco)
+            tpo = p.get("total_put_oi")
+            if isinstance(tpo, (int, float)):
+                self.last_total_put_oi = float(tpo)
+            spot = p.get("spot_ref")
+            if isinstance(spot, (int, float)) and spot > 0:
+                self.last_options_spot_ref = float(spot)
+            self.last_options_ts = ev.ts
+        elif ev.kind == "stablecoin_supply":
+            p = ev.payload
+            usdt = p.get("usdt_supply")
+            usdc = p.get("usdc_supply")
+            combined = p.get("combined_supply")
+            if isinstance(usdt, (int, float)) and usdt > 0:
+                self.last_usdt_supply = float(usdt)
+            if isinstance(usdc, (int, float)) and usdc > 0:
+                self.last_usdc_supply = float(usdc)
+            if isinstance(combined, (int, float)) and combined > 0:
+                self.last_stablecoin_combined = float(combined)
+                self.stablecoin_supply_series.add(ev.ts, float(combined))
+            self.last_stablecoin_ts = ev.ts
         elif ev.kind == "cross_trade":
             # Cross-venue taker flow. Store signed notional per venue.
             venue = str(ev.payload.get("venue") or ev.source.split(".", 1)[0])
@@ -458,6 +520,31 @@ class MarketState:
         the vector for TradFi attention spikes."""
         return self.news.score(window_s, ["business", "mainstream"])
 
+    # -- options / stablecoin queries (Phase G) -------------------------
+
+    def pc_ratio_change(self, window_s: float) -> float:
+        """Δ in put/call ratio over `window_s` (absolute, not %). Positive
+        = fear building, negative = fear easing. 0 when series empty."""
+        fl = self.pc_ratio_series.first_last(window_s)
+        if fl is None:
+            return 0.0
+        return fl[1] - fl[0]
+
+    def iv_change_pct(self, window_s: float) -> float:
+        """% change in OI-weighted IV over `window_s`. 0 when empty."""
+        fl = self.iv_series.first_last(window_s)
+        if fl is None or fl[0] <= 0:
+            return 0.0
+        return (fl[1] - fl[0]) / fl[0] * 100.0
+
+    def stablecoin_supply_change_pct(self, window_s: float) -> float:
+        """% change in combined USDT+USDC supply over `window_s`. Positive
+        = net minting (bullish BTC proxy). 0 when series empty."""
+        fl = self.stablecoin_supply_series.first_last(window_s)
+        if fl is None or fl[0] <= 0:
+            return 0.0
+        return (fl[1] - fl[0]) / fl[0] * 100.0
+
     # -- projection support --------------------------------------------
 
     def snapshot(self) -> "MarketState":
@@ -502,6 +589,22 @@ class MarketState:
         s.htf_trend_score = self.htf_trend_score
         s.htf_trend_tf = self.htf_trend_tf
         s.htf_trend_ts = self.htf_trend_ts
+        # Phase G — options + stablecoin state.
+        s.last_pc_ratio = self.last_pc_ratio
+        s.last_net_delta_exposure_contracts = self.last_net_delta_exposure_contracts
+        s.last_oi_weighted_strike = self.last_oi_weighted_strike
+        s.last_oi_weighted_iv = self.last_oi_weighted_iv
+        s.last_total_call_oi = self.last_total_call_oi
+        s.last_total_put_oi = self.last_total_put_oi
+        s.last_options_spot_ref = self.last_options_spot_ref
+        s.last_options_ts = self.last_options_ts
+        s.pc_ratio_series._data = deque(self.pc_ratio_series._data)
+        s.iv_series._data = deque(self.iv_series._data)
+        s.last_usdt_supply = self.last_usdt_supply
+        s.last_usdc_supply = self.last_usdc_supply
+        s.last_stablecoin_combined = self.last_stablecoin_combined
+        s.last_stablecoin_ts = self.last_stablecoin_ts
+        s.stablecoin_supply_series._data = deque(self.stablecoin_supply_series._data)
         return s
 
     def advance_clock(self, ts: datetime) -> None:
@@ -519,4 +622,8 @@ class MarketState:
             series.advance_clock(ts)
         for series in self.cross_flow.values():
             series.advance_clock(ts)
+        # Phase G — options + stablecoin rolling series.
+        self.pc_ratio_series.advance_clock(ts)
+        self.iv_series.advance_clock(ts)
+        self.stablecoin_supply_series.advance_clock(ts)
         self.last_update = ts

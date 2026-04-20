@@ -91,6 +91,7 @@ indicators:
     low_bps: 15
     high_bps: 80
     prefer: low                  # base case is long-gamma / calm
+    use_realized: true           # log-return stddev matches gamma-regime inference (spot path, not wicks)
     weight: 0.6
   price_momentum:
     window_s: 900
