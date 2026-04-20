@@ -1,19 +1,22 @@
 id: ta_day_trader
 name: TA Day Trader
 description: >-
-  Screen-trader with TradingView premium + Binance pro or Bybit. Mid-size capital,
-  disciplined setups — waits for range breaks, retests, volume confirmation.
-  Not glued to every tick; reacts when a clean setup prints.
+  Unified TA day-trader cohort — consolidates the four previously-separate
+  regional variants (global/Asia/EU/US) into a single voice with circadian
+  modulation. Screen-trader with TradingView premium + Binance Pro / Bybit /
+  OKX / Coinbase Advanced. Disciplined setups — waits for range breaks,
+  retests, volume confirmation. Regional rhythm is captured by the circadian
+  curve (heaviest during EU-US overlap, lightest during APAC off-hours).
 
 demographics:
   # Sources: TradingView Premium paid-seat counts (crypto-tagged users),
   # Binance/Bybit "VIP 0–3" BTC-perps active-account bands from their
-  # rebate-tier disclosures, and Coinglass Pro subscriber counts. Genuine
-  # daily-active TA screen-traders on BTC perps ≈ 80k; prior 120k was
-  # optimistic (it mixed in alt-focused screen-traders).
-  capital_band_usd: [2000, 50000]
-  count_estimate: 80000
-  experience_years: [1, 8]
+  # rebate-tier disclosures, and Coinglass Pro subscriber counts.
+  # 120k = 80k global + 15k APAC + 10k EU + 15k NA subsets that were
+  # previously modeled as 4 separate tribes voting the same signal.
+  capital_band_usd: [2000, 75000]
+  count_estimate: 120000
+  experience_years: [1, 10]
   jurisdiction: [global]
 
 hardware:
@@ -104,6 +107,7 @@ indicators:
     low_bps: 10
     high_bps: 60
     prefer: high           # they WANT volatility; low vol = stand aside
+    use_realized: true     # log-return stddev — matches the "true expansion" TA traders actually look for
     weight: 0.4
 indicator_weight: 0.5
 # Setups need range breaks with volume — both pick up in expanding vol.

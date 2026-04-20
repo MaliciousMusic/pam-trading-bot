@@ -1,0 +1,131 @@
+id: capitulation_buyer
+name: Capitulation Buyer
+description: >-
+  Patient contrarian whales that FADE liq cascades once they've gone far
+  enough. Where `liquidation_hunter` and `cascade_amplifier` both FOLLOW
+  liquidation direction, this tribe FADES it — the "someone buys the
+  bottom" archetype. Activates only when TWO conditions co-sign: total
+  liq volume crosses a capitulation threshold AND price has travelled
+  more than ~1.3× realized vol (truly stretched, not just panicked).
+  Closes the 3-follow-0-fade bias the council carried across liq signals.
+
+demographics:
+  # Sources: BlockOne disclosures, Three Arrows (pre-bust) buy-the-dip
+  # flows, Jump Crypto opportunistic desk, single-family offices with
+  # deep BTC mandates (Fidelity DA, MassMutual treasury, MicroStrategy-
+  # style patient accumulation). capital_band is the per-event deployable
+  # capital — these desks sit on much larger balance sheets, but each
+  # capitulation trade is a sliced allocation, not the whole treasury.
+  # Geo_mid at ~$22M × 25 desks = ~$560M tribal AUM.
+  capital_band_usd: [5000000, 100000000]
+  count_estimate: 25
+  experience_years: [5, 25]
+  jurisdiction: [NA, EU, APAC, offshore]
+
+hardware:
+  tier: workstation
+  typical_latency_ms: 80
+  uptime: daytime_concentrated
+  specs:
+    screens: 1-3
+    connectivity: fiber
+    platform: institutional_desk
+
+software:
+  platforms: [binance_otc, coinbase_prime, bybit_institutional]
+  tools: [order_book_analyzer, realized_vol_monitor, atr_tracker]
+  charting: advanced
+  order_types_used: [iceberg, twap, limit]
+  data_feeds: [trades, liquidations, orderbook, ohlcv_1h]
+
+strategy:
+  family: capitulation_buyer
+  params:
+    # Liq window — total liq notional summed across window; must exceed
+    # min_liq_usd to qualify as capitulation (not drip liquidations).
+    liq_window_s: 120
+    min_liq_usd: 1200000
+    # Stretch window — price move measured against realized vol here.
+    # Move must exceed stretch_vol_mult × realized_vol to confirm "stretched."
+    stretch_window_s: 600
+    stretch_vol_mult: 1.3
+    hold_seconds: 1800             # 30min hold — slow mean reversion
+  style_notes: >-
+    Patient. Waits for BOTH a capitulation-sized liq event AND a
+    stretched-price event to co-sign before expressing a position.
+    Takes the OPPOSITE side of the cascade.
+
+attention:
+  kinds: [liquidation, trade, funding]
+  tags: [liq_long, liq_short, mark_price]
+  ignored_tags: [news, social]
+  min_severity: 0.3
+
+personality:
+  # Contrarian, patient, low herding (they lean AWAY from consensus).
+  # Low panic — a cascade is exactly when they get interested, not scared.
+  risk_tolerance: 0.55
+  fomo: 0.0
+  panic: 0.0
+  patience: 0.95
+  herding: 0.0
+  reaction_mu_seconds: 30.0
+  reaction_sigma_seconds: 45.0
+
+flow:
+  # weight is OVERRIDDEN at load time by derive.py. Value below documents
+  # the pre-derivation hand-tune.
+  weight: 0.08
+  # Rarely acts — only at capitulation+stretch. Historically ~5-12% of
+  # trading hours qualify (most days have no full capitulation event).
+  activation_rate: 0.08
+  typical_hold_seconds: [600, 7200]
+  default_conviction: 0.75
+  cooldown_seconds: 300
+
+disposition:
+  # Patient cash. A very weak contrarian lean to whatever flow exists —
+  # never actively against the tape, just not aligned with it.
+  idle_bias: 0.0
+  idle_conviction: 0.05
+
+circadian:
+  # Human-driven institutional desk. Heaviest during US business hours
+  # (13-22 UTC), reduced APAC and deep-night. NOT a colo algo.
+  timezone_label: "US desk hours"
+  presence_by_hour_utc:
+    [0.40, 0.35, 0.30, 0.30, 0.30, 0.40, 0.55, 0.70,
+     0.85, 0.95, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00,
+     0.95, 0.85, 0.75, 0.65, 0.55, 0.50, 0.45, 0.40]
+
+# Capitulation lens: liq_imbalance (FADE — against cascade), price_zscore
+# (FADE — mean revert), FGI (FADE — peak fear = buy signal).
+indicators:
+  liq_imbalance:
+    window_s: 120
+    reference_usd: 1200000
+    action: fade                   # fade the cascade
+    weight: 1.0
+  price_zscore:
+    window_s: 1800
+    extreme: 2.0
+    action: fade
+    weight: 0.7
+  fgi_bias:
+    action: fade                   # peak fear → buy
+    weight: 0.4
+  volatility_regime:
+    window_s: 600
+    low_bps: 20
+    high_bps: 100
+    prefer: high                   # capitulation requires vol
+    use_realized: true
+    weight: 0.3
+indicator_weight: 0.40
+# Capitulation buyer fires in HIGH realized vol (an actual wash-out).
+# In a calm tape there's nothing to fade.
+indicator_regime_range: 0.25
+indicator_regime_low_bps: 25
+indicator_regime_high_bps: 100
+indicator_regime_prefer: high
+indicator_regime_window_s: 600

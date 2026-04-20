@@ -16,7 +16,11 @@ demographics:
   # capital-heavy — the people who *can* see the queue are the ones who
   # built or paid for direct L2 feeds and depth recorders.
   capital_band_usd: [10000000, 250000000]
-  count_estimate: 30
+  # Raised 30 → 40 to reflect the realistic global roster of HFT shops with
+  # full-depth L2 feeds and queue-position estimators (Jump, Tower, XTX,
+  # Hudson River, Wintermute, Radix, Jane Street crypto desk, B2C2, etc.).
+  # The previous 30 under-counted the number of firms running this tech.
+  count_estimate: 40
   experience_years: [4, 25]
   jurisdiction: [NA, EU, APAC]
 
@@ -78,9 +82,10 @@ flow:
   # the pre-derivation hand-tune.
   weight: 0.05
   # Constantly scanning depth — but only acts when one of the four sub-
-  # signals crosses threshold. Empirically that's roughly every 5-8 ticks
-  # in a healthy book → ~15% activation.
-  activation_rate: 0.15
+  # signals crosses threshold. Raised 0.15 → 0.20 because the prober runs
+  # four orthogonal detectors (L2 imb + queue decay + iceberg + entropy);
+  # the ANY-trigger union fires more often than the old calibration assumed.
+  activation_rate: 0.20
   typical_hold_seconds: [30, 240]
   default_conviction: 0.55
   cooldown_seconds: 0
@@ -113,6 +118,7 @@ indicators:
     low_bps: 10
     high_bps: 60
     prefer: low                # iceberg/queue reads are cleanest in low vol
+    use_realized: true         # log-return stddev catches quiet tapes more reliably than wicks
     weight: 0.4
 indicator_weight: 0.15        # microstructure math is the vote; indicators add minor color
 indicator_regime_range: 0.20

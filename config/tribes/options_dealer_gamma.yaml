@@ -1,0 +1,131 @@
+id: options_dealer_gamma
+name: Options Dealer Gamma
+description: >-
+  Specialized options market-makers (Wintermute, GSR, Amber Group, Cumberland,
+  Genesis, QCP) whose delta-hedging flow is a known driver of spot. Reads the
+  Deribit book summary to estimate the dealer gamma regime and positions spot
+  accordingly: in a suspected LONG-gamma regime near a large OI-weighted strike
+  with compressed realized vol, dealers mean-revert spot toward the strike
+  (the "gamma pin"). In a suspected SHORT-gamma regime (elevated vol, large
+  unbalanced OI), dealer hedging AMPLIFIES moves, so we follow recent flow.
+  No one else in the council reads options OI structure — this tribe adds
+  the orthogonal options-hedging channel identified in the Phase G audit.
+
+demographics:
+  # Sources: public comments by Deribit (Luuk Strijers), CME options volume
+  # leaderboards, Paradigm OTC flow disclosures. ~12 desks globally dominate
+  # BTC options market-making. capital_band is BTC-delta deployable capital
+  # per desk — not their full balance sheet, but the working capital they
+  # allocate to hedge BTC option inventory. Geo_mid ~$20M × 12 = ~$240M.
+  capital_band_usd: [5000000, 80000000]
+  count_estimate: 12
+  experience_years: [6, 20]
+  jurisdiction: [NA, EU, APAC, offshore]
+
+hardware:
+  tier: colo
+  typical_latency_ms: 8
+  uptime: continuous
+  specs:
+    placement: cloud_near_exchange
+    data: deribit_book_plus_spot
+    feed: options_aggregate
+
+software:
+  platforms: [custom_python_strategy, paradigm_rfq, deribit_api]
+  tools: [gamma_surface_builder, realized_vol_engine, spot_delta_hedger]
+  charting: options_dashboard
+  order_types_used: [limit, iceberg, twap]
+  data_feeds: [trades, orderbook, options_stats, ohlcv_1h]
+
+strategy:
+  family: options_dealer_gamma
+  params:
+    # Realized-vol window used to classify gamma regime. Below low_vol_bps we
+    # assume long-gamma (dealers mean-revert via delta hedging). Above
+    # high_vol_bps we assume short-gamma (dealers amplify moves).
+    vol_window_s: 900
+    low_vol_bps: 25.0
+    high_vol_bps: 80.0
+    # Pin trigger — price must be within pin_band_bps of the OI-weighted
+    # strike for the gamma-pin reversal to fire.
+    pin_band_bps: 150.0
+    # Recent flow window used in the amplify branch (short-gamma regime).
+    flow_window_s: 300
+    flow_ref_usd: 2500000
+    hold_seconds: 1200               # 20min — gamma dynamics are intraday
+  style_notes: >-
+    Two distinct modes. PIN MODE (long-gamma + low vol + near OI-strike):
+    lean toward the strike, fading the current deviation. AMPLIFY MODE
+    (short-gamma + high vol + clear net OI imbalance): lean with recent
+    taker flow. Otherwise idle.
+
+attention:
+  kinds: [trade, funding, options_stats]
+  tags: [mark_price, price, options]
+  ignored_tags: [news, social, liq_long, liq_short]
+  min_severity: 0.0
+
+personality:
+  # Quant-driven, low panic, low FOMO. Patient because the hedging loop
+  # only matters on the clock of option expiries, not on ticks.
+  risk_tolerance: 0.55
+  fomo: 0.0
+  panic: 0.05
+  patience: 0.8
+  herding: 0.15
+  reaction_mu_seconds: 45.0
+  reaction_sigma_seconds: 60.0
+
+flow:
+  weight: 0.08
+  # Active only when the gamma regime is identifiable AND its gate fires.
+  # Mixing both modes, ~15% of hours qualify per Deribit flow research.
+  activation_rate: 0.15
+  typical_hold_seconds: [600, 3600]
+  default_conviction: 0.55
+  cooldown_seconds: 300
+
+disposition:
+  # Neutral by default — no persistent lean. The tribe either has a
+  # regime read or it sits.
+  idle_bias: 0.0
+  idle_conviction: 0.05
+
+circadian:
+  # Algorithmic hedging desks, 24/7 with a mild US-hours concentration
+  # (most options volume clusters around US session for BTC).
+  timezone_label: "24/7 options desk"
+  presence_by_hour_utc:
+    [0.80, 0.75, 0.75, 0.75, 0.80, 0.85, 0.90, 0.95,
+     1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00,
+     1.00, 0.95, 0.90, 0.90, 0.85, 0.85, 0.85, 0.80]
+
+# Options-gamma lens: volatility_regime + price_zscore. In the pin branch
+# the strategy fades price_zscore toward the strike (mean-reversion).
+indicators:
+  price_zscore:
+    window_s: 1800
+    extreme: 1.5
+    action: fade                     # mean-revert toward OI-weighted strike
+    weight: 0.6
+  volatility_regime:
+    window_s: 900
+    low_bps: 25
+    high_bps: 80
+    prefer: low                      # pin mode needs low realized vol
+    use_realized: true
+    weight: 0.5
+  taker_imbalance:
+    window_s: 300
+    reference_usd: 2500000
+    action: follow                   # confirms the amplify-mode direction
+    weight: 0.4
+indicator_weight: 0.35
+# Mild regime filter — gamma stories play out in both vol regimes but we
+# weight toward the middle to avoid activating in dead chop.
+indicator_regime_range: 0.20
+indicator_regime_low_bps: 20
+indicator_regime_high_bps: 100
+indicator_regime_prefer: middle
+indicator_regime_window_s: 900

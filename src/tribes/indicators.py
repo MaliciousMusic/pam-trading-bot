@@ -131,17 +131,29 @@ def price_momentum(state: MarketState, window_s: float = 60.0,
 @register("volatility_regime")
 def volatility_regime(state: MarketState, window_s: float = 600.0,
                       low_bps: float = 15.0, high_bps: float = 80.0,
-                      prefer: str = "low", **_: Any) -> float:
-    """Range volatility: (high - low) / mid in bps over `window_s`.
+                      prefer: str = "low", use_realized: bool = False,
+                      **_: Any) -> float:
+    """Volatility regime signal. Two measurement modes:
+
+      use_realized=False (default): range bps = (high-low)/mid × 10_000.
+          Fast but spike-dominated — a single wick inflates the reading.
+      use_realized=True: log-return stddev × sqrt(N) × 10_000.
+          Noise-robust — averages over the whole sample path, not just
+          the extremes. Better proxy for "how nervous is this tape."
+
     Returns +1 when the tribe is in its preferred regime, -1 when not.
       prefer="low"  → mean-reverters, grid bots: they want calm.
       prefer="high" → breakout, liq-hunter: they want violence.
-    Silent when no range."""
-    rng = state.price_range(window_s)
-    if rng is None or rng[0] <= 0:
-        return 0.0
-    lo, hi = rng
-    vol_bps = (hi - lo) / ((hi + lo) / 2.0) * 10_000.0
+    Silent when no data."""
+    vol_bps: float | None = None
+    if use_realized:
+        vol_bps = state.realized_vol_bps(window_s)
+    if vol_bps is None:
+        rng = state.price_range(window_s)
+        if rng is None or rng[0] <= 0:
+            return 0.0
+        lo, hi = rng
+        vol_bps = (hi - lo) / ((hi + lo) / 2.0) * 10_000.0
     mid = (low_bps + high_bps) / 2.0
     half = max((high_bps - low_bps) / 2.0, 1.0)
     raw = _clip((vol_bps - mid) / half)               # +1 high vol, -1 low vol

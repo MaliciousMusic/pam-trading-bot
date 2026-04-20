@@ -105,6 +105,7 @@ indicators:
     low_bps: 8
     high_bps: 50
     prefer: low             # low-vol = tight quotes = happy MM
+    use_realized: true      # log-return stddev is more spike-robust than range
     weight: 0.5
 indicator_weight: 0.35     # MM math carries the vote; indicators tune it
 # Toxicity defense: in high realized vol MMs mute their directional lean

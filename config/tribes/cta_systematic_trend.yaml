@@ -1,0 +1,133 @@
+id: cta_systematic_trend
+name: Systematic CTA Trend
+description: >-
+  Systematic managed-futures shops (Man AHL, Winton, Aspect, Transtrend, AQR
+  Managed Futures) running classic 60/120-day trend-following with vol-adjusted
+  sizing. Long-horizon regime readers: they enter when the higher-timeframe
+  trend is CLEAR and size DOWN in high realized vol. Nobody else in the council
+  reads the 1h regime bias through a sizing-rail lens — the rest either chase
+  intraday moves (breakout_trader, momentum_chaser) or ignore regime entirely.
+  Added to close the "slow, disciplined, regime-following capital" gap that was
+  previously missing from the roster.
+
+demographics:
+  # Sources: Societe Generale CTA Index constituents with disclosed crypto
+  # allocation (35 of ~60 top-tier CTAs added BTC futures 2022-2024), plus
+  # multi-strat pods at Citadel/Millennium running systematic trend sleeves.
+  # IMPORTANT: capital_band is the BTC-perps-active sleeve per fund, NOT
+  # total fund AUM. CTAs typically run 2-5% of AUM in crypto — so a $1B
+  # AHL fund contributes ~$20M-$50M of BTC directional capital, not $1B.
+  # Geo_mid at ~$32M × 35 funds = ~$1.1B of tribal AUM, aligning with
+  # other institutional cohorts (swing_trend, basis_arb tiers).
+  capital_band_usd: [10000000, 100000000]
+  count_estimate: 35
+  experience_years: [10, 40]
+  jurisdiction: [NA, EU, APAC]
+
+hardware:
+  tier: colo
+  typical_latency_ms: 5
+  uptime: continuous
+  specs:
+    placement: cloud_near_exchange
+    data: kline_1h_polled
+    feed: multi_asset
+
+software:
+  platforms: [custom_python_strategy, kdb_tickdb]
+  tools: [trend_strength_estimator, realized_vol_engine, portfolio_risk_parity]
+  charting: none
+  order_types_used: [twap, vwap, limit]
+  data_feeds: [ohlcv_1h, ohlcv_1d, funding, oi]
+
+strategy:
+  family: cta_systematic_trend
+  params:
+    # Realized-vol window (14min ≈ 14-period ATR on 1min bars). Sizing is
+    # scaled down as vol climbs toward `vol_cap_bps`.
+    vol_window_s: 840
+    vol_cap_bps: 80.0
+    # HTF trend score magnitude required to take a trend position.
+    htf_threshold: 0.30
+    # Intraday continuation read — 20min move must align with HTF regime.
+    continuation_window_s: 1200
+    continuation_ref_bps: 40.0
+    hold_seconds: 14400            # 4h hold — slow, structural
+  style_notes: >-
+    CTAs do not tick-trade. They position on HTF regime and rebalance every
+    few hours. Conviction decays in high vol (sizing rail), expands in
+    sustained low-vol trends.
+
+attention:
+  kinds: [trade, funding, oi]
+  tags: [mark_price, price]
+  ignored_tags: [news, social, liq_long, liq_short]
+  min_severity: 0.0
+
+personality:
+  # Disciplined, patient, slow. They don't chase and don't panic — the
+  # signal either fires at rebalance or it doesn't.
+  risk_tolerance: 0.5
+  fomo: 0.0
+  panic: 0.1
+  patience: 0.9
+  herding: 0.1
+  reaction_mu_seconds: 300.0        # rebalances on 5min cadence
+  reaction_sigma_seconds: 180.0
+
+flow:
+  # weight is OVERRIDDEN at load time by derive.py. Value below documents
+  # the pre-derivation hand-tune.
+  weight: 0.18
+  # CTAs carry a position nearly always, but only express a NEW directional
+  # vote when regime + continuation co-sign. Kaiko & SocGen CTA decomp show
+  # ~30-40% of hourly rebalances carry a fresh directional push.
+  activation_rate: 0.35
+  typical_hold_seconds: [3600, 43200]
+  default_conviction: 0.55
+  cooldown_seconds: 300
+
+disposition:
+  # Never truly flat — they're always positioned in the direction of
+  # whatever regime their model says is live.
+  idle_bias: 0.0
+  idle_conviction: 0.12
+
+circadian:
+  # Systematic algos. Continuous. Slight dip during Asia dead-hours when
+  # rebalance windows align with TradFi session closes.
+  timezone_label: "24/7 systematic"
+  presence_by_hour_utc:
+    [0.90, 0.85, 0.85, 0.85, 0.90, 0.95, 1.00, 1.00,
+     1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00,
+     1.00, 1.00, 1.00, 0.95, 0.90, 0.90, 0.90, 0.90]
+
+# CTA lens: long-window price momentum + vol regime (prefer low, since
+# trend-following works best in non-chop regimes). No news, no social.
+indicators:
+  price_momentum:
+    window_s: 1800
+    ref_bps: 40
+    action: follow
+    weight: 0.9
+  volatility_regime:
+    window_s: 840
+    low_bps: 20
+    high_bps: 80
+    prefer: low                    # CTAs size DOWN in vol spikes
+    use_realized: true
+    weight: 0.6
+  taker_imbalance:
+    window_s: 600
+    reference_usd: 2000000
+    action: follow                 # confirms the long-window trend direction
+    weight: 0.4
+indicator_weight: 0.40
+# Trend regimes: CTAs want sustained low-vol trends. Dead chop (very low
+# realized vol + no direction) → they sit. Vol spikes → they size down
+# further (regime-filter blocks them).
+indicator_regime_range: 0.25
+indicator_regime_low_bps: 20
+indicator_regime_high_bps: 80
+indicator_regime_prefer: low
+indicator_regime_window_s: 840

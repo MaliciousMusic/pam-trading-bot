@@ -1,0 +1,118 @@
+id: put_call_fader
+name: Put/Call Ratio Fader
+description: >-
+  Discretionary and quant contrarians who use the BTC options put/call ratio
+  as a crowd-fear gauge. High pc_ratio (e.g. >1.3) = aggregate option-buyers
+  are loading puts = extreme fear reading → BUY spot against the crowd.
+  Low pc_ratio (e.g. <0.6) = call-heavy speculation = euphoria → SELL spot.
+  Differs from FGI-based sentiment tribes because options-derived crowd
+  positioning is cleaner (cost real capital to express) than survey-style
+  FGI. Closes the "no tribe reads options crowd positioning" gap.
+
+demographics:
+  # Sources: Capriole, Skew (now part of Coinbase), Amberdata options research,
+  # small-family-office discretionary traders who subscribe to Deribit flow
+  # dashboards. ~15 distinct desks/HNW traders globally run this style
+  # systematically. Geo_mid ~$13M × 15 = ~$195M of tribal AUM.
+  capital_band_usd: [3000000, 60000000]
+  count_estimate: 15
+  experience_years: [5, 25]
+  jurisdiction: [NA, EU, APAC, offshore]
+
+hardware:
+  tier: workstation
+  typical_latency_ms: 60
+  uptime: daytime_concentrated
+  specs:
+    screens: 2-4
+    connectivity: fiber
+    platform: discretionary_desk
+
+software:
+  platforms: [binance_pro, deribit_web, tradingview]
+  tools: [options_flow_terminal, pc_ratio_tracker, sentiment_aggregator]
+  charting: advanced
+  order_types_used: [limit, market, iceberg]
+  data_feeds: [trades, options_stats, funding, ohlcv_1h]
+
+strategy:
+  family: put_call_fader
+  params:
+    # Pc_ratio tail thresholds. Below `lo` = euphoria (fade → SELL), above
+    # `hi` = fear (fade → BUY). Between them the tribe idles.
+    pc_ratio_lo: 0.60
+    pc_ratio_hi: 1.30
+    # Reference pc-ratio DELTA over a short window — a sudden spike in the
+    # fear/greed direction boosts conviction (captures regime shifts, not
+    # just static extremes).
+    change_window_s: 1800
+    change_ref: 0.20
+    hold_seconds: 3600               # 1h hold — contrarian bets need time
+  style_notes: >-
+    Pure crowd-contrarian via options positioning. Never chases direction.
+    Conviction scales linearly with distance beyond the tail threshold,
+    boosted by the short-window pc-ratio CHANGE (spike captures).
+
+attention:
+  kinds: [options_stats, trade, funding]
+  tags: [options, mark_price]
+  ignored_tags: [news, social, liq_long, liq_short]
+  min_severity: 0.0
+
+personality:
+  # Contrarian, low herding, moderate patience. Not a panicker — their thesis
+  # is "the crowd is wrong at extremes" so crowd panic is an opportunity.
+  risk_tolerance: 0.5
+  fomo: 0.0
+  panic: 0.1
+  patience: 0.75
+  herding: 0.0
+  reaction_mu_seconds: 120.0
+  reaction_sigma_seconds: 90.0
+
+flow:
+  weight: 0.07
+  # Active only when pc_ratio is in a tail — roughly 20% of observed windows
+  # per Deribit research.
+  activation_rate: 0.20
+  typical_hold_seconds: [1800, 14400]
+  default_conviction: 0.6
+  cooldown_seconds: 180
+
+disposition:
+  # Idle means "nothing to fade" — flat. No default directional lean.
+  idle_bias: 0.0
+  idle_conviction: 0.04
+
+circadian:
+  # Discretionary humans. Most active in US and EU hours; noticeably softer
+  # during Asia overnight.
+  timezone_label: "US/EU desk hours"
+  presence_by_hour_utc:
+    [0.35, 0.30, 0.30, 0.30, 0.35, 0.50, 0.65, 0.80,
+     0.95, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00,
+     0.95, 0.90, 0.85, 0.75, 0.65, 0.55, 0.45, 0.40]
+
+# Contrarian lens — fade both FGI and price_zscore to line up with the
+# options-crowd fade expressed through pc_ratio.
+indicators:
+  price_zscore:
+    window_s: 3600
+    extreme: 2.0
+    action: fade
+    weight: 0.5
+  fgi_bias:
+    action: fade                     # aligns with contrarian thesis
+    weight: 0.5
+  taker_imbalance:
+    window_s: 600
+    reference_usd: 1500000
+    action: fade                     # fade short-term pressure too
+    weight: 0.3
+indicator_weight: 0.35
+# No strong regime preference — crowd extremes can occur in any vol regime.
+indicator_regime_range: 0.10
+indicator_regime_low_bps: 20
+indicator_regime_high_bps: 120
+indicator_regime_prefer: middle
+indicator_regime_window_s: 1800
