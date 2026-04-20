@@ -794,6 +794,16 @@ class ChessProjector:
             if den_ds > 0.0:
                 driver_skill_avg = num_ds / den_ds
 
+        # Realized-volatility rail (Task 2). Compute once per tick from the
+        # shared MarketState price history and publish on the Forecast so
+        # both the paper executor and every shadow ledger see the same
+        # number. None when there aren't enough price samples yet — in
+        # which case executors skip the cap and trust the raw forecast.
+        try:
+            realized_vol_bps = state.realized_vol_bps(840.0)
+        except Exception:
+            realized_vol_bps = None
+
         logger.debug(
             "projector: {} steps, move {:+.1f}bps, signal={:.2f} dir={:.2f} "
             "conf={:.2f} σ₀={:.1f} tribes={}",
@@ -818,6 +828,7 @@ class ChessProjector:
             driver_skill_avg=driver_skill_avg,
             harvest_mass_ratio=harvest_mass_ratio,
             conviction_boost=conviction_boost,
+            realized_vol_bps=realized_vol_bps,
         )
 
     # -- Phase 1a: redundancy / cross-correlation ------------------------

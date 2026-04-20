@@ -135,6 +135,13 @@ class Forecast:
     # from the boost vs. the raw consensus.
     harvest_mass_ratio: float | None = None
     conviction_boost: float | None = None
+    # Realized-volatility sanity rail (Task 2 — volatility rail). Total-window
+    # sigma of log-returns in bps, computed from MarketState.prices over a
+    # fixed 14-min window at project() time. Executors clamp the forecast's
+    # expected_move_bps at entry to 1.25× this value so a predatory harvest
+    # boost can't stamp a position with a target beyond what market vol has
+    # produced recently. None when there aren't enough price samples yet.
+    realized_vol_bps: float | None = None
 
 
 @dataclass(slots=True)
@@ -157,6 +164,13 @@ class Position:
     # move peaked. Executor closes the position if held significantly past
     # this point (see PaperExecutor.shape_grace_seconds). 0 disables.
     peak_favorable_s: int = 0
+    # Predatory-harvest trust premium that inflated this entry's expected
+    # move (Task 1 — de-coupling conviction from distance). Stamped from
+    # forecast.conviction_boost at open. The forecast-target TP exit layer
+    # divides expected_move_bps by this to recover the raw consensus move
+    # before sizing its target — without it, a 1.5× harvest boost sets a TP
+    # 50% farther out than the council's unbiased prediction.
+    conviction_boost: float = 1.0
     # Shadow-ledger ownership. None on the real council portfolio; set to the
     # tribe id when the position lives inside a TribeShadowLedger so audit/UI
     # can split equity curves without threading a second Position subclass.
@@ -188,3 +202,8 @@ class TradeIntent:
     horizon_seconds: int = 0
     # Shape-aware exit metadata (see Position.peak_favorable_s).
     peak_favorable_s: int = 0
+    # Forwarded from Forecast so the executor can (a) stamp it onto the new
+    # Position for exit-time de-boosting and (b) apply the volatility sanity
+    # rail at entry. Defaults keep older callers working.
+    conviction_boost: float = 1.0
+    realized_vol_bps: float | None = None

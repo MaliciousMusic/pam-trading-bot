@@ -381,7 +381,21 @@ class TribeShadowLedger:
         pid = f"s-{self.tribe_id}-{self._next_id:04d}"
         self._next_id += 1
         peak_s = self._peak_favorable_seconds(forecast, side)
+        # Task 2 — volatility sanity rail. Mirror of PaperExecutor._open:
+        # clamp the stamped expected_move_bps at 1.25× the realized 14-min
+        # sigma published on the Forecast. Task 1 — stamp conviction_boost
+        # so the Layer 2b TP exit can recover the raw council move.
         emove = float(forecast.expected_move_bps)
+        rail_bps = getattr(forecast, "realized_vol_bps", None)
+        if rail_bps is not None and rail_bps > 0:
+            cap = 1.25 * rail_bps
+            mag = abs(emove)
+            if mag > cap:
+                sign = 1.0 if emove >= 0 else -1.0
+                emove = sign * cap
+        boost = float(getattr(forecast, "conviction_boost", 1.0) or 1.0)
+        if boost <= 0:
+            boost = 1.0
         pos = Position(
             id=pid,
             side=side,
@@ -394,6 +408,7 @@ class TribeShadowLedger:
             expected_move_bps=emove,
             confidence=float(getattr(forecast, "confidence", 0.0)),
             peak_favorable_s=peak_s,
+            conviction_boost=boost,
             tribe_id=self.tribe_id,
         )
         self._positions.append(pos)
@@ -403,14 +418,20 @@ class TribeShadowLedger:
 
     def _peak_favorable_seconds(self, forecast: Forecast, side: Side) -> int:
         """Same as DecisionEngine._peak_favorable_seconds, isolated copy so
-        shadow exits don't depend on decision-engine internals."""
+        shadow exits don't depend on decision-engine internals. Task 3 —
+        de-boost the curve before argmax so the holding window reflects
+        the un-boosted alpha peak, not the predatory-inflated one."""
         curve = getattr(forecast, "steps_bps", None)
         if not curve:
             return 0
+        boost = float(getattr(forecast, "conviction_boost", 1.0) or 1.0)
+        if boost <= 0:
+            boost = 1.0
+        raw_curve = [b / boost for b in curve] if boost != 1.0 else curve
         if side is Side.BUY:
-            idx = max(range(len(curve)), key=lambda i: curve[i])
+            idx = max(range(len(raw_curve)), key=lambda i: raw_curve[i])
         else:
-            idx = min(range(len(curve)), key=lambda i: curve[i])
+            idx = min(range(len(raw_curve)), key=lambda i: raw_curve[i])
         if idx <= 0:
             return 0
         step_seconds = forecast.horizon_seconds / max(1, len(curve))
@@ -478,13 +499,20 @@ class TribeShadowLedger:
                         True, False,
                     )
 
-        # Layer 2b — forecast-target TP.
+        # Layer 2b — forecast-target TP. Mirror of PaperExecutor Task 1:
+        # divide out the harvest conviction_boost stamped at entry so the
+        # target reflects the raw council forecast, not the predatory
+        # 1.5× inflation. The sanity rail at _open_position (Task 2) has
+        # already bounded p.expected_move_bps against realized vol.
         if self.forecast_tp_factor > 0.0 and p.expected_move_bps != 0.0:
-            target = abs(p.expected_move_bps) * p.confidence * self.forecast_tp_factor
+            boost = p.conviction_boost if p.conviction_boost > 0 else 1.0
+            raw_move = p.expected_move_bps / boost
+            target = abs(raw_move) * p.confidence * self.forecast_tp_factor
             target = max(target, self.forecast_tp_min_bps)
             if target >= rt_fees_bps and unreal_bps >= target:
                 return (
-                    f"forecast TP unreal={unreal_bps:+.1f}bps target={target:.1f}bps",
+                    f"forecast TP unreal={unreal_bps:+.1f}bps target={target:.1f}bps "
+                    f"raw={raw_move:+.1f} (boost×{boost:.2f})",
                     True, False,
                 )
 

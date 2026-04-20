@@ -189,6 +189,39 @@ class MarketState:
         self.htf_trend_tf: str = ""
         self.htf_trend_ts: datetime | None = None
 
+    # -- derived signals ------------------------------------------------
+
+    def realized_vol_bps(self, window_s: float = 840.0) -> float | None:
+        """Total-window stddev of log-returns in bps over the last
+        ``window_s`` of trade prices. Used by the projector as a realized-
+        volatility rail against the predatory harvest boost — a forecast
+        expected-move greater than 1.25× this value is clamped at entry.
+
+        Default window is 14 minutes (14 × 60s), the convention for 14-period
+        ATR on 1-min bars. Returns None when fewer than three usable samples
+        fall in the window (cold start / long gap in trade flow).
+
+        Scaling: per-tick log-return sigma × √N → cumulative-window sigma.
+        Multiplied by 1e4 to express as basis points of price.
+        """
+        import math
+        samples = list(self.prices._window(window_s))
+        if len(samples) < 3:
+            return None
+        px = [v for _, v in samples if v is not None and v > 0]
+        if len(px) < 3:
+            return None
+        rets: list[float] = []
+        for i in range(1, len(px)):
+            if px[i - 1] > 0 and px[i] > 0:
+                rets.append(math.log(px[i] / px[i - 1]))
+        if len(rets) < 2:
+            return None
+        mean = sum(rets) / len(rets)
+        var = sum((r - mean) ** 2 for r in rets) / (len(rets) - 1)
+        sigma_per_tick = math.sqrt(var)
+        return sigma_per_tick * math.sqrt(len(rets)) * 1e4
+
     # -- ingest ---------------------------------------------------------
 
     def ingest(self, ev: Event) -> None:
