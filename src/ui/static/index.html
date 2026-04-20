@@ -117,6 +117,22 @@
     text-transform:uppercase;margin-bottom:2px}
   .m .v{font-family:var(--mono);font-size:12px;font-weight:600;transition:color .3s}
   .m .floor{font-size:7px;color:var(--dim);margin-top:1px;font-family:var(--mono)}
+  /* Phase 15 — second metrics row (diversity, crowd share, avg horizon) */
+  .metrics-phase15{grid-template-columns:1fr 1fr 1fr 1fr}
+  .metrics-phase15 .m{background:var(--bg3)}
+  /* Per-category buy/sell mass strip: one column per archetype category.
+     Each column stacks a buy slice (top, green) above a sell slice (bottom,
+     red); heights sum to the category's share of total directional mass. */
+  .cat-mass{display:grid;grid-template-columns:repeat(9,1fr);gap:2px;
+    height:22px;margin-top:2px}
+  .cat-mass .col{position:relative;background:var(--bg3);border-radius:1px;
+    overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end;
+    font-size:6.5px;color:var(--muted);text-align:center;letter-spacing:.04em}
+  .cat-mass .col .buy{background:rgba(77,187,110,.55);width:100%}
+  .cat-mass .col .sell{background:rgba(217,79,79,.55);width:100%}
+  .cat-mass .col .lbl{position:absolute;bottom:1px;left:0;right:0;
+    font-family:var(--mono);font-size:6.5px;color:var(--fg);
+    text-shadow:0 0 2px rgba(0,0,0,.7);pointer-events:none;text-transform:uppercase}
 
   /* ── CENTER — Charts ─────────────────── */
   .charts-panel{display:flex;flex-direction:column;
@@ -125,17 +141,55 @@
   .chart-box{display:flex;flex-direction:column;padding:10px 14px;min-height:0;overflow:hidden}
   .chart-box.price{flex:1}
   .chart-box.equity{flex-shrink:0;height:88px}
-  .chart-box.accmap{flex-shrink:0;padding:5px 10px 6px}
-  .accmap-wrap{display:flex;gap:4px;align-items:stretch;margin-top:3px}
-  .accmap-rows{display:flex;flex-direction:column;gap:1px;flex-shrink:0;font-size:9px;line-height:1}
-  .accmap-rows .row{display:flex;align-items:center;gap:3px;height:9px;color:var(--muted);white-space:nowrap}
-  .accmap-rows .row i{width:5px;height:5px;border-radius:50%;flex:none}
-  .accmap-rows .row.global{color:#e8e3d4;font-weight:600}
-  .accmap-rows .row.global i{background:rgba(100,230,255,0.95)}
-  .chart-box.accmap canvas{flex:1;height:auto;width:100%;display:block}
+  .chart-box.accmap{flex-shrink:0;padding:6px 10px 7px}
+  /* Unified per-row grid: each row is a self-contained strip with its label
+     + tick cells in the same DOM row, so they can never drift out of
+     alignment. Labels sit in a fixed-width left column; ticks flex-fill
+     the rest and draw each horizon as a colored <span> cell. Subtle row-
+     hover highlight makes reading across a long tribe row easier. */
+  .accmap-grid{display:flex;flex-direction:column;gap:1px;margin-top:4px;
+    font-family:var(--mono);font-size:9.5px;line-height:1;position:relative}
+  .accmap-grid .arow{display:flex;align-items:stretch;height:12px;
+    border-radius:1px;transition:background .15s}
+  .accmap-grid .arow:hover{background:rgba(255,255,255,.04)}
+  .accmap-grid .arow.global{height:14px;margin-bottom:3px;
+    padding-bottom:1px;border-bottom:2px solid rgba(200,168,75,.38);
+    box-shadow:0 1px 0 rgba(0,0,0,.35)}
+  .accmap-grid .ar-lbl{display:flex;align-items:center;gap:4px;
+    width:112px;flex:none;padding:0 6px 0 2px;white-space:nowrap;
+    overflow:hidden;color:var(--muted);background:rgba(255,255,255,.015);
+    border-right:1px solid rgba(255,255,255,.04)}
+  .accmap-grid .arow.global .ar-lbl{color:#f0ead4;font-weight:700;
+    background:rgba(200,168,75,.06);border-right-color:rgba(200,168,75,.25)}
+  .accmap-grid .ar-dot{width:5px;height:5px;border-radius:50%;flex:none}
+  .accmap-grid .arow.global .ar-dot{background:rgba(100,230,255,.95);
+    box-shadow:0 0 4px rgba(100,230,255,.55)}
+  .accmap-grid .ar-name{flex:1;overflow:hidden;text-overflow:ellipsis;
+    letter-spacing:.01em}
+  .accmap-grid .ar-avg{font-size:7.5px;color:var(--dim);letter-spacing:.02em;
+    min-width:28px;text-align:right;font-weight:600}
+  .accmap-grid .arow.global .ar-avg{color:var(--accent);font-size:8.5px}
+  .accmap-grid .ar-cells{display:flex;flex:1;min-width:0;position:relative}
+  .accmap-grid .ar-cell{flex:1;min-width:0;height:100%}
+  /* Minute gridlines are drawn as a single absolute overlay inside the
+     cells strip — one per row via ::before pseudo with linear-gradient. */
+  .accmap-grid .ar-cells.gridlines::after{content:"";position:absolute;
+    inset:0;pointer-events:none;background-image:var(--ax-grid);
+    background-size:100% 100%;background-repeat:no-repeat}
   .acc-legend{display:inline-flex;gap:6px;align-items:center;font-size:9px;color:var(--muted);margin-left:8px}
   .acc-legend i{width:6px;height:6px;border-radius:2px;display:inline-block}
-  .accmap-axis{display:flex;justify-content:space-between;font-size:9px;color:var(--muted);margin-top:2px;padding:0 2px}
+  .accmap-axis{display:flex;font-size:8.5px;color:var(--muted);margin-top:3px;
+    padding:0 2px;font-family:var(--mono);position:relative;height:11px}
+  .accmap-axis .ax-tick{position:absolute;transform:translateX(-50%);
+    letter-spacing:.03em;white-space:nowrap}
+  .accmap-axis .ax-tick::before{content:"";position:absolute;top:-3px;
+    left:50%;width:1px;height:2px;background:var(--muted);opacity:.5}
+  #accmap-tip{position:absolute;pointer-events:none;z-index:20;
+    background:rgba(16,16,16,.96);border:1px solid var(--bg3);
+    padding:4px 7px;font-family:var(--mono);font-size:9.5px;line-height:1.35;
+    color:var(--fg);border-radius:2px;box-shadow:0 3px 10px rgba(0,0,0,.55);
+    white-space:nowrap;display:none}
+  #accmap-tip b{color:var(--accent);font-weight:600;letter-spacing:.04em}
   .chart-hdr{display:flex;justify-content:space-between;align-items:baseline;
     margin-bottom:6px;flex-shrink:0}
   .chart-hdr .k{font-size:8.5px;color:var(--muted);letter-spacing:.12em;
@@ -193,6 +247,48 @@
     transition:height .25s,top .25s,bottom .25s,background .25s}
   .proj-lbl{display:flex;justify-content:space-between;font-size:7.5px;
     color:var(--muted);margin-top:4px;font-family:var(--mono)}
+
+  /* ── HARVEST PRESSURE RADAR ──────────── */
+  /* Visualizes harvest_mass_ratio (0-1) — share of pool weight sitting in
+     contrarian-flipped tribes. Glows red when high ( > 0.3 ), because that's
+     when the council is actively fading the crowd and the projection is
+     being boosted by conviction_boost. */
+  .harvest-box{position:relative;transition:box-shadow .4s,background .4s}
+  .harvest-box.lvl-mid{
+    box-shadow:0 0 10px 0 rgba(200,168,75,.18);
+    background:linear-gradient(135deg,rgba(200,168,75,.06) 0%,var(--bg2) 55%)}
+  .harvest-box.lvl-hi{
+    box-shadow:0 0 18px 2px rgba(217,79,79,.32), inset 0 0 10px rgba(217,79,79,.08);
+    background:linear-gradient(135deg,rgba(217,79,79,.11) 0%,var(--bg2) 60%)}
+  .harvest-box.lvl-hi .box-hdr{color:#ff9b9b}
+  .harvest-body{display:flex;align-items:center;gap:8px}
+  .harvest-radar{width:66px;height:66px;flex-shrink:0;overflow:visible}
+  .harvest-radar .hr-track{fill:none;stroke:rgba(70,70,70,.32);stroke-width:3.5}
+  .harvest-radar .hr-arc{fill:none;stroke-width:3.5;stroke-linecap:round;
+    transition:stroke-dasharray .45s cubic-bezier(.2,.7,.2,1),stroke .35s}
+  .harvest-radar .hr-glow{opacity:0;transition:opacity .45s}
+  .harvest-box.lvl-hi .hr-glow{animation:harvest-pulse 1.6s ease-in-out infinite}
+  .harvest-radar .hr-pct{font-family:var(--mono);font-size:14px;letter-spacing:.02em;
+    fill:var(--fg);font-weight:700;pointer-events:none;
+    transition:fill .35s}
+  .harvest-box.lvl-mid .hr-pct{fill:var(--accent)}
+  .harvest-box.lvl-hi .hr-pct{fill:#ff9b9b}
+  .harvest-legend{display:flex;flex-direction:column;gap:2px;flex:1;min-width:0}
+  .hl-row{display:flex;justify-content:space-between;align-items:baseline;
+    font-family:var(--mono);font-size:10px}
+  .hl-row .hl-k{color:var(--muted);font-size:7.5px;letter-spacing:.1em;text-transform:uppercase}
+  .hl-row .hl-v{color:var(--fg);font-weight:600;font-size:10.5px}
+  .harvest-box.lvl-hi .hl-v{color:#ffb3b3}
+  .harvest-box.lvl-mid .hl-v{color:var(--accent)}
+  .hl-hint{font-size:8px;color:var(--dim);font-style:italic;margin-top:2px;
+    letter-spacing:.02em;line-height:1.3;font-family:var(--mono)}
+  .harvest-box.lvl-hi .hl-hint{color:rgba(255,155,155,.85);font-style:normal}
+  .harvest-box.lvl-mid .hl-hint{color:rgba(200,168,75,.7)}
+  @keyframes harvest-pulse{
+    0%,100%{opacity:.25;transform:scale(1)}
+    50%{opacity:.7;transform:scale(1.12)}
+  }
+
   .pos-meta{font-family:var(--mono);font-size:8.5px;color:var(--muted);margin-bottom:4px}
   .ports{max-height:180px;overflow-y:auto;display:flex;flex-direction:column;gap:3px}
   .ports::-webkit-scrollbar{width:4px}
@@ -584,6 +680,21 @@
         <div class="m"><div class="k">Conf</div><div class="v" id="m-conf">—</div><div class="floor" id="m-conf-floor"></div></div>
         <div class="m"><div class="k">Unc</div><div class="v" id="m-unc">—</div><div class="floor" id="m-unc-ceil"></div></div>
       </div>
+      <div class="metrics metrics-phase15">
+        <div class="m" title="Shannon entropy of directional mass across orthogonal categories. 1.0 = perfectly spread; ~0 = one cluster (e.g. TA-bloc).">
+          <div class="k">Diversity</div><div class="v" id="m-diversity">—</div><div class="floor" id="m-diversity-floor"></div>
+        </div>
+        <div class="m" title="Share of dominant-side mass held by crowd-prone categories (retail + TA). High share on a high-conf call triggers the crowded-trade shrink.">
+          <div class="k">Crowd</div><div class="v" id="m-crowd">—</div><div class="floor" id="m-crowd-floor"></div>
+        </div>
+        <div class="m" title="Weighted-average voter outlook horizon (seconds). Drops below ~50% of nominal trigger the volatility-adjusted deleverage.">
+          <div class="k">Hz</div><div class="v" id="m-avghz">—</div><div class="floor" id="m-avghz-floor"></div>
+        </div>
+        <div class="m" title="Path-Integrity. Pool-weight-weighted calibrator skill of tribes voting WITH consensus. ~1.0 = trustworthy drivers; &lt;0.7 caps all size multipliers (TA Cemetery protection).">
+          <div class="k">Driver</div><div class="v" id="m-drvskill">—</div><div class="floor" id="m-drvskill-floor"></div>
+        </div>
+      </div>
+      <div class="cat-mass" id="cat-mass" title="Per-category directional mass breakdown (buy vs sell). Hover a bar for the exact buy/sell split."></div>
     </div>
   </div>
 
@@ -613,7 +724,7 @@
       </div>
       <canvas id="eq-c"></canvas>
     </div>
-    <div class="chart-box accmap">
+    <div class="chart-box accmap" style="position:relative">
       <div class="chart-hdr">
         <span class="k">Accuracy Heatmap</span>
         <span class="v" id="acc-d">— tribes × — steps</span>
@@ -623,16 +734,42 @@
           <i style="background:#4dbb6e"></i>bonus
         </span>
       </div>
-      <div class="accmap-wrap">
-        <div class="accmap-rows" id="accmap-rows"></div>
-        <canvas id="accmap-c"></canvas>
-      </div>
-      <div class="accmap-axis"><span>+1</span><span>horizon (steps)</span><span>+N</span></div>
+      <div class="accmap-grid" id="accmap-grid"></div>
+      <div class="accmap-axis" id="accmap-axis"></div>
+      <div id="accmap-tip"></div>
     </div>
   </div>
 
   <!-- Right: Projection + Portfolio -->
   <aside class="sidebar">
+    <div class="box harvest-box" id="harvest-box"
+         title="Harvest-Mass Radar. Share of pool weight sitting in contrarian-flipped tribes. When high, the council is actively fading the crowd — the cumulative projection is multiplied by conviction_boost. Glows red above 30%.">
+      <div class="box-hdr">
+        <span>Harvest Pressure</span>
+        <span class="v" id="harvest-boost">×1.00</span>
+      </div>
+      <div class="harvest-body">
+        <svg class="harvest-radar" viewBox="-36 -36 72 72" id="harvest-radar">
+          <defs>
+            <radialGradient id="hrGlow" cx="0.5" cy="0.5" r="0.5">
+              <stop offset="0%" stop-color="rgba(217,79,79,.6)"/>
+              <stop offset="100%" stop-color="rgba(217,79,79,0)"/>
+            </radialGradient>
+          </defs>
+          <circle class="hr-glow" cx="0" cy="0" r="32" fill="url(#hrGlow)"/>
+          <circle class="hr-track" cx="0" cy="0" r="26"/>
+          <circle class="hr-arc" cx="0" cy="0" r="26"
+                  stroke="rgba(120,120,120,.45)"
+                  stroke-dasharray="0 999" transform="rotate(-90)"/>
+          <text class="hr-pct" x="0" y="0" text-anchor="middle" dominant-baseline="central" id="hr-pct">0%</text>
+        </svg>
+        <div class="harvest-legend">
+          <div class="hl-row"><span class="hl-k">Mass</span><span class="hl-v" id="hr-mass-v">—</span></div>
+          <div class="hl-row"><span class="hl-k">Boost</span><span class="hl-v" id="hr-boost-v">×1.00</span></div>
+          <div class="hl-hint" id="hr-hint">No contrarian pressure</div>
+        </div>
+      </div>
+    </div>
     <div class="box">
       <div class="box-hdr"><span id="proj-ttl">Projection</span></div>
       <div class="proj-bars" id="p-bars"></div>
@@ -664,7 +801,8 @@
     retail_grid_bot:'🤖',copy_trader:'🐑',
     basis_arb:'🔺',cross_venue_arb:'🌉',leverage_cycle:'🎢',
     options_hedger_proxy:'🛡️',
-    ta_day_trader_asia:'🌏',ta_day_trader_eu:'🌍',ta_day_trader_us:'🌎'};
+    ta_day_trader_asia:'🌏',ta_day_trader_eu:'🌍',ta_day_trader_us:'🌎',
+    microstructure_prober:'🔬',mev_frontrunner:'⚡',passive_whale_twap:'🐋'};
   const BOT_IDS=new Set(['mm_algo','retail_grid_bot','copy_trader','contrarian_funding_fader']);
   // Distinct color per tribe — used to tint both the wiggly forecast path
   // on the chart and a small dot on each tribe's ring in the council wheel
@@ -678,7 +816,9 @@
     basis_arb:'#42a5f5',cross_venue_arb:'#8d6e63',
     leverage_cycle:'#ec407a',options_hedger_proxy:'#9ccc65',
     ta_day_trader_asia:'#5c6bc0',ta_day_trader_eu:'#ab47bc',
-    ta_day_trader_us:'#ffa726'};
+    ta_day_trader_us:'#ffa726',
+    microstructure_prober:'#78909c',mev_frontrunner:'#ff6b35',
+    passive_whale_twap:'#00d4ff'};
   const tribeColor=id=>TRIBE_COLORS[id]||'#bdbdbd';
   // Hue extraction from a hex colour — lets us order tribes by position on
   // the colour wheel so the council ring and heatmap rows follow a smooth
@@ -930,6 +1070,14 @@
     uv.style.color=t.uncertainty>0.6?'var(--sell)':t.uncertainty<0.2?'var(--buy)':'var(--fg)';
     $('m-unc-ceil').textContent='';
 
+    // Phase 15 council-intelligence metrics. `diversity_score` is green
+    // when council is well-spread, amber when one cluster dominates;
+    // `crowd_share` (retail+TA share of dominant-side mass) is red once
+    // it crosses the 0.5 crowded-trade threshold; `avg_voter_horizon_s`
+    // is red when it drops below half the nominal horizon (volatility-
+    // adjusted deleverage trigger).
+    renderPhase15Meta(t);
+
     renderProjection(t.forecast_steps||[]);
 
     for(const v of t.votes){
@@ -1016,8 +1164,13 @@
 
     // Per-tribe horizon-specific accuracy heatmap (replaces the old global
     // 15s/1m/5m/10m dot trail). The projector ships `projector_weights`
-    // ∈ [0.1, 3.0] per (tribe, horizon); we render it as a 17 × N grid.
-    renderAccuracyHeatmap(t.projector_weights, t.forecast_sample_paths_tribe_ids);
+    // ∈ [0.05, 2.5] per (tribe, horizon); we render it as a 20 × N grid.
+    // The top "Global" row pulls its color from the backscorer's actual
+    // hit-rate-per-horizon instead of averaging tribe weights (which
+    // always centers on 1.0 and renders as dark grey).
+    renderAccuracyHeatmap(t.projector_weights, t.forecast_sample_paths_tribe_ids,
+                          t.backscore && t.backscore.by_horizon,
+                          t.forecast_steps_bps);
 
     if(e0==null)e0=t.equity_usd;
     eqHist.push(t.equity_usd);
@@ -1030,6 +1183,7 @@
 
     renderPortfolio(t.positions||[], t.total_notional_usd||0, t.equity_usd, t.price, t.ts);
     renderTradeHistory(t.recent_trades||[]);
+    renderHarvestRadar(t.harvest_mass_ratio, t.conviction_boost);
     updateRiskBanner(t.risk);
   }
 
@@ -1074,7 +1228,119 @@
   // as W→3.0 (bonus). Logarithmic so the +/- extremes are visually
   // symmetric around neutral.
   const _accRowOrder=[];  // stable tribe order once first frame arrives
-  function renderAccuracyHeatmap(weights, tribeIds){
+  // Global-row color from council hit-rate at a given horizon seconds.
+  // hitRate 0.5 = neutral grey (chance), >0.5 = green (skill), <0.5 = red.
+  // Real-world hit rates tend to cluster in [0.40, 0.60] — linear (hr−0.5)·2
+  // washed out to barely-visible gray. We use 5× so that hr=0.40 saturates
+  // to full red and hr=0.60 to full green, matching how the user visually
+  // reads the per-tribe weight rows (which saturate at 1/1.5 and 1.5).
+  function _hitToColor(hr){
+    if(hr==null||!isFinite(hr)) return 'rgba(40,44,52,0.35)';
+    const c=Math.max(-1,Math.min(1,(hr-0.5)*5));
+    if(c>=0){
+      const g=Math.round(58 + (187-58)*c);
+      const r=Math.round(58 + (77 -58)*c);
+      const b=Math.round(58 + (110-58)*c);
+      const a=0.55 + 0.45*Math.abs(c);
+      return `rgba(${r},${g},${b},${a})`;
+    }else{
+      const t=-c;
+      const r=Math.round(58 + (217-58)*t);
+      const g=Math.round(58 + (79 -58)*t);
+      const b=Math.round(58 + (79 -58)*t);
+      const a=0.55 + 0.45*t;
+      return `rgba(${r},${g},${b},${a})`;
+    }
+  }
+  // Map a per-step cumulative-bps value to a color for the Global row.
+  // Saturates at |bps| ≈ 8 so small moves (~1-2 bps) are visible but a
+  // 10-bps forecast renders near full green/red. Uses tanh for smooth
+  // roll-off — no hard clamps at the edges.
+  function _bpsToColor(bps){
+    if(bps==null||!isFinite(bps)) return 'rgba(40,44,52,0.35)';
+    const c=Math.max(-1,Math.min(1,Math.tanh(bps/8.0)));
+    if(c>=0){
+      const g=Math.round(58 + (187-58)*c);
+      const r=Math.round(58 + (77 -58)*c);
+      const b=Math.round(58 + (110-58)*c);
+      const a=0.55 + 0.45*Math.abs(c);
+      return `rgba(${r},${g},${b},${a})`;
+    }else{
+      const t=-c;
+      const r=Math.round(58 + (217-58)*t);
+      const g=Math.round(58 + (79 -58)*t);
+      const b=Math.round(58 + (79 -58)*t);
+      const a=0.55 + 0.45*t;
+      return `rgba(${r},${g},${b},${a})`;
+    }
+  }
+  // Per-column hit rate for the Global row. Takes the backscorer's sparse
+  // anchor points (15s, 60s, 300s, 600s, 900s) and interpolates across
+  // all N projector columns so every cell carries meaningful data.
+  // Columns where we have no anchor data on either side stay null (grey).
+  function _globalHitRateRow(byHorizon, nSteps, tickS){
+    const row=new Array(nSteps).fill(null);
+    if(!Array.isArray(byHorizon)||!byHorizon.length) return row;
+    // Collect usable anchors — need hit_rate + n ≥ 2 to be non-noise.
+    const anchors=[];
+    for(const a of byHorizon){
+      if(a&&a.hit_rate!=null&&(a.n||0)>=2&&(a.horizon_s||0)>0){
+        anchors.push({h:+a.horizon_s, hr:+a.hit_rate});
+      }
+    }
+    if(!anchors.length) return row;
+    anchors.sort((a,b)=>a.h-b.h);
+    for(let i=0;i<nSteps;i++){
+      const hs=(i+1)*tickS;
+      // Find the two anchors flanking hs.
+      let lo=null, hi=null;
+      for(const a of anchors){
+        if(a.h<=hs) lo=a;
+        if(a.h>=hs){ hi=a; break; }
+      }
+      if(lo&&hi){
+        if(lo.h===hi.h) row[i]=lo.hr;
+        else{
+          const t=(hs-lo.h)/(hi.h-lo.h);
+          row[i]=lo.hr+(hi.hr-lo.hr)*t;
+        }
+      }else if(lo){ row[i]=lo.hr; }
+      else if(hi){ row[i]=hi.hr; }
+    }
+    return row;
+  }
+  // Cached per-row cell DOM so repeated renders only update style/text,
+  // not rebuild the entire grid. Rebuilt only when row order or horizon
+  // count changes.
+  let _accFrame=null;
+  let _accGridSig='';
+  function _fmtHz(sec){
+    if(sec<60) return sec+'s';
+    if(sec<3600) return (sec%60===0?`${sec/60}m`:`${(sec/60).toFixed(1)}m`);
+    return (sec/3600).toFixed(1)+'h';
+  }
+  // Colour mapping for per-tribe skill cells: log-space around 1.0, then
+  // lerp red(−) / grey / green(+). Reference = log(1.5) = projector's
+  // _weight_max, so w at the cap renders full green; 1/1.5 ≈ 0.67 full red.
+  function _wToColor(w){
+    const lw=Math.log(Math.max(0.01,w)) / Math.log(1.5); // ≈[-1, +1]
+    const c=Math.max(-1,Math.min(1,lw));
+    if(c>=0){
+      const g=Math.round(58 + (187-58)*c);
+      const r=Math.round(58 + (77 -58)*c);
+      const b=Math.round(58 + (110-58)*c);
+      const a=0.25 + 0.75*Math.abs(c);
+      return `rgba(${r},${g},${b},${a})`;
+    }else{
+      const t=-c;
+      const r=Math.round(58 + (217-58)*t);
+      const g=Math.round(58 + (79 -58)*t);
+      const b=Math.round(58 + (79 -58)*t);
+      const a=0.25 + 0.75*t;
+      return `rgba(${r},${g},${b},${a})`;
+    }
+  }
+  function renderAccuracyHeatmap(weights, tribeIds, byHorizon, stepsBps){
     if(!weights||typeof weights!=='object') return;
     const ids=Object.keys(weights);
     if(!ids.length) return;
@@ -1090,99 +1356,214 @@
     const rowIds=_accRowOrder.filter(id=>Array.isArray(weights[id]));
     const nSteps=Math.max(...rowIds.map(id=>weights[id].length));
     if(!nSteps) return;
-    // Build the row labels (global + per-tribe) and sync the DOM.
-    const rows=$('accmap-rows');
-    const want=['__global__'].concat(rowIds);
-    if(rows.childElementCount!==want.length){
-      rows.innerHTML='';
-      for(const id of want){
-        const div=document.createElement('div');
-        if(id==='__global__'){
-          div.className='row global';
-          div.innerHTML='<i></i><span>Global</span>';
-        }else{
-          div.className='row';
-          const color=(typeof tribeColor==='function')?tribeColor(id):'#888';
-          div.innerHTML=`<i style="background:${color}"></i>`;
-          div.title=id;
+    const tickS=(CFG&&CFG.tick_seconds)||5;
+    const haveBps=Array.isArray(stepsBps)&&stepsBps.length>0;
+    const grid=$('accmap-grid');
+    if(!grid) return;
+    // (Re)build the DOM grid only when the row set or horizon count has
+    // changed — per-tick updates just rewrite inline styles & text.
+    const sig=`${rowIds.length}:${nSteps}`;
+    if(sig !== _accGridSig){
+      grid.innerHTML='';
+      _accGridSig = sig;
+      const mkRow = (id, isGlobal) => {
+        const row=document.createElement('div');
+        row.className='arow'+(isGlobal?' global':'');
+        row.dataset.id = id;
+        // Label half
+        const lbl=document.createElement('div');
+        lbl.className='ar-lbl';
+        const dot=document.createElement('i'); dot.className='ar-dot';
+        if(!isGlobal){
+          dot.style.background = (typeof tribeColor==='function')?tribeColor(id):'#888';
         }
-        rows.appendChild(div);
+        const nm=document.createElement('span'); nm.className='ar-name';
+        nm.textContent = isGlobal ? 'Global' : (id||'').replace(/_/g,' ');
+        const av=document.createElement('span'); av.className='ar-avg';
+        av.textContent = '—';
+        if(!isGlobal) row.title = id;
+        else row.title = 'True Global path — weighted-consensus cumulative bps per step, post-inversion and post-harvest-boost.';
+        lbl.appendChild(dot); lbl.appendChild(nm); lbl.appendChild(av);
+        // Cells half
+        const cells=document.createElement('div');
+        cells.className='ar-cells gridlines';
+        for(let h=0; h<nSteps; h++){
+          const cell=document.createElement('span');
+          cell.className='ar-cell';
+          cell.dataset.h = h;
+          cells.appendChild(cell);
+        }
+        row.appendChild(lbl); row.appendChild(cells);
+        grid.appendChild(row);
+      };
+      mkRow('__global__', true);
+      for(const tid of rowIds) mkRow(tid, false);
+      // Minute-grid overlay: single linear-gradient served via CSS var,
+      // painted once per row's ::after using the shared pattern.
+      const gridStepS = tickS<=3?60 : tickS<=10?120 : 300;
+      const colFrac = 100 / nSteps;
+      const everyN = Math.max(1, Math.round(gridStepS/tickS));
+      const stops=[];
+      for(let col=everyN; col<nSteps; col+=everyN){
+        const x=col*colFrac;
+        stops.push(`transparent ${x.toFixed(3)}%`);
+        stops.push(`rgba(255,255,255,.07) ${x.toFixed(3)}%`);
+        stops.push(`rgba(255,255,255,.07) ${(x+0.15).toFixed(3)}%`);
+        stops.push(`transparent ${(x+0.15).toFixed(3)}%`);
+      }
+      const gradient = stops.length
+        ? `linear-gradient(to right, ${stops.join(',')})`
+        : 'none';
+      grid.style.setProperty('--ax-grid', gradient);
+    }
+    // Per-row mean skill for left-column summary: whether the tribe is
+    // net-rewarded (>1) or net-penalized (<1) over the whole horizon.
+    const rowAvg={};
+    for(const tid of rowIds){
+      const arr=weights[tid]||[];
+      if(!arr.length){ rowAvg[tid]=1; continue; }
+      let s=0, n=0;
+      for(const v of arr){ if(isFinite(v)){ s+=v; n++; } }
+      rowAvg[tid]=n>0?s/n:1;
+    }
+    let globalAvg='—';
+    if(haveBps){
+      let s=0, n=0;
+      for(const b of stepsBps){ if(isFinite(b)){ s+=b; n++; } }
+      if(n>0) globalAvg=(s>=0?'+':'')+(s/n).toFixed(1)+'bps';
+    }
+    // Update each row's cells + summary. DOM is stable; we only touch
+    // style.background / textContent so there are no layout thrashes.
+    const hitRow=haveBps?null:_globalHitRateRow(byHorizon, nSteps, tickS);
+    const children=grid.children;
+    // Global row (first child).
+    const gRow=children[0];
+    if(gRow){
+      const gAvg=gRow.querySelector('.ar-avg');
+      if(gAvg) gAvg.textContent=globalAvg;
+      const gCells=gRow.querySelector('.ar-cells').children;
+      for(let h=0; h<nSteps; h++){
+        const cell=gCells[h]; if(!cell) continue;
+        let color, label='—';
+        if(haveBps){
+          const b = h<stepsBps.length?stepsBps[h]:null;
+          color = _bpsToColor(b);
+          if(b!=null) label = (b>=0?'+':'')+b.toFixed(2)+'bps';
+        }else{
+          const hr = hitRow[h];
+          color = _hitToColor(hr);
+          if(hr!=null) label = (hr*100).toFixed(1)+'% hit';
+        }
+        cell.style.background = color;
       }
     }
-    // Draw the grid.
-    const canvas=$('accmap-c');
-    const dpr=window.devicePixelRatio||1;
-    const wrap=canvas.parentElement;
-    const cssW=Math.max(60, wrap.clientWidth - rows.offsetWidth - 6);
-    const cellH=9;
-    const cssH=cellH*want.length;
-    canvas.style.width=cssW+'px';
-    canvas.style.height=cssH+'px';
-    canvas.width=Math.max(1, Math.floor(cssW*dpr));
-    canvas.height=Math.max(1, Math.floor(cssH*dpr));
-    const ctx=canvas.getContext('2d');
-    ctx.setTransform(dpr,0,0,dpr,0,0);
-    ctx.fillStyle='#08090b';
-    ctx.fillRect(0,0,cssW,cssH);
-    const colW=cssW/nSteps;
-    // Colour mapping: log-space around 1.0, then lerp red(−) / green(+).
-    // Reference = log(1.5) = projector's _weight_max, so a tribe at the cap
-    // renders full green and one at 1/1.5 ≈ 0.67 renders full red. Scale
-    // stays symmetric around neutral (w=1.0).
-    const wToColor=(w)=>{
-      const lw=Math.log(Math.max(0.01,w)) / Math.log(1.5); // ≈[-1, +1]
-      const c=Math.max(-1,Math.min(1,lw));
-      if(c>=0){
-        // neutral grey → green
-        const g=Math.round(58 + (187-58)*c);
-        const r=Math.round(58 + (77 -58)*c);
-        const b=Math.round(58 + (110-58)*c);
-        const a=0.25 + 0.75*Math.abs(c);
-        return `rgba(${r},${g},${b},${a})`;
-      }else{
-        const t=-c;
-        const r=Math.round(58 + (217-58)*t);
-        const g=Math.round(58 + (79 -58)*t);
-        const b=Math.round(58 + (79 -58)*t);
-        const a=0.25 + 0.75*t;
-        return `rgba(${r},${g},${b},${a})`;
+    // Tribe rows.
+    for(let r=0; r<rowIds.length; r++){
+      const tid=rowIds[r];
+      const row=children[r+1]; if(!row) continue;
+      const avgEl=row.querySelector('.ar-avg');
+      if(avgEl){
+        const v=rowAvg[tid];
+        avgEl.textContent='×'+v.toFixed(2);
+        avgEl.style.color = v>=1.15 ? 'var(--buy)'
+                         : v<=0.85 ? 'var(--sell)'
+                         : 'var(--muted)';
       }
-    };
-    // Build the global weighted-mean row: simple arithmetic mean of W values
-    // (not weighted by pool share — users want to see learned accuracy, not
-    // who's big). Matches the projector's per-horizon scoring semantics.
-    const globalRow=new Array(nSteps).fill(0);
-    const globalN=new Array(nSteps).fill(0);
-    for(const id of rowIds){
-      const row=weights[id];
-      for(let h=0;h<Math.min(nSteps,row.length);h++){
-        globalRow[h]+=row[h]; globalN[h]++;
-      }
-    }
-    for(let h=0;h<nSteps;h++) globalRow[h]=globalN[h]?globalRow[h]/globalN[h]:1.0;
-    // Draw global row (top).
-    for(let h=0;h<nSteps;h++){
-      ctx.fillStyle=wToColor(globalRow[h]);
-      ctx.fillRect(h*colW, 0, Math.ceil(colW)+0.5, cellH-1);
-    }
-    // Draw per-tribe rows.
-    for(let r=0;r<rowIds.length;r++){
-      const row=weights[rowIds[r]];
-      const y=(r+1)*cellH;
-      for(let h=0;h<nSteps;h++){
-        const w=h<row.length?row[h]:1.0;
-        ctx.fillStyle=wToColor(w);
-        ctx.fillRect(h*colW, y, Math.ceil(colW)+0.5, cellH-1);
+      const cells=row.querySelector('.ar-cells').children;
+      const warr=weights[tid]||[];
+      for(let h=0; h<nSteps; h++){
+        const cell=cells[h]; if(!cell) continue;
+        const w=h<warr.length?warr[h]:1.0;
+        cell.style.background=_wToColor(w);
       }
     }
     const accD=$('acc-d');
-    if(accD) accD.textContent=`${rowIds.length} tribes × ${nSteps} steps`;
-    const axis=document.querySelector('.accmap-axis');
+    if(accD) accD.textContent=`${rowIds.length} tribes × ${nSteps} steps · ${_fmtHz(nSteps*tickS)} horizon`;
+    // Time-based X-axis ticks: align under the .ar-cells half of each row.
+    // The label column is fixed at 112px (see .ar-lbl) + ~6px padding, so
+    // we offset the axis ticks by that width to match the cell origin.
+    const axis=$('accmap-axis');
     if(axis){
-      const spans=axis.querySelectorAll('span');
-      if(spans.length===3) spans[2].textContent=`+${nSteps}`;
+      const totalS = nSteps*tickS;
+      const targets = totalS<=300
+        ? [15,60,120,180,240,300]
+        : totalS<=900
+          ? [60,180,300,600,900]
+          : totalS<=3600
+            ? [300,600,1200,1800,2400,3000,3600]
+            : [600,1800,3600,5400,7200];
+      const picks=[];
+      for(const sec of targets){ if(sec<=totalS) picks.push(sec); }
+      // Figure out the actual on-screen origin of the cells strip from the
+      // first row's label element — more reliable than a hardcoded width.
+      const firstLbl = grid.querySelector('.arow .ar-lbl');
+      const lblW = firstLbl ? firstLbl.offsetWidth : 112;
+      const gridRect = grid.getBoundingClientRect();
+      const cellsW = Math.max(10, gridRect.width - lblW);
+      axis.innerHTML='';
+      axis.style.paddingLeft = lblW + 'px';
+      for(const sec of picks){
+        const frac = sec/totalS;
+        const span=document.createElement('span');
+        span.className='ax-tick';
+        span.style.left = `calc(${lblW}px + ${(frac*cellsW).toFixed(1)}px)`;
+        span.textContent = '+' + _fmtHz(sec);
+        axis.appendChild(span);
+      }
     }
+    // Stash the frame so the hover tooltip can read exact values.
+    _accFrame = {
+      rowIds, nSteps, tickS,
+      weights, stepsBps: haveBps?stepsBps:null, hitRow: haveBps?null:hitRow,
+    };
   }
+
+  // Grid hover tooltip — finds the (row, cell) the cursor is over using
+  // .closest() on the DOM, so alignment is guaranteed and we never need
+  // to reverse-compute pixel→row/col math.
+  (function wireAccmapHover(){
+    const grid = document.getElementById('accmap-grid');
+    const tip = document.getElementById('accmap-tip');
+    if(!grid || !tip) return;
+    grid.addEventListener('mousemove', (ev)=>{
+      if(!_accFrame){ tip.style.display='none'; return; }
+      const cell = ev.target.closest('.ar-cell');
+      const row = ev.target.closest('.arow');
+      if(!cell || !row){ tip.style.display='none'; return; }
+      const f=_accFrame;
+      const h = +cell.dataset.h || 0;
+      const id = row.dataset.id;
+      let line='';
+      if(id === '__global__'){
+        let v='—';
+        if(f.stepsBps && h < f.stepsBps.length){
+          const b=f.stepsBps[h];
+          v = (b>=0?'+':'')+b.toFixed(2)+' bps';
+        }else if(f.hitRow && f.hitRow[h]!=null){
+          v = (f.hitRow[h]*100).toFixed(1)+'% hit';
+        }
+        line = `<b>GLOBAL</b> · +${_fmtHz((h+1)*f.tickS)} · ${v}`;
+      }else{
+        const warr=f.weights[id]||[];
+        const w = h<warr.length?warr[h]:1.0;
+        const pct = ((w-1)*100);
+        const dir = pct>=0?'+':'';
+        line = `<b>${id}</b> · +${_fmtHz((h+1)*f.tickS)} · ×${w.toFixed(3)} (${dir}${pct.toFixed(1)}%)`;
+      }
+      tip.innerHTML=line;
+      const host = grid.closest('.chart-box.accmap');
+      const hr = host.getBoundingClientRect();
+      let tx = ev.clientX - hr.left + 10;
+      let ty = ev.clientY - hr.top + 10;
+      tip.style.display='block';
+      const tw = tip.offsetWidth, th = tip.offsetHeight;
+      if(tx + tw > hr.width - 4) tx = ev.clientX - hr.left - tw - 10;
+      if(ty + th > hr.height - 4) ty = ev.clientY - hr.top - th - 10;
+      tip.style.left = tx + 'px';
+      tip.style.top = ty + 'px';
+    });
+    grid.addEventListener('mouseleave', ()=>{ tip.style.display='none'; });
+  })();
 
   function renderTradeHistory(trades){
     const root=$('th-list');
@@ -1266,6 +1647,145 @@
         `<span class="pbr" style="color:${upnl>=0?'var(--buy)':'var(--sell)'}">`+
         `${upnlStr} · ${held}s</span>`;
       root.appendChild(row);
+    }
+  }
+
+  // Phase 15 — render the three new council-intelligence metrics and the
+  // per-category directional-mass strip. Tolerant of legacy ticks (older
+  // projectors didn't populate these fields); leaves the display blank.
+  const CAT_ORDER=['mm','arb','ta','retail','event','hedger','microstructure','mev','whale'];
+  const CAT_LBL={mm:'MM',arb:'ARB',ta:'TA',retail:'RET',event:'EVT',
+                 hedger:'HDG',microstructure:'MST',mev:'MEV',whale:'WHL'};
+  const CROWDED_CATS=new Set(['retail','ta']);
+  function renderPhase15Meta(t){
+    const div=$('m-diversity'); const crv=$('m-crowd'); const hzv=$('m-avghz');
+    const dvr=$('m-drvskill');
+    const strip=$('cat-mass');
+    // Diversity score ∈ [0,1]. Green when well-spread (>0.65), amber in the
+    // middle, red when a single bloc dominates (<0.35).
+    if(t.diversity_score==null){ div.textContent='—'; div.style.color='var(--fg)'; }
+    else{
+      const d=t.diversity_score;
+      div.textContent=d.toFixed(2);
+      div.style.color=d>0.65?'var(--buy)':d<0.35?'var(--sell)':'var(--fg)';
+    }
+    // Category mass — also drives the Crowd% readout (retail+TA share of
+    // dominant-side) and the per-category stacked strip below.
+    const cm=t.category_mass||null;
+    let crowdShare=null;
+    if(cm){
+      let bm=0, sm=0;
+      for(const k of CAT_ORDER){
+        const c=cm[k]||{buy:0,sell:0};
+        bm += +c.buy||0; sm += +c.sell||0;
+      }
+      const dom=bm>=sm?'buy':'sell';
+      const domTotal=Math.max(1e-9, dom==='buy'?bm:sm);
+      let crowded=0;
+      for(const k of CROWDED_CATS){
+        const c=cm[k]||{buy:0,sell:0};
+        crowded += +(c[dom])||0;
+      }
+      crowdShare=crowded/domTotal;
+    }
+    if(crowdShare==null){ crv.textContent='—'; crv.style.color='var(--fg)'; }
+    else{
+      crv.textContent=(crowdShare*100).toFixed(0)+'%';
+      // Matches engine `crowded_share_threshold=0.5` — same boundary users
+      // will see the crowded-trade shrink fire at.
+      crv.style.color=crowdShare>0.5?'var(--sell)':crowdShare<0.3?'var(--buy)':'var(--fg)';
+    }
+    // Avg voter horizon vs nominal. Matches engine `horizon_ref_ratio=0.5`.
+    const ah=t.avg_voter_horizon_s;
+    if(ah==null){ hzv.textContent='—'; hzv.style.color='var(--fg)'; }
+    else{
+      const nom=(CFG.projector_steps||200)*(CFG.tick_seconds||3);
+      const ratio=nom>0?ah/nom:1.0;
+      hzv.textContent=ah>=60?(ah/60).toFixed(1)+'m':Math.round(ah)+'s';
+      hzv.style.color=ratio<0.5?'var(--sell)':ratio>1.0?'var(--buy)':'var(--fg)';
+    }
+    // Task 4c — Driver skill: pool-weight-weighted calibrator skill of
+    // tribes voting WITH the consensus. Red < 0.7 (engine caps size
+    // multipliers); amber 0.7–0.9; green ≥ 0.9.
+    const ds=t.driver_skill_avg;
+    if(ds==null){ dvr.textContent='—'; dvr.style.color='var(--fg)'; }
+    else{
+      dvr.textContent=(+ds).toFixed(2);
+      dvr.style.color=ds<0.7?'var(--sell)':ds>=0.9?'var(--buy)':'var(--fg)';
+    }
+    // Per-category bar strip — each column stacks the category's buy mass
+    // (green, top) above its sell mass (red, bottom). Column heights are
+    // normalized to the largest single-side category mass so the tallest
+    // column fills the strip; short columns reveal the relative footprint.
+    renderCategoryStrip(cm, strip);
+  }
+  function renderCategoryStrip(cm, root){
+    root.innerHTML='';
+    let mx=0;
+    if(cm){
+      for(const k of CAT_ORDER){
+        const c=cm[k]||{buy:0,sell:0};
+        mx=Math.max(mx, +c.buy||0, +c.sell||0);
+      }
+    }
+    if(mx<=0) mx=1;
+    for(const k of CAT_ORDER){
+      const col=document.createElement('div');col.className='col';
+      const c=(cm&&cm[k])||{buy:0,sell:0};
+      const bh=((+c.buy||0)/mx)*50;
+      const sh=((+c.sell||0)/mx)*50;
+      const b=document.createElement('div');b.className='buy';b.style.height=bh.toFixed(1)+'%';
+      const s=document.createElement('div');s.className='sell';s.style.height=sh.toFixed(1)+'%';
+      col.appendChild(b); col.appendChild(s);
+      const lbl=document.createElement('div');lbl.className='lbl';lbl.textContent=CAT_LBL[k]||k;
+      col.appendChild(lbl);
+      col.title=`${CAT_LBL[k]||k}: buy ${(+c.buy||0).toFixed(2)} · sell ${(+c.sell||0).toFixed(2)}`;
+      root.appendChild(col);
+    }
+  }
+
+  // Harvest-Mass Radar — fills the arc proportionally to massRatio ∈ [0,1].
+  // Three visual tiers: dim grey (idle), amber (light), pulsing red (hot).
+  // Cut-offs match the projector's harvest_scale behavior: ~0.3 is where
+  // conviction_boost starts to be felt, 0.5 is where the crowd-fade story
+  // gets loud. Safe against null/undefined from legacy ticks.
+  const _HR_CIRC = 2 * Math.PI * 26;  // arc circumference in SVG units
+  function renderHarvestRadar(massRatio, convictionBoost){
+    const box=$('harvest-box'); if(!box) return;
+    const arc=box.querySelector('.hr-arc');
+    const glow=box.querySelector('.hr-glow');
+    const pctEl=$('hr-pct');
+    const massV=$('hr-mass-v');
+    const boostV=$('hr-boost-v');
+    const boostHdr=$('harvest-boost');
+    const hint=$('hr-hint');
+    const mass=Math.max(0,Math.min(1, (massRatio==null?0:+massRatio)));
+    const boost=(convictionBoost==null?1.0:+convictionBoost);
+    // Fill the arc. Dash = mass*C, gap = remaining.
+    arc.setAttribute('stroke-dasharray', `${(mass*_HR_CIRC).toFixed(2)} ${_HR_CIRC.toFixed(2)}`);
+    pctEl.textContent = `${(mass*100).toFixed(0)}%`;
+    massV.textContent = (massRatio==null) ? '—' : `${(mass*100).toFixed(1)}%`;
+    boostV.textContent = `×${boost.toFixed(2)}`;
+    boostHdr.textContent = `×${boost.toFixed(2)}`;
+    box.classList.remove('lvl-mid','lvl-hi');
+    if(mass<0.15){
+      arc.setAttribute('stroke','rgba(120,120,120,.45)');
+      glow.style.opacity='0';
+      hint.textContent='No contrarian pressure';
+    }else if(mass<0.3){
+      arc.setAttribute('stroke','rgba(200,168,75,.9)');
+      glow.style.opacity='0';
+      box.classList.add('lvl-mid');
+      hint.textContent='Light contrarian drift';
+    }else{
+      // Saturate red intensity beyond 0.3 up to 0.8.
+      const sat=Math.min(1,(mass-0.3)/0.5);
+      arc.setAttribute('stroke',`rgba(217,79,79,${(0.65+0.35*sat).toFixed(2)})`);
+      glow.style.opacity=(0.35+0.55*sat).toFixed(2);
+      box.classList.add('lvl-hi');
+      hint.textContent = mass>0.55
+        ? 'HOT · crowd being faded'
+        : 'Council harvesting contrarian mass';
     }
   }
 
@@ -1362,16 +1882,75 @@
       ctx.setLineDash([2,3]);ctx.beginPath();
       ctx.moveTo(nowX,2);ctx.lineTo(nowX,h-2);ctx.stroke();ctx.setLineDash([]);
 
-      // Per-tribe wiggly paths — each colored by its archetype. The dispersion
-      // between paths *is* the council's uncertainty; no separate sigma fan.
+      // ── Confidence ribbon ────────────────────────────────────────
+      // Build per-step percentile envelopes from the sample-path ensemble
+      // (p10/25/75/90). Narrow where tribes agree, wide where they split —
+      // that dispersion *is* the council's uncertainty. Drawn as two
+      // stacked shaded bands (outer p10-p90 low alpha, inner p25-p75
+      // higher alpha) with a soft cyan glow. The thin tribe paths keep
+      // their role as a secondary "texture" layer so individual archetype
+      // wiggles are still readable on hover-level scrutiny.
+      let ribbon=null;
       if(samplesBps&&samplesBps.length){
-        ctx.lineWidth=0.9;
+        const p10=[], p25=[], p75=[], p90=[];
+        for(let i=0;i<projLen;i++){
+          const col=[];
+          for(const path of samplesBps){
+            if(path&&path.length>i&&isFinite(path[i])) col.push(path[i]);
+          }
+          if(!col.length){ p10.push(0); p25.push(0); p75.push(0); p90.push(0); continue; }
+          col.sort((a,b)=>a-b);
+          const pct=(p)=>{ const idx=(col.length-1)*p; const lo=Math.floor(idx),hi=Math.ceil(idx);
+            return col[lo]+(col[hi]-col[lo])*(idx-lo); };
+          p10.push(pct(0.10)); p25.push(pct(0.25));
+          p75.push(pct(0.75)); p90.push(pct(0.90));
+        }
+        ribbon={p10,p25,p75,p90};
+      }
+
+      const drawBand=(loArr,hiArr,fill)=>{
+        ctx.beginPath();
+        ctx.moveTo(nowX, yAt(currentPrice));
+        for(let i=0;i<projLen;i++){
+          const v=currentPrice*(1+hiArr[i]/10000);
+          ctx.lineTo(xAt(hist.length+i), yAt(v));
+        }
+        for(let i=projLen-1;i>=0;i--){
+          const v=currentPrice*(1+loArr[i]/10000);
+          ctx.lineTo(xAt(hist.length+i), yAt(v));
+        }
+        ctx.lineTo(nowX, yAt(currentPrice));
+        ctx.closePath();
+        ctx.fillStyle=fill;
+        ctx.fill();
+      };
+
+      if(ribbon){
+        // Soft outer glow: same p10-p90 polygon painted with shadowBlur
+        // so the cloud edges bleed into the chart background.
+        ctx.save();
+        ctx.shadowColor='rgba(100,230,255,.55)';
+        ctx.shadowBlur=14;
+        drawBand(ribbon.p10, ribbon.p90, 'rgba(100,230,255,.05)');
+        ctx.restore();
+        // Outer ribbon (80% confidence band): low alpha cyan haze
+        drawBand(ribbon.p10, ribbon.p90, 'rgba(100,230,255,.09)');
+        // Inner ribbon (50% IQR): brighter, denser core
+        drawBand(ribbon.p25, ribbon.p75, 'rgba(120,240,255,.16)');
+      }
+
+      // Per-tribe wiggly paths — keep as a subtle texture layer so the
+      // individual archetype trajectories are still perceptible inside
+      // the ribbon. Thinner & more transparent than before so the cloud
+      // remains the dominant visual.
+      if(samplesBps&&samplesBps.length){
+        ctx.lineWidth=0.7;
         for(let k=0;k<samplesBps.length;k++){
           const path=samplesBps[k];
           if(!path||path.length!==projLen) continue;
           const tid=pathTribeIds&&pathTribeIds[k];
           const col=tribeColor(tid);
-          ctx.strokeStyle=col+'66'; // ~0.4 alpha
+          ctx.strokeStyle=col+'33'; // ~0.2 alpha — below ribbon
           ctx.beginPath();
           ctx.moveTo(nowX,yAt(currentPrice));
           for(let i=0;i<projLen;i++){
@@ -1382,12 +1961,19 @@
         }
       }
 
-      // Consensus thick line — bright cyan, drawn on top. This is the
-      // weighted sum of the 17 tribe paths (weight × skill baked in).
-      ctx.strokeStyle='rgba(100,230,255,0.95)';ctx.lineWidth=2.2;ctx.beginPath();
+      // Consensus thick line — bright cyan, drawn on top of the ribbon.
+      // Painted twice (outer glow halo, then crisp core) so it reads as
+      // "the" trajectory even when the cloud is wide.
+      ctx.save();
+      ctx.shadowColor='rgba(100,230,255,.85)';
+      ctx.shadowBlur=6;
+      ctx.strokeStyle='rgba(100,230,255,0.98)';
+      ctx.lineWidth=2.4;
+      ctx.beginPath();
       ctx.moveTo(nowX,yAt(hist[hist.length-1]));
       proj.forEach((v,i)=>{ctx.lineTo(xAt(hist.length+i),yAt(v));});
       ctx.stroke();
+      ctx.restore();
     }
 
     // historic price line — drawn LAST so it stays readable above dots

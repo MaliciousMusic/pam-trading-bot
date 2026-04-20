@@ -209,11 +209,14 @@ class ChessProjector:
         # being washed out. 0.01 requires sustained outperformance over
         # several hundred ticks to reach the cap: the system now has memory.
         self._weight_lr = 0.01
-        self._weight_min = 0.1
-        # Cap tightened from 3.0 → 1.5. Combined with the zero-sum column
-        # re-normalization below, no tribe can have more than 1.5× the
-        # influence of a neutral peer at any horizon.
-        self._weight_max = 1.5
+        # Widened from [0.1, 1.5] → [0.05, 2.5]. The tight cap was masking
+        # specialist edges: a tribe that's right 85% of the time at h=1
+        # shouldn't be capped at 1.5× influence when its peer-relative
+        # advantage at that horizon is 3-4×. Floor dropped to 0.05 so
+        # chronic underperformers can be almost-fully-silenced (and their
+        # conviction re-purposed as contrarian signal via Task 2 below).
+        self._weight_min = 0.05
+        self._weight_max = 2.5
         # ── Phase 1a: Cross-Correlation Squasher ──────────────────────
         # Rolling per-tribe signed-conviction history. After enough samples,
         # pairwise Pearson corr detects redundancy clusters — if three TA
@@ -271,13 +274,37 @@ class ChessProjector:
         dt_s = float(self.tick_seconds)
         n_steps = self.steps
 
+        # Per-(tribe, horizon_step) specialist skill. Task 1 + 4b: instead
+        # of a scalar multiplier per tribe, pull a vector of n_steps values
+        # where each slot is the tribe's skill at THAT horizon bucket (the
+        # calibrator buckets short ≤60s, medium 60–300s, long >300s). This
+        # lets microstructure_prober's hot 1-step edge amplify at h=0 while
+        # its weaker 30-step edge stays muted, and vice-versa for basis_arb.
+        # Fallback to scalar legacy multiplier if the bucket has too few
+        # samples (horizon_min_samples threshold). Also kept for legacy call
+        # sites that use the scalar form.
         skill: dict[str, float] = {}
+        skill_per_h: dict[str, list[float]] = {}
         if self.calibrator is not None:
+            horizon_s_by_step = [float((h + 1) * dt_s) for h in range(n_steps)]
             for t in self.tribes:
                 try:
-                    skill[t.spec.id] = float(self.calibrator.skill_multiplier(t.spec.id))
+                    scalar = float(self.calibrator.skill_multiplier(t.spec.id))
                 except Exception:
-                    skill[t.spec.id] = 1.0
+                    scalar = 1.0
+                skill[t.spec.id] = scalar
+                vec = []
+                for hs in horizon_s_by_step:
+                    try:
+                        vec.append(float(self.calibrator.skill_multiplier(
+                            t.spec.id, horizon_s=hs)))
+                    except Exception:
+                        vec.append(scalar)
+                skill_per_h[t.spec.id] = vec
+        else:
+            for t in self.tribes:
+                skill[t.spec.id] = 1.0
+                skill_per_h[t.spec.id] = [1.0] * n_steps
 
         # ── 1. Score the ledger against reality, update per-horizon weights ──
         # *Peer-relative* grading: the pass/fail threshold for horizon h is
@@ -387,6 +414,20 @@ class ChessProjector:
         # split 45/55 (or closer) on direction — the "net" signal is
         # mostly noise. Drop the vote to abstain so it doesn't get
         # averaged into the council signal.
+        # Task 2 — TA Cemetery / Contrarian Inversion. Pre-compute which
+        # tribes are reliably-worse-than-chance this window. Their vote
+        # directions get flipped downstream: a tribe hitting 38% is a
+        # 62%-accurate contrarian signal. Cached once per tick to avoid
+        # hammering the calibrator's ewma_fast on every vote.
+        contrarian_tids: set[str] = set()
+        if self.calibrator is not None:
+            for t in self.tribes:
+                try:
+                    if self.calibrator.is_contrarian_candidate(t.spec.id):
+                        contrarian_tids.add(t.spec.id)
+                except Exception:
+                    pass
+
         initial_votes: dict[str, tuple] = {}
         for tribe in self.tribes:
             v0 = tribe.project_vote(start_ts, state)
@@ -396,6 +437,15 @@ class ChessProjector:
                 v0 = replace(v0, side=Side.ABSTAIN,
                              conviction=0.0, buy_frac=0.0, sell_frac=0.0,
                              reason=v0.reason + " | DISSENSION_VETO")
+            # Task 2: flip reliably-wrong tribes. We swap Side (not just the
+            # numeric `signed`) so every downstream consumer — aggregator,
+            # redundancy history, and pool consensus — sees the inverted
+            # vote consistently.
+            if tribe.spec.id in contrarian_tids and v0.side is not Side.ABSTAIN:
+                flipped_side = Side.SELL if v0.side is Side.BUY else Side.BUY
+                v0 = replace(v0, side=flipped_side,
+                             buy_frac=v0.sell_frac, sell_frac=v0.buy_frac,
+                             reason="[FLIPPED] " + v0.reason)
             signed = (1.0 if v0.side.value == "buy" else
                       -1.0 if v0.side.value == "sell" else 0.0)
             sk0 = skill.get(tribe.spec.id, 1.0)
@@ -550,16 +600,80 @@ class ChessProjector:
             mult = mult_prev + regime_blend_alpha * (mult_cur - mult_prev)
             haircut = 1.0 - self._corr_max_haircut * redundancy.get(t.spec.id, 0.0)
             pool_w[t.spec.id] = float(t.weight) * mult * haircut
+
+        # ── Task 4d: TA Family Redundancy Cap ─────────────────────────
+        # The 5 TA tribes (4 day-traders + swing_trend_follower) read the
+        # same RSI/MA/MACD textbook. Even after per-pair correlation
+        # haircuts they still form a voting bloc: each tick they push
+        # roughly the same direction, and the council hears the same
+        # signal five times. Cap their COMBINED pool weight at 20% of the
+        # total. Beyond 20% the whole family is scaled down proportionally
+        # — we don't silence TA (chart-watchers do move real flow), we
+        # just prevent them from drowning out the other 15 archetypes.
+        ta_tids = [tid for tid in pool_w if _TRIBE_CATEGORY.get(tid) == "ta"]
+        if ta_tids:
+            ta_sum = sum(pool_w[tid] for tid in ta_tids)
+            total_sum = sum(pool_w.values())
+            if total_sum > 0 and ta_sum > 0:
+                ta_share = ta_sum / total_sum
+                ta_cap = 0.20
+                if ta_share > ta_cap:
+                    # Solve for scale s s.t.  (s·ta_sum) / (s·ta_sum + non_ta_sum) = ta_cap
+                    # ⇒ s = ta_cap · non_ta_sum / ((1 − ta_cap) · ta_sum)
+                    non_ta_sum = total_sum - ta_sum
+                    scale = (ta_cap * non_ta_sum) / max(1e-12, (1.0 - ta_cap) * ta_sum)
+                    for tid in ta_tids:
+                        pool_w[tid] *= scale
+
+        # ── Task 4e: Harvest Mass Boost ─────────────────────────────────
+        # When a large slice of pool weight sits in the 'Contrarian-Flip'
+        # zone (chronically-wrong tribes whose votes we now invert), the
+        # council is effectively harvesting alpha from dumb money. The raw
+        # weighted-consensus path already rotates these votes, but it does
+        # not reflect the *size* of the opportunity — a loud-and-wrong
+        # bloc is a higher-capacity fade than a quiet-and-wrong one.
+        # Scale the final cumulative path by  1 + harvest_scale × ratio,
+        # where ratio is the share of total pool weight that is currently
+        # flagged contrarian. Cap the boost by construction via the scale
+        # constant (0.5 → max 1.5×), and only apply when some contrarian
+        # mass actually exists.
+        harvest_scale = 0.5
+        total_mass = sum(pool_w.values())
+        harvest_mass = sum(pool_w.get(tid, 0.0) for tid in contrarian_tids)
+        harvest_mass_ratio = (
+            harvest_mass / total_mass if total_mass > 0.0 else 0.0
+        )
+        conviction_boost = 1.0 + harvest_scale * harvest_mass_ratio
+
         steps_bps: list[float] = []
         for h in range(n_steps):
             num = 0.0
             den = 0.0
             for tid, curve in zip(per_tribe_ids, per_tribe_curves):
                 w_row = self._weights.get(tid)
-                wv = (w_row[h] if w_row and h < len(w_row) else 1.0) * pool_w.get(tid, 0.0)
+                atw = w_row[h] if w_row and h < len(w_row) else 1.0
+                # Specialist overlay: per-horizon skill from the calibrator's
+                # horizon-bucketed EWMA. Stacks on top of the ATW learned
+                # weight — ATW is within-tick curve-fitting, sk_h is the
+                # cross-session "is this tribe actually good at THIS horizon"
+                # prior. They reinforce: a tribe ATW-good at h=1 AND
+                # calibrator-confirmed-good at short horizons gets double
+                # amplification; a tribe ATW-good but calibrator-bad is
+                # flagged as overfitting-this-tick and dampened.
+                sk_h_row = skill_per_h.get(tid)
+                sk_h = sk_h_row[h] if sk_h_row and h < len(sk_h_row) else 1.0
+                wv = atw * sk_h * pool_w.get(tid, 0.0)
                 num += curve[h] * wv
                 den += wv
             steps_bps.append(num / den if den > 0 else 0.0)
+
+        # Apply the Harvest Mass Boost to the cumulative path. Multiplying
+        # the cumulative series is equivalent to multiplying each forward
+        # step (expected_move_bps is a kernel-weighted sum of step deltas),
+        # so the boost propagates cleanly into step_bps_list and
+        # expected_move_bps below without changing the *shape* of the path.
+        if conviction_boost != 1.0:
+            steps_bps = [b * conviction_boost for b in steps_bps]
 
         # Record this tick's frame for future ledger-based weight updates.
         self._ledger.append({
@@ -621,6 +735,29 @@ class ChessProjector:
         else:
             directional_agreement = None
 
+        # Task 4c — Path-Integrity. Weighted-average calibrator skill of
+        # tribes voting WITH the consensus direction (pool-weight ×
+        # |conviction|-weighted). If this drops below 0.7 the decision
+        # engine must refuse to amplify size via agree_mult/crowd_mult:
+        # a 100%-agreement signal from the council's worst 5 tribes is
+        # not a stronger signal, it's a louder wrong one.
+        driver_skill_avg: float | None = None
+        if initial_votes:
+            num_ds = 0.0
+            den_ds = 0.0
+            for tid, (v0, signed, _) in initial_votes.items():
+                if signed * sign_ref <= 0.0:
+                    continue  # abstain or voted against consensus
+                pw = pool_w.get(tid, 0.0)
+                contrib = pw * abs(float(v0.conviction))
+                if contrib <= 0.0:
+                    continue
+                sk = skill.get(tid, 1.0)
+                num_ds += contrib * sk
+                den_ds += contrib
+            if den_ds > 0.0:
+                driver_skill_avg = num_ds / den_ds
+
         logger.debug(
             "projector: {} steps, move {:+.1f}bps, signal={:.2f} dir={:.2f} "
             "conf={:.2f} σ₀={:.1f} tribes={}",
@@ -642,6 +779,9 @@ class ChessProjector:
             diversity_score=diversity_score,
             category_mass=category_mass,
             avg_voter_horizon_s=avg_voter_horizon_s,
+            driver_skill_avg=driver_skill_avg,
+            harvest_mass_ratio=harvest_mass_ratio,
+            conviction_boost=conviction_boost,
         )
 
     # -- Phase 1a: redundancy / cross-correlation ------------------------

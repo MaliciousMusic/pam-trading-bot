@@ -93,6 +93,8 @@ class TribeCalibrator:
         regime_shift_threshold: float = 0.12,
         enable_regime_conditional: bool = False,
         regime_min_samples: int = 15,
+        conviction_epsilon: float = 0.05,
+        horizon_min_samples: int = 20,
     ) -> None:
         self.dir = directory or DEFAULT_DIR
         self.dir.mkdir(parents=True, exist_ok=True)
@@ -121,6 +123,28 @@ class TribeCalibrator:
         self._skill_by_regime: dict[str, dict[str, dict]] = {}
         self._regime_conditional = bool(enable_regime_conditional)
         self._regime_min_samples = max(1, int(regime_min_samples))
+
+        # ── Task 3: Conviction ε — don't score unfalsifiable micro-votes.
+        # A vote with |conv| < 0.05 is functionally an abstention: it barely
+        # moves the pool, and a "hit" on it is dominated by noise (even a
+        # coin-flip tribe will look 50% at tiny conviction). Scoring these
+        # lets passive_whale (emit 0.02 votes constantly) and options_hedger
+        # (emit 0.03 votes) coast to the top of the leaderboard not on edge
+        # but on statistical floor. Skip them: you must bet meaningfully to
+        # earn a meaningful score.
+        self._conviction_epsilon = max(0.0, float(conviction_epsilon))
+
+        # ── Task 1 / 4b: per-(tribe, horizon_bucket) skill EWMA.
+        # The council's best 1-step predictor (microstructure_prober) is
+        # often the council's worst 30-step predictor, and vice-versa.
+        # Collapsing all horizons into one scalar punishes specialists.
+        # Horizons are bucketed into three bands (short ≤60s, medium
+        # 60–300s, long >300s); each (tribe, bucket) gets its own EWMA.
+        # `skill_multiplier(tid, horizon_s=H)` returns the bucket's
+        # multiplier when the bucket has ≥horizon_min_samples resolutions,
+        # falling back to the global scalar otherwise.
+        self._skill_by_horizon: dict[str, dict[str, dict]] = {}
+        self._horizon_min_samples = max(1, int(horizon_min_samples))
 
         # Vote log so we can retrospectively score past ticks when
         # forecasts mature. Keyed by tick_ts (epoch seconds) → {"regime":
@@ -162,13 +186,29 @@ class TribeCalibrator:
                 break
             self._votes_at_tick.popitem(last=False)
 
+    @staticmethod
+    def _horizon_bucket(horizon_s: float) -> str:
+        """Map a resolved anchor's horizon to one of three skill buckets.
+        Short/medium/long bands chosen so each covers a ~5× range and
+        roughly aligns with the council's reactive / thematic / structural
+        tribes. microstructure_prober dominates short; basis_arb and
+        passive_whale dominate long."""
+        h = float(horizon_s)
+        if h <= 60.0:
+            return "short"
+        if h <= 300.0:
+            return "medium"
+        return "long"
+
     def apply_resolved(self, resolved: Iterable[Resolved]) -> None:
         """Score every tribe that voted at the anchor's origin tick against
-        the realized direction. Updates both slow and fast EWMAs (global)
-        AND the per-regime EWMA for the label stamped at vote time."""
+        the realized direction. Updates both slow and fast EWMAs (global),
+        the per-regime EWMA for the label stamped at vote time, AND the
+        per-(tribe, horizon_bucket) EWMA for specialist accounting."""
         changed = False
         alpha = 1.0 - 0.5 ** (1.0 / float(self._halflife))
         alpha_fast = 1.0 - 0.5 ** (1.0 / float(self._halflife_fast))
+        eps = self._conviction_epsilon
         for rec in resolved:
             snap = self._votes_at_tick.get(rec.tick_ts)
             if not snap:
@@ -181,9 +221,16 @@ class TribeCalibrator:
                 realized = -1
             else:
                 continue  # no realized direction; skip
+            bucket = self._horizon_bucket(rec.horizon_s)
             for tid, (side, conv) in votes.items():
                 if side == 0:
                     continue  # abstain — no bet, no score
+                # Task 3: drop unfalsifiable micro-votes. A 0.02-conviction
+                # vote is a whisper — scoring it as a full bet-or-miss
+                # inflates the hit-rate of tribes whose "strategy" is to
+                # only-ever-nudge.
+                if abs(conv) < eps:
+                    continue
                 hit = 1.0 if side == realized else 0.0
                 weighted = 0.5 + (hit - 0.5) * max(0.0, min(1.0, conv))
                 s = self._skill.setdefault(
@@ -205,6 +252,14 @@ class TribeCalibrator:
                     rs["ewma"] = rs["ewma"] + alpha * (weighted - rs["ewma"])
                     rs["n"] += 1
                     rs["correct"] += int(hit)
+                # Task 1 / 4b: per-horizon-bucket EWMA.
+                hs = self._skill_by_horizon.setdefault(tid, {}).setdefault(
+                    bucket, {"n": 0, "correct": 0, "ewma": 0.5, "ewma_fast": 0.5}
+                )
+                hs["ewma"] = hs["ewma"] + alpha * (weighted - hs["ewma"])
+                hs["ewma_fast"] = hs["ewma_fast"] + alpha_fast * (weighted - hs["ewma_fast"])
+                hs["n"] += 1
+                hs["correct"] += int(hit)
         if changed:
             self._save()
 
@@ -217,18 +272,38 @@ class TribeCalibrator:
             return 1.0 + (x - 0.5) * 2.0 * (self._max_boost - 1.0)
         return self._max_shrink + x * 2.0 * (1.0 - self._max_shrink)
 
-    def skill_multiplier(self, tribe_id: str, regime_label: str | None = None) -> float:
+    def skill_multiplier(
+        self,
+        tribe_id: str,
+        regime_label: str | None = None,
+        horizon_s: float | None = None,
+    ) -> float:
         """Multiplier in [max_shrink, max_boost] for this tribe's conviction.
 
-        Resolution order:
-          1. Per-regime EWMA (if enabled, label provided, n ≥ regime_min_samples)
-          2. Fast EWMA override (if |fast − slow| ≥ regime_shift_threshold)
-          3. Slow EWMA (the long-run stable estimate)
-          4. 1.0 (too few samples, or apply=False)
+        Resolution order (first match wins):
+          1. Per-horizon-bucket EWMA (if horizon_s given and n ≥ horizon_min_samples)
+          2. Per-regime EWMA (if enabled, label provided, n ≥ regime_min_samples)
+          3. Fast EWMA override (if |fast − slow| ≥ regime_shift_threshold)
+          4. Slow EWMA (the long-run stable estimate)
+          5. 1.0 (too few samples, or apply=False)
         """
         if not self._apply:
             return 1.0
-        # 1 — per-regime.
+        # 1 — per-horizon specialist skill. Takes precedence over regime
+        # conditioning because horizon-specialization is a stronger signal
+        # than regime-specialization (a microstructure tribe is always
+        # good at short-h regardless of regime label).
+        if horizon_s is not None:
+            bucket = self._horizon_bucket(horizon_s)
+            hs = self._skill_by_horizon.get(tribe_id, {}).get(bucket)
+            if hs and hs["n"] >= self._horizon_min_samples:
+                slow_h = float(hs["ewma"])
+                fast_h = float(hs.get("ewma_fast", slow_h))
+                if hs["n"] >= max(self._min_samples_fast, self._horizon_min_samples) and \
+                        abs(fast_h - slow_h) >= self._regime_shift_threshold:
+                    return self._ewma_to_multiplier(fast_h)
+                return self._ewma_to_multiplier(slow_h)
+        # 2 — per-regime.
         if self._regime_conditional and regime_label:
             rs = self._skill_by_regime.get(tribe_id, {}).get(regime_label)
             if rs and rs["n"] >= self._regime_min_samples:
@@ -238,11 +313,42 @@ class TribeCalibrator:
             return 1.0
         slow = float(s["ewma"])
         fast = float(s.get("ewma_fast", slow))
-        # 2 — fast override.
+        # 3 — fast override.
         if s["n"] >= self._min_samples_fast and abs(fast - slow) >= self._regime_shift_threshold:
             return self._ewma_to_multiplier(fast)
-        # 3 — slow fallback.
+        # 4 — slow fallback.
         return self._ewma_to_multiplier(slow)
+
+    def is_contrarian_candidate(
+        self,
+        tribe_id: str,
+        *,
+        hit_rate_threshold: float = 0.45,
+        min_samples: int = 50,
+    ) -> bool:
+        """True when this tribe's recent-window hit-rate has fallen far enough
+        below chance that flipping its vote is net-positive — Task 2's
+        'TA Cemetery' inversion trigger.
+
+        A tribe that is reliably wrong 55%+ of the time is as useful as one
+        that is reliably right 55% of the time: invert its conviction and
+        you've bought a new predictor for free. Uses the fast EWMA because
+        we want the rolling-window behavior (not lifetime average) — a
+        tribe that USED to work but has broken down this regime should flip,
+        and a tribe that's rediscovered its edge should un-flip.
+
+        The threshold should be well below 0.5 (we're gating on 'consistently
+        worse than chance', not 'not-above-chance') to avoid flipping noisy
+        50/50 tribes on a hot-hand coin-flip streak.
+        """
+        s = self._skill.get(tribe_id)
+        if not s:
+            return False
+        n = int(s.get("n", 0))
+        if n < max(min_samples, self._min_samples_fast):
+            return False
+        ewma_fast = float(s.get("ewma_fast", s.get("ewma", 0.5)))
+        return ewma_fast < float(hit_rate_threshold)
 
     def apply_skepticism_prior(
         self,
@@ -330,6 +436,19 @@ class TribeCalibrator:
                         and rs["n"] >= self._regime_min_samples
                     ),
                 })
+            horizon_rows = []
+            for bucket in ("short", "medium", "long"):
+                hs = self._skill_by_horizon.get(tid, {}).get(bucket)
+                if not hs:
+                    continue
+                horizon_rows.append({
+                    "bucket": bucket,
+                    "n": int(hs["n"]),
+                    "ewma_hit": float(hs["ewma"]),
+                    "ewma_hit_fast": float(hs.get("ewma_fast", hs["ewma"])),
+                    "raw_hit_rate": (hs["correct"] / hs["n"]) if hs["n"] else None,
+                    "active": hs["n"] >= self._horizon_min_samples,
+                })
             rows.append({
                 "tribe_id": tid,
                 "n": s["n"],
@@ -341,6 +460,7 @@ class TribeCalibrator:
                 "regime_shift": shifted,
                 "multiplier": self.skill_multiplier(tid),
                 "by_regime": regime_rows,
+                "by_horizon": horizon_rows,
             })
         return {
             "apply": self._apply,
@@ -363,6 +483,7 @@ class TribeCalibrator:
             "updated_at": datetime.now(timezone.utc).isoformat(),
             "skill": self._skill,
             "skill_by_regime": self._skill_by_regime,
+            "skill_by_horizon": self._skill_by_horizon,
         }
         try:
             self._path.write_bytes(orjson.dumps(payload, option=orjson.OPT_INDENT_2))
@@ -416,5 +537,26 @@ class TribeCalibrator:
                     }
                 if clean:
                     self._skill_by_regime[tid] = clean
+        # Horizon-bucketed skill (Task 1/4b — also backfill-friendly).
+        horizon = data.get("skill_by_horizon") if isinstance(data, dict) else None
+        if isinstance(horizon, dict):
+            for tid, by_h in horizon.items():
+                if not isinstance(by_h, dict):
+                    continue
+                clean_h: dict[str, dict] = {}
+                for bucket, hs in by_h.items():
+                    if not isinstance(hs, dict):
+                        continue
+                    hn = int(hs.get("n", 0))
+                    hewma = float(hs.get("ewma", 0.5)) if hn > 0 else 0.5
+                    hewma_fast = float(hs.get("ewma_fast", hewma)) if hn > 0 else 0.5
+                    clean_h[str(bucket)] = {
+                        "n": hn,
+                        "correct": int(hs.get("correct", 0)),
+                        "ewma": hewma,
+                        "ewma_fast": hewma_fast,
+                    }
+                if clean_h:
+                    self._skill_by_horizon[tid] = clean_h
         logger.info("[calibrator] loaded skill overlay for {} tribes from {}",
                     len(self._skill), self._path.name)

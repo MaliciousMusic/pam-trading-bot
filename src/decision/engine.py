@@ -117,6 +117,21 @@ class DecisionEngine:
         htf_mult = self._htf_multiplier(ts, state, side)
         crowd_mult = self._crowded_trade_multiplier(forecast, side)
         horizon_mult = self._horizon_multiplier(forecast)
+        # Task 4c — Path-Integrity. If the signal is being carried by tribes
+        # the calibrator has pinned to the floor (driver_skill_avg < 0.7),
+        # we accept the DIRECTION but refuse to AMPLIFY: cap every
+        # booster-multiplier at 1.0 so a high-agree / crowded / short-htf
+        # signal doesn't get leveraged up on the back of unreliable
+        # drivers. We still enter — refusing outright would waste the
+        # calibrator's downstream scoring loop — but at base size only.
+        path_integrity_ok = True
+        dsa = getattr(forecast, "driver_skill_avg", None)
+        if dsa is not None and float(dsa) < 0.7:
+            path_integrity_ok = False
+            agree_mult = min(agree_mult, 1.0)
+            crowd_mult = min(crowd_mult, 1.0)
+            htf_mult = min(htf_mult, 1.0)
+            horizon_mult = min(horizon_mult, 1.0)
         # Notional = equity × pct × leverage × sigma × agree × htf × crowd × horizon.
         size_usd = (equity_usd * pct / 100.0 * self.leverage
                     * sigma_mult * agree_mult * htf_mult
@@ -125,10 +140,13 @@ class DecisionEngine:
         action = "open_long" if side is Side.BUY else "open_short"
         peak_s = self._peak_favorable_seconds(forecast, side)
 
+        integrity_tag = "" if path_integrity_ok else " PATH_INTEGRITY_CAP"
+        dsa_str = f"{float(dsa):.2f}" if dsa is not None else "—"
         reason = (f"emove {emove:+.1f}bps conf={conf:.2f} "
                   f"size={pct:.2f}%×{self.leverage:.0f}x({self.size_curve}) "
                   f"σ×{sigma_mult:.2f} agree×{agree_mult:.2f} htf×{htf_mult:.2f} "
                   f"crowd×{crowd_mult:.2f} hz×{horizon_mult:.2f} "
+                  f"drv={dsa_str}{integrity_tag} "
                   f"hz={horizon}s")
         return TradeIntent(
             ts=ts, action=action, size_usd=size_usd, price_ref=price,

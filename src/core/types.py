@@ -117,6 +117,24 @@ class Forecast:
     # the initial consensus. Shrinks when the council is dominated by
     # short-horizon scalpers; used for volatility-adjusted deleveraging.
     avg_voter_horizon_s: float | None = None
+    # Task 4c — Path-Integrity. Pool-weight-weighted average of calibrator
+    # skill multiplier across tribes voting WITH the consensus direction.
+    # ~1.0 = the signal is carried by tribes the calibrator rates neutral
+    # or better; < 0.7 = the consensus is being dragged by tribes pinned
+    # to the floor (TA Cemetery, over-eager retail). Decision engine uses
+    # this to refuse leverage *amplification* (agree_mult, crowd mults)
+    # when the path's drivers aren't themselves trustworthy — a loud
+    # consensus of bad predictors is still a bad prediction.
+    driver_skill_avg: float | None = None
+    # Task 4e — Harvest Mass Boost. `harvest_mass_ratio` is the share of
+    # pool weight currently sitting in contrarian-flipped tribes (∈ [0,1]);
+    # `conviction_boost` is the multiplier applied to the cumulative path
+    # (≥ 1.0, capped at 1.5 by the harvest_scale constant in chess.py).
+    # Published so the UI can surface the "we're harvesting dumb money"
+    # state and the decision engine can audit how much of a move came
+    # from the boost vs. the raw consensus.
+    harvest_mass_ratio: float | None = None
+    conviction_boost: float | None = None
 
 
 @dataclass(slots=True)

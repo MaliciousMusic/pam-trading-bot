@@ -386,6 +386,25 @@ class TradingEngine:
                 # this to render a 17 × N heatmap so the user can watch each
                 # tribe's horizon-specialist profile emerge over time.
                 "projector_weights": dict(getattr(self.projector, "_weights", {}) or {}),
+                # Phase 15 — council intelligence surface. `diversity_score` is
+                # the Shannon entropy of dominant-side mass across orthogonal
+                # archetype categories (1.0 = ideally spread, 0 = one bloc).
+                # `category_mass` is the per-category buy/sell mass breakdown
+                # (lets the UI show who's behind a high-conf call — retail
+                # bloc vs a true cross-category consensus). `avg_voter_horizon_s`
+                # is the weighted-average holding horizon of the voters.
+                "diversity_score": forecast.diversity_score,
+                "category_mass": forecast.category_mass,
+                "avg_voter_horizon_s": forecast.avg_voter_horizon_s,
+                # Task 4c — Path-Integrity driver score. Pool-weight-weighted
+                # calibrator skill of tribes voting with the consensus. < 0.7
+                # caps all size multipliers in the decision engine.
+                "driver_skill_avg": forecast.driver_skill_avg,
+                # Task 4e — Harvest Mass. Share of pool weight sitting in
+                # contrarian-flipped tribes, and the resulting conviction
+                # boost applied to the cumulative path (1.0 = no boost).
+                "harvest_mass_ratio": forecast.harvest_mass_ratio,
+                "conviction_boost": forecast.conviction_boost,
                 "votes": [
                     {"tribe_id": v.tribe_id, "side": v.side.value,
                      "conviction": v.conviction, "weight": v.weight, "reason": v.reason}

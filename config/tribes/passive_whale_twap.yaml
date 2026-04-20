@@ -25,7 +25,7 @@ hardware:
   typical_latency_ms: 500
   uptime: continuous
   specs:
-    screens: 1
+    screens: "1"
     connectivity: business_fiber
 software:
   platforms:
