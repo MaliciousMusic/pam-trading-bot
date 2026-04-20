@@ -1058,8 +1058,12 @@
 
     // Per-tribe horizon-specific accuracy heatmap (replaces the old global
     // 15s/1m/5m/10m dot trail). The projector ships `projector_weights`
-    // ∈ [0.1, 3.0] per (tribe, horizon); we render it as a 17 × N grid.
-    renderAccuracyHeatmap(t.projector_weights, t.forecast_sample_paths_tribe_ids);
+    // ∈ [0.05, 2.5] per (tribe, horizon); we render it as a 20 × N grid.
+    // The top "Global" row pulls its color from the backscorer's actual
+    // hit-rate-per-horizon instead of averaging tribe weights (which
+    // always centers on 1.0 and renders as dark grey).
+    renderAccuracyHeatmap(t.projector_weights, t.forecast_sample_paths_tribe_ids,
+                          t.backscore && t.backscore.by_horizon);
 
     if(e0==null)e0=t.equity_usd;
     eqHist.push(t.equity_usd);
@@ -1116,7 +1120,66 @@
   // as W→3.0 (bonus). Logarithmic so the +/- extremes are visually
   // symmetric around neutral.
   const _accRowOrder=[];  // stable tribe order once first frame arrives
-  function renderAccuracyHeatmap(weights, tribeIds){
+  // Global-row color from council hit-rate at a given horizon seconds.
+  // hitRate 0.5 = neutral grey (chance), >0.5 = green (skill), <0.5 = red.
+  // Real-world hit rates tend to cluster in [0.40, 0.60] — linear (hr−0.5)·2
+  // washed out to barely-visible gray. We use 5× so that hr=0.40 saturates
+  // to full red and hr=0.60 to full green, matching how the user visually
+  // reads the per-tribe weight rows (which saturate at 1/1.5 and 1.5).
+  function _hitToColor(hr){
+    if(hr==null||!isFinite(hr)) return 'rgba(40,44,52,0.35)';
+    const c=Math.max(-1,Math.min(1,(hr-0.5)*5));
+    if(c>=0){
+      const g=Math.round(58 + (187-58)*c);
+      const r=Math.round(58 + (77 -58)*c);
+      const b=Math.round(58 + (110-58)*c);
+      const a=0.55 + 0.45*Math.abs(c);
+      return `rgba(${r},${g},${b},${a})`;
+    }else{
+      const t=-c;
+      const r=Math.round(58 + (217-58)*t);
+      const g=Math.round(58 + (79 -58)*t);
+      const b=Math.round(58 + (79 -58)*t);
+      const a=0.55 + 0.45*t;
+      return `rgba(${r},${g},${b},${a})`;
+    }
+  }
+  // Per-column hit rate for the Global row. Takes the backscorer's sparse
+  // anchor points (15s, 60s, 300s, 600s, 900s) and interpolates across
+  // all N projector columns so every cell carries meaningful data.
+  // Columns where we have no anchor data on either side stay null (grey).
+  function _globalHitRateRow(byHorizon, nSteps, tickS){
+    const row=new Array(nSteps).fill(null);
+    if(!Array.isArray(byHorizon)||!byHorizon.length) return row;
+    // Collect usable anchors — need hit_rate + n ≥ 2 to be non-noise.
+    const anchors=[];
+    for(const a of byHorizon){
+      if(a&&a.hit_rate!=null&&(a.n||0)>=2&&(a.horizon_s||0)>0){
+        anchors.push({h:+a.horizon_s, hr:+a.hit_rate});
+      }
+    }
+    if(!anchors.length) return row;
+    anchors.sort((a,b)=>a.h-b.h);
+    for(let i=0;i<nSteps;i++){
+      const hs=(i+1)*tickS;
+      // Find the two anchors flanking hs.
+      let lo=null, hi=null;
+      for(const a of anchors){
+        if(a.h<=hs) lo=a;
+        if(a.h>=hs){ hi=a; break; }
+      }
+      if(lo&&hi){
+        if(lo.h===hi.h) row[i]=lo.hr;
+        else{
+          const t=(hs-lo.h)/(hi.h-lo.h);
+          row[i]=lo.hr+(hi.hr-lo.hr)*t;
+        }
+      }else if(lo){ row[i]=lo.hr; }
+      else if(hi){ row[i]=hi.hr; }
+    }
+    return row;
+  }
+  function renderAccuracyHeatmap(weights, tribeIds, byHorizon){
     if(!weights||typeof weights!=='object') return;
     const ids=Object.keys(weights);
     if(!ids.length) return;
@@ -1141,6 +1204,7 @@
         const div=document.createElement('div');
         if(id==='__global__'){
           div.className='row global';
+          div.title='Council hit-rate per horizon from the backscorer (interpolated across 15s/1m/5m/10m/15m anchors). Green ≈ above chance, red ≈ below.';
           div.innerHTML='<i></i><span>Global</span>';
         }else{
           div.className='row';
@@ -1190,21 +1254,16 @@
         return `rgba(${r},${g},${b},${a})`;
       }
     };
-    // Build the global weighted-mean row: simple arithmetic mean of W values
-    // (not weighted by pool share — users want to see learned accuracy, not
-    // who's big). Matches the projector's per-horizon scoring semantics.
-    const globalRow=new Array(nSteps).fill(0);
-    const globalN=new Array(nSteps).fill(0);
-    for(const id of rowIds){
-      const row=weights[id];
-      for(let h=0;h<Math.min(nSteps,row.length);h++){
-        globalRow[h]+=row[h]; globalN[h]++;
-      }
-    }
-    for(let h=0;h<nSteps;h++) globalRow[h]=globalN[h]?globalRow[h]/globalN[h]:1.0;
-    // Draw global row (top).
+    // Global row: council hit-rate per horizon from the backscorer.
+    // Interpolates across the sparse anchor points (15s/1m/5m/10m/15m)
+    // so all N columns carry meaningful data. Averaging tribe weights
+    // would always center on 1.0 and render as dark grey — the row was
+    // effectively blank. Hit-rate centers on 0.5 (chance) and deviates
+    // visibly as the council learns its edge (or lack of it).
+    const tickS=(CFG&&CFG.tick_seconds)||5;
+    const hitRow=_globalHitRateRow(byHorizon, nSteps, tickS);
     for(let h=0;h<nSteps;h++){
-      ctx.fillStyle=wToColor(globalRow[h]);
+      ctx.fillStyle=_hitToColor(hitRow[h]);
       ctx.fillRect(h*colW, 0, Math.ceil(colW)+0.5, cellH-1);
     }
     // Draw per-tribe rows.
