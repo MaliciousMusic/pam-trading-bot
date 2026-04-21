@@ -292,6 +292,17 @@ class TradingEngine:
         if hasattr(self.executor, "check_black_swan"):
             self.executor.check_black_swan(ts, self.state)
 
+        # 2b.5) Phase 10-Harden — drain latency-spiked pending fills. An
+        #       intent decided 5 s ago with a Pareto-drawn 4.5 s latency
+        #       should land *this* tick at today's (moved) mark, then face
+        #       the same exit logic every other position does. Keeping the
+        #       drain before evaluate_exits lets the newly-opened position
+        #       participate in this tick's exit evaluation (it won't fire
+        #       on a 0-held-seconds position — all layers gate on held_s
+        #       or on the flip-streak — but the invariant is clean).
+        if hasattr(self.executor, "tick"):
+            self.executor.tick(ts, self.state)
+
         # 2c) Council-driven exits: close positions whose direction no longer
         #     matches the current forecast. Must happen BEFORE the entry
         #     decision so equity/notional caps reflect this tick's reality.

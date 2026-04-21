@@ -21,6 +21,7 @@ from src.core.config import PROJECT_ROOT, data_sources, settings
 from src.core.engine import TradingEngine
 from src.decision.engine import DecisionEngine
 from src.execution.ledger import Ledger
+from src.execution.harden import HardenConfig
 from src.execution.paper import PaperExecutor
 from src.ingress.binance_ws import BinancePerpsWS
 from src.ingress.bybit_ws import BybitPublicWS
@@ -119,6 +120,12 @@ async def main() -> None:
         slippage_cap_bps=float(exec_cfg.get("slippage_cap_bps", 30.0)),
         book_depth_frac_cap=float(exec_cfg.get("book_depth_frac_cap", 0.25)),
         half_spread_bps=float(exec_cfg.get("half_spread_bps", 0.5)),
+        # Phase 10-Harden — Merciless overlay. `harden:` yaml block is
+        # optional; missing → default HardenConfig (enabled=False, bit-
+        # for-bit identical to pre-Harden). Tick cadence is plumbed so
+        # the latency layer knows when to defer vs. absorb.
+        harden=HardenConfig.from_yaml(cfg.get("harden", {}) or {}),
+        tick_seconds=float(cfg["clock"].get("tick_seconds", 1)),
     )
     auditor = ForecastAuditor()
     proj_cfg = cfg.get("projector", {}) or {}

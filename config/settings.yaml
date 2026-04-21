@@ -280,6 +280,38 @@ execution:
   # Set to 0.0 to disable clipping.
   book_depth_frac_cap: 0.25
 
+# Phase 10-Harden — "Merciless mode" adversarial execution overlay.
+# Three stacked layers, each independently gated:
+#   1. adversarial fill  — additive bps on every fill, function of
+#      short-window realized vol. Models "MM saw your order first and
+#      the book moved against you during the 1s decision-to-fill window".
+#   2. fat-tailed latency — mixture of exponential (normal noise) and
+#      Pareto (network hiccups / matching stalls). Latencies ≥ tick
+#      cadence defer the fill to a future tick's mark.
+#   3. sqrt-slippage overlay — multiplies the existing depth-bps by
+#      (1 + sqrt_k × sqrt(size/ref)). Makes medium-to-large orders
+#      bite harder than the linear model predicts.
+# `enabled: false` is the default — the Gentle path is bit-for-bit
+# identical to pre-Harden. Flip to true to run the shock bench.
+harden:
+  enabled: false
+  # Layer 1: adversarial fill.
+  adv_mult: 0.5              # fraction of realized-vol-30s added as bps
+  adv_floor_bps: 1.5         # minimum even in flat markets
+  adv_vol_window_s: 30.0     # short-window realized vol lookback
+  adv_cap_bps: 20.0          # sanity cap on this layer alone
+  # Layer 2: fat-tailed latency.
+  p_spike: 0.02              # prob of hitting the Pareto regime
+  normal_mean_s: 0.08        # exponential mean for non-spike draws
+  spike_scale_s: 1.5         # Pareto scale (minimum value)
+  spike_alpha: 1.3           # Pareto alpha — heavy tail (< 2 → infinite var)
+  spike_cap_s: 30.0          # hard cap on any single draw
+  # Layer 3: sqrt-slippage overlay.
+  sqrt_k: 0.8                # coefficient; 0 disables the layer
+  sqrt_ref_usd: 100000.0     # size reference for the sqrt scaling
+  # Determinism — same seed → same adversarial trajectory.
+  seed: 42
+
 audit:
   horizon_seconds: 60           # forward-price window used to score each tribe vote
 

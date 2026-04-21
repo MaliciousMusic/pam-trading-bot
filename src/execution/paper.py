@@ -35,6 +35,7 @@ from loguru import logger
 from ..core.types import Position, Side, TradeIntent
 from ..tribes.market_state import MarketState
 from .base import Executor
+from .harden import HardenConfig, HardenState, PendingFill, realized_vol_bps_from_state
 from .ledger import Ledger
 
 
@@ -67,6 +68,13 @@ class PaperExecutor(Executor):
         book_depth_frac_cap: float = 0.25,
         half_spread_bps: float = 0.5,
         depth_ref_usd: float = 1_000_000.0,
+        # Phase 10-Harden — Merciless mode. When `harden.enabled` is False
+        # (default), the executor behaves exactly as pre-Harden code; every
+        # harden call-site short-circuits on the flag. When True, three
+        # stacked layers (adversarial fill, fat-tail latency, sqrt depth
+        # overlay) punish fills the way a real book would.
+        harden: HardenConfig | None = None,
+        tick_seconds: float = 1.0,
     ) -> None:
         self._equity = starting_equity_usd
         self._start_equity = starting_equity_usd
@@ -170,6 +178,23 @@ class PaperExecutor(Executor):
         # max_concurrent_positions entries, so the memory story is bounded.
         self._flip_streak: dict[str, int] = {}
         self._peak_bps: dict[str, float] = {}
+
+        # Phase 10-Harden — Merciless mode state. `harden` is a frozen
+        # `HardenConfig`; we wrap it in a `HardenState` that owns the
+        # seeded RNG + telemetry counters. A None config means "disabled"
+        # — use the default, which sets `enabled=False`.
+        self._harden_cfg = harden or HardenConfig()
+        self._harden = HardenState(self._harden_cfg)
+        # Tick cadence is needed so latency draws can decide whether to
+        # defer a fill (latency < tick_seconds → absorbed as network
+        # noise; latency ≥ tick_seconds → queued to a future tick).
+        self._tick_seconds = max(0.001, float(tick_seconds))
+        # Pending-fills queue for latency-spiked opens. Drained at the top
+        # of every `tick()`. FIFO — a spike landing behind a later-decided
+        # short-latency fill still respects its own fill_due_ts, so two
+        # intents deferred at the same tick land in decision order even
+        # if one had a longer draw.
+        self._pending_fills: list[PendingFill] = []
 
     # -- Executor interface ---------------------------------------------
 
@@ -306,6 +331,18 @@ class PaperExecutor(Executor):
     @property
     def frictionless_equity_usd(self) -> float:
         return self._frictionless_equity
+
+    # -- Phase 10-Harden surface ----------------------------------------
+
+    @property
+    def harden_enabled(self) -> bool:
+        return self._harden_cfg.enabled
+
+    def harden_snapshot(self) -> dict:
+        """Serializable harden telemetry for the shock report and UI."""
+        snap = self._harden.snapshot()
+        snap["pending_fills"] = len(self._pending_fills)
+        return snap
 
     def evaluate_exits(
         self,
@@ -507,9 +544,9 @@ class PaperExecutor(Executor):
         if price is None or price <= 0:
             return
         if intent.action == "open_long":
-            self._open(Side.BUY, intent, price, state=state)
+            self._dispatch_open(Side.BUY, intent, price, state=state)
         elif intent.action == "open_short":
-            self._open(Side.SELL, intent, price, state=state)
+            self._dispatch_open(Side.SELL, intent, price, state=state)
         elif intent.action == "close":
             ts = intent.ts
             for p in list(self._positions):
@@ -517,11 +554,95 @@ class PaperExecutor(Executor):
             self._positions = []
         # "hold" → nothing
 
+    def _dispatch_open(self, side: Side, intent: TradeIntent, price: float,
+                       state: "MarketState | None" = None) -> None:
+        """Phase 10-Harden: branch on latency draw.
+
+        Draws one latency sample. Latencies below `tick_seconds` are
+        absorbed as "normal network noise" and the fill happens at this
+        tick's mark exactly as pre-Harden. Latencies ≥ `tick_seconds`
+        queue the intent for a future tick, at which point `_open()` will
+        be called against whatever the mark has become (a fresh
+        adversarial layer draw is implicit — `_fill_price` reads state
+        each time).
+
+        When `harden.enabled=False`, `sample_latency_s` returns `(0.0,
+        False)` and the branch takes the immediate path — bit-for-bit
+        identical to pre-Harden behavior.
+        """
+        draw_s, was_spike = self._harden.sample_latency_s()
+        if self._harden_cfg.enabled:
+            self._harden.latency_samples += 1
+            self._harden.latency_total_s += draw_s
+            if was_spike:
+                self._harden.pareto_draws += 1
+        # Sub-tick latencies are network noise — the fill lands this tick.
+        if draw_s < self._tick_seconds or not self._harden_cfg.enabled:
+            self._open(side, intent, price, state=state)
+            return
+        # Supra-tick latency — defer. The intent rejoins the executor on
+        # the next eligible `tick()` whose `ts >= fill_due_ts`.
+        self._harden.latency_spikes += 1
+        fill_due = intent.ts + timedelta(seconds=float(draw_s))
+        self._pending_fills.append(PendingFill(
+            intent=intent,
+            intended_mark=price,
+            decision_ts=intent.ts,
+            fill_due_ts=fill_due,
+            drawn_latency_s=float(draw_s),
+            was_spike=was_spike,
+        ))
+        # Sort so later drains pop in due-order regardless of insertion
+        # order. Small lists, O(n log n) is free.
+        self._pending_fills.sort(key=lambda p: p.fill_due_ts)
+        logger.info(
+            "LATENCY-SPIKE  {:<5} ${:>8.2f}  draw={:.2f}s{}  queued → fill@{}",
+            side.value.upper(), intent.size_usd, draw_s,
+            "  [pareto]" if was_spike else "",
+            fill_due.isoformat(),
+        )
+        self._log({
+            "event": "latency_spike", "ts": intent.ts, "side": side.value,
+            "size_usd": intent.size_usd, "latency_s": round(draw_s, 3),
+            "was_pareto": was_spike, "fill_due_ts": fill_due,
+            "intended_mark": price,
+        })
+
+    def tick(self, ts: datetime, state: "MarketState") -> None:
+        """Phase 10-Harden: drain pending-fill queue.
+
+        Call at the top of every engine tick, BEFORE `evaluate_exits` and
+        `execute`. Fills whose `fill_due_ts <= ts` land at the *current*
+        mark (not the mark at decision time) — so `_fill_price` naturally
+        gets a fresh adversarial-bps draw against a price that has
+        (usually) moved since the decision. No-op when the pending
+        queue is empty OR when harden is disabled.
+        """
+        if not self._pending_fills:
+            return
+        cur_price = state.last_price
+        if cur_price is None or cur_price <= 0:
+            return
+        still_waiting: list[PendingFill] = []
+        for pending in self._pending_fills:
+            if pending.fill_due_ts <= ts:
+                self._harden.deferred_fills += 1
+                intent = pending.intent
+                side = Side.BUY if intent.action == "open_long" else Side.SELL
+                # _open uses intent.size_usd, intent.ts, etc. unchanged;
+                # the mark is NOW, not at decision time.
+                self._open(side, intent, cur_price, state=state,
+                           pending_meta=pending)
+            else:
+                still_waiting.append(pending)
+        self._pending_fills = still_waiting
+
     # -- internals -------------------------------------------------------
 
     def _fill_price(self, mark: float, taker_side: Side, size_usd: float = 0.0,
                     state: "MarketState | None" = None) -> tuple[float, float]:
-        """Book-depth-shaded fill (Phase 11). Returns `(fill_price, slippage_bps)`.
+        """Book-depth-shaded fill (Phase 11 + Phase 10-Harden overlay).
+        Returns `(fill_price, slippage_bps)`.
 
         Layers, in order:
           - Half-spread charge on entry/exit (always paid, one side each).
@@ -529,8 +650,23 @@ class PaperExecutor(Executor):
             on the taker side, slippage_bps = 5 · size_usd / side_depth_5bps_usd
             (i.e. eating the whole 5 bp band would cost 5 bp of slippage).
             Falls back to a size-scaled legacy model when depth is missing.
+          - **Phase 10-Harden: sqrt-slippage overlay** (optional, via
+            `HardenConfig.sqrt_k`). Multiplies `depth_bps` by
+            `1 + sqrt_k * sqrt(size/ref)` — medium-to-large orders take
+            a harder hit than the linear model predicts.
+          - **Phase 10-Harden: adversarial layer** (optional, via
+            `HardenConfig.adv_mult`). Adds `adv_mult × short-window
+            realized-vol-bps + adv_floor_bps`, capped at `adv_cap_bps`.
+            Captures "the book moved against you during the decision-to-
+            fill window". Runs on entry AND exit (caller branches as
+            usual).
           - Capped at `slippage_cap_bps` so a broken book snapshot can't
-            report a 10,000 bp fill.
+            report a 10 000 bp fill.
+
+        When `harden.enabled=False`, the two harden layers are strict
+        no-ops: the overlay multiplier is 1.0 and the adversarial bps is
+        0.0. Bit-for-bit identity with pre-Harden code is preserved on
+        the Gentle path.
 
         Backwards-compat: existing callers that do `fill = _fill_price(...)`
         still work — Python tuples unpack on assignment so we keep the 2-arg
@@ -555,7 +691,41 @@ class PaperExecutor(Executor):
                 depth_bps *= 1.0 + self.slippage_size_k * (
                     size_usd / self.slippage_ref_notional_usd
                 )
-        total_bps = min(self.slippage_cap_bps, self.half_spread_bps + depth_bps)
+        # --- Phase 10-Harden: sqrt-slippage overlay ---------------------
+        # Only active when `HardenConfig.enabled=True` AND `sqrt_k > 0`.
+        # Otherwise mult == 1.0 and the formula reduces to pre-Harden.
+        depth_bps_pre = depth_bps
+        sqrt_mult = self._harden.sqrt_overlay_mult(size_usd)
+        depth_bps = depth_bps * sqrt_mult
+        # Account the marginal dollars attributable to the overlay so the
+        # shock report can break out each layer's contribution.
+        if sqrt_mult > 1.0 and size_usd > 0:
+            marginal_bps = depth_bps - depth_bps_pre
+            self._harden.sqrt_overlay_usd_total += (
+                size_usd * marginal_bps / 10_000.0
+            )
+
+        # --- Phase 10-Harden: adversarial fill --------------------------
+        # Short-window realized vol is the multiplicand. Computed from the
+        # state's rolling-prices series — falls back to floor-only when
+        # the window isn't populated yet (cold start).
+        adv_bps = 0.0
+        if self._harden_cfg.enabled and state is not None:
+            vol_bps = realized_vol_bps_from_state(
+                state, self._harden_cfg.adv_vol_window_s
+            )
+            adv_bps = self._harden.adversarial_bps(vol_bps)
+        if adv_bps > 0.0 and size_usd > 0:
+            # Telemetry: dollars paid specifically to this layer.
+            self._harden.adv_usd_total += size_usd * adv_bps / 10_000.0
+
+        total_bps = min(
+            self.slippage_cap_bps,
+            self.half_spread_bps + depth_bps + adv_bps,
+        )
+        # Running averages for the shock-report fill-distribution snapshot.
+        self._harden.slip_bps_sum += total_bps
+        self._harden.slip_fills_n += 1
         return mark * (1 + sign * total_bps / 10_000.0), total_bps
 
     def _fee(self, notional_usd: float) -> float:
@@ -687,10 +857,15 @@ class PaperExecutor(Executor):
         return None
 
     def _open(self, side: Side, intent: TradeIntent, mark: float,
-              state: "MarketState | None" = None) -> None:
+              state: "MarketState | None" = None,
+              pending_meta: "PendingFill | None" = None) -> None:
         # Phase 11 — capacity clip BEFORE the notional/halt checks so we
         # emit a CAPACITY_CLIPPED event even if the clipped size would have
         # tripped other caps.
+        # Phase 10-Harden: `pending_meta` is populated when this open was
+        # deferred by a latency spike. Used only for telemetry (the report
+        # wants to know "decided at $X, actually filled at $Y N seconds
+        # later"); the fill-price math is identical to the non-deferred path.
         requested_size = intent.size_usd
         clipped = False
         clip_note = ""
@@ -790,7 +965,7 @@ class PaperExecutor(Executor):
             f"  [{clip_note}]" if clipped else "",
             vol_note,
         )
-        self._log({
+        open_rec = {
             "event": "open", "ts": intent.ts, "position_id": pid, "side": side.value,
             "size_usd": size_usd, "fill_price": fill, "mark_price": mark,
             "fee_usd": fee, "slippage_bps": slip_bps, "slippage_usd": slip_usd,
@@ -804,7 +979,26 @@ class PaperExecutor(Executor):
             "open_positions": len(self._positions),
             "size_usd_requested": requested_size, "capacity_clipped": clipped,
             "capacity_note": clip_note,
-        })
+        }
+        # Phase 10-Harden: stamp deferred-fill diagnostics when this open
+        # came through the latency-spike queue. `drift_bps` is signed
+        # against the trade direction — positive = market moved in our
+        # favor during the stall, negative = moved against us.
+        if pending_meta is not None:
+            intended = pending_meta.intended_mark
+            drift_bps = 0.0
+            if intended > 0:
+                sign_move = 1.0 if side is Side.BUY else -1.0
+                drift_bps = sign_move * (mark - intended) / intended * 10_000.0
+            open_rec.update({
+                "harden_deferred": True,
+                "decision_ts": pending_meta.decision_ts,
+                "decision_mark": intended,
+                "latency_s": round(pending_meta.drawn_latency_s, 3),
+                "latency_was_pareto": pending_meta.was_spike,
+                "latency_drift_bps": round(drift_bps, 2),
+            })
+        self._log(open_rec)
 
     def _close_position(self, p: Position, mark: float, ts: datetime, reason: str,
                         state: "MarketState | None" = None) -> None:

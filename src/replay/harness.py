@@ -26,6 +26,7 @@ from ..core.config import PROJECT_ROOT, settings
 from ..core.types import Event, Side
 from ..decision.engine import DecisionEngine
 from ..execution.ledger import Ledger
+from ..execution.harden import HardenConfig
 from ..execution.paper import PaperExecutor
 from ..projector.chess import ChessProjector
 from ..regime.classifier import RegimeClassifier
@@ -150,6 +151,13 @@ class SprintEngine:
                 float(self.tick_seconds),
             )
 
+        # Phase 10-Harden — drain latency-spiked pending opens before
+        # evaluate_exits, so a fill that landed this tick participates in
+        # the rest of the tick's pipeline (log row, exit evaluation on
+        # subsequent ticks). No-op when harden is disabled.
+        if hasattr(self.executor, "tick"):
+            self.executor.tick(ts, self.state)
+
         self.executor.evaluate_exits(
             ts, self.state.last_price, forecast, regime_label=regime_label,
         )
@@ -231,6 +239,11 @@ def _build_stack(
         slippage_cap_bps=float(_exec.get("slippage_cap_bps", 30.0)),
         book_depth_frac_cap=float(_exec.get("book_depth_frac_cap", 0.25)),
         half_spread_bps=float(_exec.get("half_spread_bps", 0.5)),
+        # Phase 10-Harden — optional adversarial overlay. Pre-harden
+        # callers who don't set the yaml block get the default config
+        # (`enabled=False`), which is a bit-for-bit no-op.
+        harden=HardenConfig.from_yaml(cfg.get("harden", {}) or {}),
+        tick_seconds=float(cfg["clock"].get("tick_seconds", 1)),
     )
     regime_classifier = RegimeClassifier(cfg.get("regime", {}) or {})
     return tribes, state, projector, decision, executor, regime_classifier
