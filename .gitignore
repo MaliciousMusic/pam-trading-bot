@@ -23,6 +23,10 @@ logs/
 archive/*/ledger/
 archive/*/audit/
 
+# Raw cProfile dumps — per-machine, regenerable via profile_sprint.py.
+data/perf/
+
+
 # IDE
 .idea/
 .vscode/
