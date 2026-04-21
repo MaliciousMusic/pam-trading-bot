@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
-import orjson
+from ..core import serde
 import yaml
 from loguru import logger
 
@@ -288,7 +288,7 @@ def run_tournament(
         "rows": [r.to_dict() for r in rows],
     }
     (out_root / "leaderboard.json").write_bytes(
-        orjson.dumps(leaderboard, option=orjson.OPT_INDENT_2)
+        serde.dumps_indent(leaderboard)
     )
     logger.info(
         "[tournament] winner={} (Δeq=${:+.2f})  vs parent=${:+.2f}  promote={}",

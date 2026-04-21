@@ -23,7 +23,7 @@ import asyncio
 import math
 from datetime import datetime, timezone
 
-import orjson
+from ..core import serde
 import websockets
 from loguru import logger
 
@@ -67,7 +67,7 @@ class OKXPublicWS:
                     close_timeout=5,
                     max_size=2**20,
                 ) as ws:
-                    await ws.send(orjson.dumps({
+                    await ws.send(serde.dumps({
                         "op": "subscribe",
                         "args": [{"channel": "trades", "instId": self.inst_id}],
                     }).decode())
@@ -106,8 +106,8 @@ class OKXPublicWS:
         if raw == "pong" or raw == b"pong":
             return
         try:
-            msg = orjson.loads(raw)
-        except orjson.JSONDecodeError:
+            msg = serde.loads(raw)
+        except serde.JSONDecodeError:
             return
         arg = msg.get("arg") or {}
         if arg.get("channel") != "trades":

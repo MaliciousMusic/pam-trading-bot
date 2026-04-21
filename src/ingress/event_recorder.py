@@ -16,7 +16,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
-import orjson
+from ..core import serde
 from loguru import logger
 
 from ..core.bus import EventBus
@@ -76,7 +76,7 @@ class EventRecorder:
             "tags": sorted(ev.tags),
             "severity": ev.severity,
         }
-        self._fh.write(orjson.dumps(payload) + b"\n")
+        self._fh.write(serde.dumps(payload) + b"\n")
         self._count += 1
         if self._count % 10_000 == 0:
             self._fh.flush()

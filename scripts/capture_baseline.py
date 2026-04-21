@@ -35,7 +35,7 @@ from loguru import logger
 logger.remove()
 logger.add(sys.stderr, level="WARNING")
 
-import orjson  # noqa: E402
+from src.core import serde  # noqa: E402
 
 from src.core.config import PROJECT_ROOT, settings  # noqa: E402
 from src.replay import harness as _harness  # noqa: E402
@@ -60,8 +60,8 @@ async def _prefetch(day: date, symbol: str) -> tuple[list[dict], list[dict]]:
     funding_path = fdir / "funding.json"
     if bars_path.exists() and funding_path.exists():
         return (
-            orjson.loads(bars_path.read_bytes()),
-            orjson.loads(funding_path.read_bytes()),
+            serde.loads(bars_path.read_bytes()),
+            serde.loads(funding_path.read_bytes()),
         )
     fdir.mkdir(parents=True, exist_ok=True)
     client = CachedHistoricalClient(
@@ -69,8 +69,8 @@ async def _prefetch(day: date, symbol: str) -> tuple[list[dict], list[dict]]:
     )
     bars = await client.get_day_klines(day)
     funding = await client.get_day_funding(day)
-    bars_path.write_bytes(orjson.dumps(bars))
-    funding_path.write_bytes(orjson.dumps(funding))
+    bars_path.write_bytes(serde.dumps(bars))
+    funding_path.write_bytes(serde.dumps(funding))
     return bars, funding
 
 

@@ -15,8 +15,7 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-import orjson
-
+from src.core import serde
 from loguru import logger
 logger.remove()
 logger.add(sys.stderr, level="WARNING")
@@ -81,11 +80,11 @@ def _write_variant(variants_dir: Path, variant_id: str,
         "wins": n_ticks // 40,
         "created_at_utc": "1970-01-02T00:00:00Z",
     }
-    (vd / "manifest.json").write_bytes(orjson.dumps(manifest, option=orjson.OPT_INDENT_2))
+    (vd / "manifest.json").write_bytes(serde.dumps_indent(manifest))
 
     with (vd / "decisions.jsonl").open("wb") as f:
         for i in range(1, n_ticks + 1):
-            f.write(orjson.dumps(_make_tick_row(i, 30_000.0, 5000.0)))
+            f.write(serde.dumps_indent(_make_tick_row(i, 30_000.0, 5000.0)))
             f.write(b"\n")
 
     ledger_dir = vd / "ledger"
@@ -122,7 +121,7 @@ def _write_run(tmp: Path, n_variants: int = 2) -> Path:
         "variants": variants,
     }
     (run_dir / "multi_manifest.json").write_bytes(
-        orjson.dumps(rollup, option=orjson.OPT_INDENT_2)
+        serde.dumps(rollup)
     )
     return run_dir
 

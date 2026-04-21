@@ -24,7 +24,7 @@ import tempfile
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-import orjson
+from src.core import serde
 from loguru import logger
 
 logger.remove()
@@ -76,8 +76,8 @@ def _write_fixtures(tmp: Path) -> tuple[Path, Path]:
     bars, funding = _build_fixture()
     bars_path = tmp / "bars.json"
     funding_path = tmp / "funding.json"
-    bars_path.write_bytes(orjson.dumps(bars))
-    funding_path.write_bytes(orjson.dumps(funding))
+    bars_path.write_bytes(serde.dumps(bars))
+    funding_path.write_bytes(serde.dumps(funding))
     return bars_path, funding_path
 
 
@@ -123,7 +123,7 @@ def test_multi_variant_outputs_shape() -> None:
                          "worker.stdout.log", "worker.stderr.log"):
                 p = vd / name
                 assert p.exists() and p.stat().st_size >= 0, f"missing {p}"
-            m = orjson.loads((vd / "manifest.json").read_bytes())
+            m = serde.loads((vd / "manifest.json").read_bytes())
             assert m["synth_rate"] == o.spec.synth_rate, f"manifest synth_rate mismatch for {o.spec.variant_id}"
             assert m["seed"] == o.spec.seed, f"manifest seed mismatch for {o.spec.variant_id}"
             assert m["ticks"] > 0
@@ -132,7 +132,7 @@ def test_multi_variant_outputs_shape() -> None:
 
         rollup_path = Path(r.rollup_path)
         assert rollup_path.exists()
-        rollup = orjson.loads(rollup_path.read_bytes())
+        rollup = serde.loads(rollup_path.read_bytes())
         assert rollup["run_id"] == r.run_id
         assert len(rollup["variants"]) == len(variants)
         for v in rollup["variants"]:

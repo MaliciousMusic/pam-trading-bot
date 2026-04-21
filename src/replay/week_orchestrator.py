@@ -21,7 +21,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Sequence
 
-import orjson
+from ..core import serde
 from loguru import logger
 
 from ..core.config import PROJECT_ROOT, settings
@@ -180,7 +180,7 @@ async def run_week(
         ],
     }
     week_manifest_path = week_root / "week_manifest.json"
-    week_manifest_path.write_bytes(orjson.dumps(week_manifest, option=orjson.OPT_INDENT_2))
+    week_manifest_path.write_bytes(serde.dumps_indent(week_manifest))
     logger.info("[week] wrote {}", week_manifest_path)
 
     zip_path: str | None = None

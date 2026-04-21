@@ -30,7 +30,7 @@ from loguru import logger
 logger.remove()
 logger.add(sys.stderr, level="WARNING")
 
-import orjson  # noqa: E402
+from src.core import serde  # noqa: E402
 
 from src.core.config import PROJECT_ROOT, settings  # noqa: E402
 from src.replay.harness import run_sprint  # noqa: E402
@@ -60,8 +60,8 @@ async def _prefetch(day: date, symbol: str) -> tuple[list[dict], list[dict]]:
     bars_path = fdir / "bars.json"
     funding_path = fdir / "funding.json"
     if bars_path.exists() and funding_path.exists():
-        bars = orjson.loads(bars_path.read_bytes())
-        funding = orjson.loads(funding_path.read_bytes())
+        bars = serde.loads(bars_path.read_bytes())
+        funding = serde.loads(funding_path.read_bytes())
         print(f"[det] using existing fixture at {fdir}", flush=True)
         return bars, funding
     fdir.mkdir(parents=True, exist_ok=True)
@@ -70,8 +70,8 @@ async def _prefetch(day: date, symbol: str) -> tuple[list[dict], list[dict]]:
     )
     bars = await client.get_day_klines(day)
     funding = await client.get_day_funding(day)
-    bars_path.write_bytes(orjson.dumps(bars))
-    funding_path.write_bytes(orjson.dumps(funding))
+    bars_path.write_bytes(serde.dumps(bars))
+    funding_path.write_bytes(serde.dumps(funding))
     print(f"[det] fixture written to {fdir}", flush=True)
     return bars, funding
 
@@ -79,6 +79,7 @@ async def _prefetch(day: date, symbol: str) -> tuple[list[dict], list[dict]]:
 async def _run_once(
     *, day: date, synth_rate: int, seed: int, outputs: Path, tag: str,
     bars: list[dict], funding: list[dict], symbol: str,
+    max_ticks: int | None,
 ) -> Path:
     result = await run_sprint(
         day=day,
@@ -90,6 +91,7 @@ async def _run_once(
         symbol=symbol,
         bars=bars,
         funding=funding,
+        max_ticks=max_ticks,
     )
     return Path(result.decisions_path)
 
@@ -102,10 +104,16 @@ def main() -> int:
                     help="trade events per 1m bar (default 60 \u2248 1/sec, matches live cadence)")
     ap.add_argument("--seed", type=int, default=42,
                     help="master RNG seed (both runs use this)")
+    ap.add_argument("--max-ticks", type=int, default=None,
+                    help="cap each run at N ticks for a fast determinism gate "
+                         "(full-day by default). Determinism is an all-or-nothing "
+                         "property -- a short window catches source-of-randomness "
+                         "drift without paying full-day wall-clock.")
     args = ap.parse_args()
 
     print(
-        f"[det] day={args.day.isoformat()} synth_rate={args.synth_rate} seed={args.seed}",
+        f"[det] day={args.day.isoformat()} synth_rate={args.synth_rate} "
+        f"seed={args.seed} max_ticks={args.max_ticks}",
         flush=True,
     )
 
@@ -123,6 +131,7 @@ def main() -> int:
             day=args.day, synth_rate=args.synth_rate, seed=args.seed,
             outputs=outputs, tag="run_a",
             bars=bars, funding=funding, symbol=symbol,
+            max_ticks=args.max_ticks,
         ))
         sha_a, bytes_a = _sha256(path_a)
         print(f"[det] run A done: sha256={sha_a[:16]}... ({bytes_a:,} bytes)", flush=True)
@@ -132,6 +141,7 @@ def main() -> int:
             day=args.day, synth_rate=args.synth_rate, seed=args.seed,
             outputs=outputs, tag="run_b",
             bars=bars, funding=funding, symbol=symbol,
+            max_ticks=args.max_ticks,
         ))
         sha_b, bytes_b = _sha256(path_b)
         print(f"[det] run B done: sha256={sha_b[:16]}... ({bytes_b:,} bytes)", flush=True)

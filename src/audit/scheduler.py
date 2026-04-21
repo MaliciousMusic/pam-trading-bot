@@ -19,7 +19,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import orjson
+from ..core import serde
 from loguru import logger
 
 from ..core.config import PROJECT_ROOT
@@ -72,7 +72,7 @@ def _persist_scorecard(report: DailyReport, fitness: dict, hypotheses: list) -> 
         ],
     }
     with out.open("wb") as f:
-        f.write(orjson.dumps(payload, option=orjson.OPT_INDENT_2))
+        f.write(serde.dumps_indent(payload))
     return out
 
 

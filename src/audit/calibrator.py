@@ -45,7 +45,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
-import orjson
+from ..core import serde
 from loguru import logger
 
 from ..core.config import PROJECT_ROOT
@@ -590,7 +590,7 @@ class TribeCalibrator:
             "skill_cube": self._skill_cube,
         }
         try:
-            self._path.write_bytes(orjson.dumps(payload, option=orjson.OPT_INDENT_2))
+            self._path.write_bytes(serde.dumps_indent(payload))
         except OSError as e:
             logger.warning("[calibrator] could not persist skill file: {}", e)
 
@@ -598,7 +598,7 @@ class TribeCalibrator:
         if not self._path.exists():
             return
         try:
-            data = orjson.loads(self._path.read_bytes())
+            data = serde.loads(self._path.read_bytes())
         except Exception as e:
             logger.warning("[calibrator] skill file unreadable, ignoring: {}", e)
             return

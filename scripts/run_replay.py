@@ -23,7 +23,7 @@ import asyncio
 from datetime import date
 from pathlib import Path
 
-import orjson
+from src.core import serde
 from loguru import logger
 
 from src.replay.harness import run_sprint
@@ -71,9 +71,9 @@ def main() -> None:
 
     bars = funding = None
     if args.bars_fixture is not None:
-        bars = orjson.loads(args.bars_fixture.read_bytes())
+        bars = serde.loads(args.bars_fixture.read_bytes())
     if args.funding_fixture is not None:
-        funding = orjson.loads(args.funding_fixture.read_bytes())
+        funding = serde.loads(args.funding_fixture.read_bytes())
 
     logger.info(
         "[replay] day={} synth_rate={} seed={} symbol={}",

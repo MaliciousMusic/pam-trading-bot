@@ -37,8 +37,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-import orjson
-
+from src.core import serde
 from src.core.config import PROJECT_ROOT
 
 
@@ -56,7 +55,7 @@ def _iter_ticks(path: Path):
             if not line:
                 continue
             try:
-                rec = orjson.loads(line)
+                rec = serde.loads(line)
             except Exception:
                 continue
             if rec.get("event") != "tick":

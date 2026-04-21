@@ -24,8 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Iterator
 
-import orjson
-
+from ..core import serde
 from ..aggregator.voting import aggregate_votes
 from ..core.config import PROJECT_ROOT
 from ..core.types import Event, Side
@@ -50,7 +49,7 @@ def load_events(path: Path) -> Iterator[Event]:
             if not line:
                 continue
             try:
-                rec = orjson.loads(line)
+                rec = serde.loads(line)
             except Exception:
                 continue
             ts_str = rec.get("ts")

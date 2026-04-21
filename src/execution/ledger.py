@@ -10,8 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import orjson
-
+from ..core import serde
 from ..core.config import PROJECT_ROOT
 
 
@@ -33,6 +32,6 @@ class Ledger:
             path = self._path_for(ts)
         else:
             path = self._path_for(datetime.now(timezone.utc))
-        line = orjson.dumps(record, option=orjson.OPT_SERIALIZE_NUMPY) + b"\n"
+        line = serde.dumps_with_numpy(record) + b"\n"
         with path.open("ab") as f:
             f.write(line)

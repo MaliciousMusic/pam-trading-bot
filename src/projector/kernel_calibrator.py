@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
-import orjson
+from ..core import serde
 from loguru import logger
 
 from ..audit.backscore import Resolved
@@ -159,7 +159,7 @@ class KernelCalibrator:
             "last_correction": self._last_correction,
         }
         try:
-            self._path.write_bytes(orjson.dumps(payload, option=orjson.OPT_INDENT_2))
+            self._path.write_bytes(serde.dumps_indent(payload))
         except OSError as e:
             logger.warning("[kernel-cal] could not persist gain: {}", e)
 
@@ -167,7 +167,7 @@ class KernelCalibrator:
         if not self._path.exists():
             return
         try:
-            data = orjson.loads(self._path.read_bytes())
+            data = serde.loads(self._path.read_bytes())
         except Exception as e:
             logger.warning("[kernel-cal] gain file unreadable: {}", e)
             return

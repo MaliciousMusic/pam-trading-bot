@@ -17,7 +17,7 @@ import asyncio
 import math
 from datetime import datetime, timezone
 
-import orjson
+from ..core import serde
 import websockets
 from loguru import logger
 
@@ -206,8 +206,8 @@ class BinancePerpsWS:
 
     async def _handle_raw(self, raw: str | bytes) -> None:
         try:
-            msg = orjson.loads(raw)
-        except orjson.JSONDecodeError:
+            msg = serde.loads(raw)
+        except serde.JSONDecodeError:
             logger.error("binance_ws: bad json {!r}", raw[:200])
             return
         data = msg.get("data") or msg

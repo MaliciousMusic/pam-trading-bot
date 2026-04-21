@@ -21,8 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
-import orjson
-
+from ..core import serde
 from ..core.config import PROJECT_ROOT
 
 
@@ -204,7 +203,7 @@ class ForecastAuditor:
             "forecast_conf": rec.forecast_conf,
             "net_pressure": rec.net_pressure,
         }
-        line = orjson.dumps(payload) + b"\n"
+        line = serde.dumps(payload) + b"\n"
         with path.open("ab") as f:
             f.write(line)
 

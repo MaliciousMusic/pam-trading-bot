@@ -10,8 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import orjson
-
+from ..core import serde
 N_PLOT = 600  # max time-series points per variant in charts
 
 
@@ -94,7 +93,7 @@ class RunMetrics:
 def _load_variant(manifest_path: Path, decisions_path: Path,
                   ledger_dir: Path | None = None,
                   variant_config_dir: Path | None = None) -> VariantMetrics:
-    m = orjson.loads(manifest_path.read_bytes())
+    m = serde.loads(manifest_path.read_bytes())
 
     rows: list[dict] = []
     if decisions_path.exists():
@@ -102,7 +101,7 @@ def _load_variant(manifest_path: Path, decisions_path: Path,
             for line in f:
                 line = line.strip()
                 if line:
-                    rows.append(orjson.loads(line))
+                    rows.append(serde.loads(line))
 
     action_counts: dict[str, int] = {}
     regime_counts: dict[str, int] = {}
@@ -147,7 +146,7 @@ def _load_variant(manifest_path: Path, decisions_path: Path,
                     if not line:
                         continue
                     try:
-                        ev = orjson.loads(line)
+                        ev = serde.loads(line)
                     except Exception:
                         continue
                     kind = ev.get("event")
@@ -248,7 +247,7 @@ def load_run_metrics(run_dir: Path) -> RunMetrics:
     rollup_path = run_dir / "multi_manifest.json"
 
     if rollup_path.exists():
-        rollup = orjson.loads(rollup_path.read_bytes())
+        rollup = serde.loads(rollup_path.read_bytes())
         run_id = rollup["run_id"]
         day = rollup["day"]
         symbol = rollup["symbol"]
@@ -277,7 +276,7 @@ def load_run_metrics(run_dir: Path) -> RunMetrics:
             # the lineage.yaml lives in that config dir.
             variant_config_dir: Path | None = None
             if manifest.exists():
-                m = orjson.loads(manifest.read_bytes())
+                m = serde.loads(manifest.read_bytes())
                 if not rollup_path.exists():
                     day = m.get("day", day)
                     symbol = m.get("symbol", symbol)

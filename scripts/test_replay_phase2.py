@@ -21,7 +21,7 @@ import tempfile
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-import orjson
+from src.core import serde
 from loguru import logger
 
 # Silence engine chatter so the test output stays readable and the run
@@ -156,7 +156,7 @@ def test_log_row_shape() -> None:
         rows = 0
         with path.open("rb") as f:
             for line in f:
-                row = orjson.loads(line)
+                row = serde.loads(line)
                 missing = required - set(row.keys())
                 assert not missing, f"row {rows} missing fields: {missing}"
                 assert isinstance(row["votes"], list)

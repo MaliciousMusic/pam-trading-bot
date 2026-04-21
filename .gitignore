@@ -1,9 +1,11 @@
-# Python
+# Python. .venv314t/ is the Phase 0.5 free-threaded runtime; kept per-machine
+# so the commit stays portable across dev laptops and the future headless box.
 __pycache__/
 *.py[cod]
 *$py.class
 *.egg-info/
 .venv/
+.venv*/
 venv/
 .Python
 
