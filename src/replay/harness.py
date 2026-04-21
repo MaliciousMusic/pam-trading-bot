@@ -165,6 +165,7 @@ class SprintEngine:
 
         intent = self.decision.decide(
             ts, forecast, self.state, equity_usd=self.executor.equity_usd,
+            regime_label=regime_label,
         )
 
         self.log_writer.write_tick(

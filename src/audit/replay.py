@@ -160,6 +160,7 @@ class ReplayEngine:
         self.executor.mark_to_market(ts, self.state.last_price)
         intent = self.decision.decide(
             ts, forecast, self.state, equity_usd=self.executor.equity_usd,
+            regime_label=regime_label,
         )
         if intent.action != "hold":
             self.executor.execute(intent, self.state)

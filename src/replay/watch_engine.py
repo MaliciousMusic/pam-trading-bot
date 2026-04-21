@@ -205,6 +205,7 @@ class WatchEngine:
 
         intent = self.decision.decide(
             ts, forecast, self.state, equity_usd=self.executor.equity_usd,
+            regime_label=regime.label,
         )
         if intent.action != "hold":
             self.executor.execute(intent, self.state)

@@ -82,12 +82,26 @@ class DecisionEngine:
         self.horizon_ref_ratio = float(hz.get("ref_ratio", 0.5))
         self.horizon_shrink_floor = float(hz.get("shrink_floor", 0.55))
 
+        # WS2.5 — Regime-entry gate. When `allowed_entry_regimes` is non-empty,
+        # an entry intent is suppressed unless either the current regime label
+        # is in the list OR the council confidence exceeds `high_conf_override`
+        # (escape hatch for rare high-conviction signals outside trend). An
+        # empty list preserves pre-WS2.5 behavior (no gate). Default override
+        # 1.0 = strict gate when enabled; set to 0.4 to let high-conf signals
+        # through in any regime. Exits are NOT affected.
+        self.allowed_entry_regimes: tuple[str, ...] = tuple(
+            d.get("allowed_entry_regimes", []) or []
+        )
+        self.high_conf_override = float(d.get("high_conf_override", 1.0))
+
     def decide(
         self,
         ts: datetime,
         forecast: Forecast,
         state: MarketState,
         equity_usd: float,
+        *,
+        regime_label: str | None = None,
     ) -> TradeIntent:
         price = state.last_price or 0.0
         emove = forecast.expected_move_bps
@@ -136,6 +150,21 @@ class DecisionEngine:
         size_usd = (equity_usd * pct / 100.0 * self.leverage
                     * sigma_mult * agree_mult * htf_mult
                     * crowd_mult * horizon_mult)
+
+        # WS2.5 — Regime-entry gate. Applied after all multipliers so the
+        # reason string still reflects the full sizing chain for audit. Exits
+        # are handled elsewhere and unaffected. Accepts RegimeLabel enum or
+        # the bare string; normalized via .value for list-membership.
+        if self.allowed_entry_regimes:
+            label_str = getattr(regime_label, "value", regime_label)
+            if (label_str not in self.allowed_entry_regimes
+                    and conf < self.high_conf_override):
+                return self._hold(
+                    ts, price, emove, conf,
+                    f"regime gated ({label_str}) conf={conf:.2f}<"
+                    f"{self.high_conf_override:.2f}",
+                )
+
         horizon = min(self.max_hold_seconds, max(30, forecast.horizon_seconds))
         action = "open_long" if side is Side.BUY else "open_short"
         peak_s = self._peak_favorable_seconds(forecast, side)

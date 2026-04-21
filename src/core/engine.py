@@ -347,6 +347,7 @@ class TradingEngine:
 
         intent = self.decision.decide(
             ts, forecast, self.state, equity_usd=self.executor.equity_usd,
+            regime_label=regime_label,
         )
         open_n = len(self.executor.positions)
         net_pos = sum(
