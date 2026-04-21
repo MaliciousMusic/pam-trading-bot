@@ -93,3 +93,16 @@ _Table below appended with each Phase 2 commit._
 | Commit | Pre wall | Post wall | Speedup | Invariants |
 |---|---|---|---|---|
 | (pre-Phase-2 baseline) | — | 28.96 s | — | — |
+| `feat(perf): RollingSeries NumPy backend` | 28.96 s | 25.53 s | **1.13×** | HELD: 0 vote drift / 14 tribes, end_equity exact, SHA regenerated |
+
+### Post-commit 1 profile
+
+Hot-spot #1 (`market_state.py:61 <genexpr>`, 21M calls, 10.23 s) is gone from
+the top-15. New leader inside `market_state.py` is `realized_vol_bps` at
+6.10 s tottime — the intended target for commit 2. Incidental residue:
+`_trim_to_epoch` ticked up +0.7 s (adding the `_dirty` flag maintenance),
+and the window consumers still pay a `zip(ts.tolist(), vs.tolist())`
+materialization tax. That tax collapses once `realized_vol_bps` calls
+`_slice_arrays` directly in commit 2.
+
+Snapshot: `docs/perf_baselines/post_rollingseries_numpy.json`.
