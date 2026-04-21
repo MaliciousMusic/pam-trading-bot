@@ -53,9 +53,13 @@ class KernelCalibrator:
     ----------
     initial_gain : float
         Starting value, typically from `settings.projector.bps_per_unit_pressure`.
+    halflife_resolved_s : float | None
+        **Preferred, time-based halflife in wallclock seconds.** Phase 2.5:
+        when set, the EWMA decays by `0.5 ** (dt_s / halflife_s)` per
+        refit, decoupling the calibration speed from tick cadence.
     halflife_resolved : int
-        EWMA halflife in resolved anchors. Controls how fast the gain
-        adapts — smaller = more responsive (and noisier).
+        Legacy count-based halflife in resolved anchors. Used when
+        `halflife_resolved_s` is None.
     min_samples : int
         Don't modify the gain until this many usable anchors have been
         seen. Guards against first-session swings.
@@ -73,6 +77,7 @@ class KernelCalibrator:
         initial_gain: float,
         directory: Path | None = None,
         halflife_resolved: int = 300,
+        halflife_resolved_s: float | None = None,
         min_samples: int = 50,
         window: int = 2000,
         apply: bool = True,
@@ -82,6 +87,10 @@ class KernelCalibrator:
         self._path = self.dir / "projector_gain.json"
         self._initial_gain = max(MIN_GAIN, min(MAX_GAIN, float(initial_gain)))
         self._halflife = max(1, int(halflife_resolved))
+        self._halflife_s = (
+            float(halflife_resolved_s) if halflife_resolved_s is not None else None
+        )
+        self._time_based = self._halflife_s is not None and self._halflife_s > 0.0
         self._min_samples = max(1, int(min_samples))
         self._window = max(50, int(window))
         self._apply = bool(apply)
@@ -90,6 +99,7 @@ class KernelCalibrator:
         self._gain: float = self._initial_gain
         self._n_seen: int = 0
         self._last_correction: float = 1.0
+        self._last_refit_ts: float | None = None
         self._load()
 
     # --- ingest -------------------------------------------------------
@@ -97,18 +107,24 @@ class KernelCalibrator:
     def apply_resolved(self, resolved: Iterable[Resolved]) -> None:
         """Accumulate informative pairs, refit if we're past min_samples."""
         added = 0
+        last_resolve_ts: float | None = None
         for rec in resolved:
             if abs(rec.expected_move_bps) < MIN_PRED_BPS:
                 continue
             self._pairs.append((rec.expected_move_bps, rec.realized_move_bps))
             self._n_seen += 1
             added += 1
+            last_resolve_ts = float(rec.realized_ts)
         if added and self._n_seen >= self._min_samples:
-            self._refit()
+            self._refit(last_resolve_ts)
             self._save()
 
-    def _refit(self) -> None:
-        """Robust median of realized/predicted over the window, EWMA-smoothed."""
+    def _refit(self, now_ts: float | None = None) -> None:
+        """Robust median of realized/predicted over the window, EWMA-smoothed.
+
+        Phase 2.5: when `halflife_resolved_s` is set, `alpha` comes from the
+        wallclock gap between refits so the smoothing speed stays
+        independent of tick cadence."""
         if not self._pairs:
             return
         ratios = [r / p for p, r in self._pairs if p != 0]
@@ -125,7 +141,15 @@ class KernelCalibrator:
         correction = max(0.25, min(4.0, float(correction)))
         self._last_correction = correction
 
-        alpha = 1.0 - 0.5 ** (1.0 / float(self._halflife))
+        if self._time_based and now_ts is not None:
+            if self._last_refit_ts is None:
+                dt = 1.0  # cold-start: 1s equivalent to match legacy move size
+            else:
+                dt = max(0.0, float(now_ts) - float(self._last_refit_ts))
+            self._last_refit_ts = float(now_ts)
+            alpha = 1.0 - 0.5 ** (dt / float(self._halflife_s))
+        else:
+            alpha = 1.0 - 0.5 ** (1.0 / float(self._halflife))
         target = max(MIN_GAIN, min(MAX_GAIN, self._gain * correction))
         self._gain = self._gain + alpha * (target - self._gain)
         self._gain = max(MIN_GAIN, min(MAX_GAIN, self._gain))
@@ -145,6 +169,10 @@ class KernelCalibrator:
             "window_pairs": len(self._pairs),
             "min_samples": self._min_samples,
             "halflife_resolved": self._halflife,
+            # Phase 2.5 — expose the time-based halflife (None when the
+            # count-based fallback is active).
+            "halflife_resolved_s": self._halflife_s,
+            "time_based": self._time_based,
             "min_gain": MIN_GAIN,
             "max_gain": MAX_GAIN,
         }
@@ -157,6 +185,7 @@ class KernelCalibrator:
             "gain": self._gain,
             "n": self._n_seen,
             "last_correction": self._last_correction,
+            "last_refit_ts": self._last_refit_ts,
         }
         try:
             self._path.write_bytes(serde.dumps_indent(payload))
@@ -178,5 +207,8 @@ class KernelCalibrator:
             self._n_seen = int(data["n"])
         if isinstance(data.get("last_correction"), (int, float)):
             self._last_correction = float(data["last_correction"])
+        last_refit = data.get("last_refit_ts")
+        if isinstance(last_refit, (int, float)):
+            self._last_refit_ts = float(last_refit)
         logger.info("[kernel-cal] resumed gain={:.2f} from {} samples",
                     self._gain, self._n_seen)

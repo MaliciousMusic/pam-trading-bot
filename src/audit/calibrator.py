@@ -61,10 +61,22 @@ class TribeCalibrator:
 
     Parameters
     ----------
+    halflife_resolved_s : float | None
+        **Preferred, time-based halflife in wallclock seconds.** When set,
+        each EWMA cell tracks its last-update timestamp and decays by
+        `0.5 ** (dt_s / halflife_s)` per update. This decouples the decay
+        constant from tick cadence — a 2500s halflife means ~41 min of
+        wallclock regardless of whether the engine runs at 1 Hz or 0.1 Hz.
+        Phase 2.5 switched to this mode; count-based is retained as a
+        fallback for compatibility.
     halflife_resolved : int
-        Halflife (in resolved anchors) of the EWMA. 500 means a tribe's
-        score forgets ~half of its history every 500 resolutions — roughly
-        one trading day at a 15s tick with 5 anchors per tick.
+        **Legacy count-based halflife**, in resolved anchors. Used when
+        `halflife_resolved_s` is None. 500 means ~ one trading day of
+        decay at the old 5s tick cadence.
+    fast_halflife_resolved_s : float | None
+        Time-based analog for the fast EWMA.
+    fast_halflife_resolved : int
+        Legacy count-based fast halflife.
     min_samples : int
         Don't apply a multiplier until this many resolved anchors have
         scored the tribe. Guards against noisy early-tick swings.
@@ -83,12 +95,14 @@ class TribeCalibrator:
         *,
         directory: Path | None = None,
         halflife_resolved: int = 500,
+        halflife_resolved_s: float | None = None,
         min_samples: int = 30,
         max_shrink: float = 0.6,
         max_boost: float = 1.4,
         apply: bool = False,
         vote_history_s: float = 1200.0,
         fast_halflife_resolved: int = 50,
+        fast_halflife_resolved_s: float | None = None,
         fast_min_samples: int = 10,
         regime_shift_threshold: float = 0.12,
         enable_regime_conditional: bool = False,
@@ -109,6 +123,25 @@ class TribeCalibrator:
         self._halflife_fast = max(1, int(fast_halflife_resolved))
         self._min_samples_fast = max(1, int(fast_min_samples))
         self._regime_shift_threshold = max(0.0, float(regime_shift_threshold))
+
+        # Phase 2.5 — time-based EWMA halflives. When present these take
+        # precedence over the count-based halflives so the decay constant
+        # stays in wallclock seconds regardless of tick cadence. See
+        # `_alpha_pair` / `_alpha_slow` helpers for the per-cell update.
+        self._halflife_s = (
+            float(halflife_resolved_s) if halflife_resolved_s is not None else None
+        )
+        self._halflife_fast_s = (
+            float(fast_halflife_resolved_s)
+            if fast_halflife_resolved_s is not None else None
+        )
+        self._time_based = self._halflife_s is not None and self._halflife_s > 0.0
+        if self._time_based and (
+            self._halflife_fast_s is None or self._halflife_fast_s <= 0.0
+        ):
+            # Sensible fallback: if caller set only the slow time-based
+            # halflife, preserve the old slow/fast ratio (10:1) in seconds.
+            self._halflife_fast_s = self._halflife_s / 10.0
 
         # Per-tribe state: {"n": int, "correct": int, "ewma": float, "ewma_fast": float}.
         # `ewma` lives in [0,1]; 0.5 = chance. Start at 0.5 (neutral).
@@ -213,15 +246,64 @@ class TribeCalibrator:
             return "medium"
         return "long"
 
+    # --- EWMA alpha helpers (time-based or count-based) ----------------
+
+    @staticmethod
+    def _time_alpha(dt_s: float, halflife_s: float) -> float:
+        """Per-update decay factor for a time-based EWMA. Returns the
+        weight assigned to the new observation given `dt_s` wallclock
+        seconds have elapsed since the last update."""
+        if halflife_s <= 0.0 or dt_s <= 0.0:
+            return 0.0
+        return 1.0 - 0.5 ** (dt_s / halflife_s)
+
+    def _alpha_pair(self, cell: dict, now_ts: float) -> tuple[float, float]:
+        """Return (alpha_slow, alpha_fast) for an EWMA cell that tracks
+        both halflives (global skill, per-horizon skill). In time-based
+        mode, advances the cell's `last_ts` and computes both alphas from
+        the elapsed wallclock gap. In count-based mode, returns the
+        fixed legacy alphas. Cold-start treats the first update as a
+        1 s gap so the sample moves the EWMA by roughly the same tiny
+        amount the legacy fixed-alpha did at 1 Hz."""
+        if self._time_based:
+            last = cell.get("last_ts")
+            dt = 1.0 if last is None else max(0.0, float(now_ts) - float(last))
+            cell["last_ts"] = float(now_ts)
+            return (
+                self._time_alpha(dt, self._halflife_s),
+                self._time_alpha(dt, self._halflife_fast_s),
+            )
+        return (
+            1.0 - 0.5 ** (1.0 / float(self._halflife)),
+            1.0 - 0.5 ** (1.0 / float(self._halflife_fast)),
+        )
+
+    def _alpha_slow(self, cell: dict, now_ts: float) -> float:
+        """Return alpha_slow for a slow-only EWMA cell (per-regime,
+        skill_cube). Same time-vs-count dispatch as `_alpha_pair`."""
+        if self._time_based:
+            last = cell.get("last_ts")
+            dt = 1.0 if last is None else max(0.0, float(now_ts) - float(last))
+            cell["last_ts"] = float(now_ts)
+            return self._time_alpha(dt, self._halflife_s)
+        return 1.0 - 0.5 ** (1.0 / float(self._halflife))
+
     def apply_resolved(self, resolved: Iterable[Resolved]) -> None:
         """Score every tribe that voted at the anchor's origin tick against
         the realized direction. Updates both slow and fast EWMAs (global),
         the per-regime EWMA for the label stamped at vote time, AND the
-        per-(tribe, horizon_bucket) EWMA for specialist accounting."""
+        per-(tribe, horizon_bucket) EWMA for specialist accounting.
+
+        Phase 2.5: when `halflife_resolved_s` is configured, each EWMA
+        cell carries its own `last_ts` and alphas are computed from the
+        wallclock gap (`rec.realized_ts` is the anchor resolution time).
+        This keeps the calibrator's decay constant independent of tick
+        cadence."""
         changed = False
-        alpha = 1.0 - 0.5 ** (1.0 / float(self._halflife))
-        alpha_fast = 1.0 - 0.5 ** (1.0 / float(self._halflife_fast))
         eps = self._conviction_epsilon
+        # Legacy alphas (only used when time-based mode is off).
+        legacy_alpha = 1.0 - 0.5 ** (1.0 / float(self._halflife))
+        legacy_alpha_fast = 1.0 - 0.5 ** (1.0 / float(self._halflife_fast))
         for rec in resolved:
             snap = self._votes_at_tick.get(rec.tick_ts)
             if not snap:
@@ -235,6 +317,7 @@ class TribeCalibrator:
             else:
                 continue  # no realized direction; skip
             bucket = self._horizon_bucket(rec.horizon_s)
+            now_ts = float(rec.realized_ts)
             for tid, (side, conv) in votes.items():
                 if side == 0:
                     continue  # abstain — no bet, no score
@@ -251,26 +334,34 @@ class TribeCalibrator:
                 )
                 if "ewma_fast" not in s:
                     s["ewma_fast"] = s.get("ewma", 0.5)
+                if self._time_based:
+                    alpha, alpha_fast = self._alpha_pair(s, now_ts)
+                else:
+                    alpha, alpha_fast = legacy_alpha, legacy_alpha_fast
                 s["ewma"] = s["ewma"] + alpha * (weighted - s["ewma"])
                 s["ewma_fast"] = s["ewma_fast"] + alpha_fast * (weighted - s["ewma_fast"])
                 s["n"] += 1
                 s["correct"] += int(hit)
                 changed = True
-                # Per-regime EWMA. Uses the same alpha so a regime's recent
-                # performance weighs identically to the global recency.
+                # Per-regime EWMA (slow only).
                 if regime_label:
                     rs = self._skill_by_regime.setdefault(tid, {}).setdefault(
                         regime_label, {"n": 0, "correct": 0, "ewma": 0.5}
                     )
-                    rs["ewma"] = rs["ewma"] + alpha * (weighted - rs["ewma"])
+                    rs_alpha = self._alpha_slow(rs, now_ts) if self._time_based else legacy_alpha
+                    rs["ewma"] = rs["ewma"] + rs_alpha * (weighted - rs["ewma"])
                     rs["n"] += 1
                     rs["correct"] += int(hit)
-                # Task 1 / 4b: per-horizon-bucket EWMA.
+                # Task 1 / 4b: per-horizon-bucket EWMA (slow + fast).
                 hs = self._skill_by_horizon.setdefault(tid, {}).setdefault(
                     bucket, {"n": 0, "correct": 0, "ewma": 0.5, "ewma_fast": 0.5}
                 )
-                hs["ewma"] = hs["ewma"] + alpha * (weighted - hs["ewma"])
-                hs["ewma_fast"] = hs["ewma_fast"] + alpha_fast * (weighted - hs["ewma_fast"])
+                if self._time_based:
+                    hs_alpha, hs_alpha_fast = self._alpha_pair(hs, now_ts)
+                else:
+                    hs_alpha, hs_alpha_fast = legacy_alpha, legacy_alpha_fast
+                hs["ewma"] = hs["ewma"] + hs_alpha * (weighted - hs["ewma"])
+                hs["ewma_fast"] = hs["ewma_fast"] + hs_alpha_fast * (weighted - hs["ewma_fast"])
                 hs["n"] += 1
                 hs["correct"] += int(hit)
                 # Joint (tribe, regime, horizon) cube — only populated when a
@@ -282,7 +373,8 @@ class TribeCalibrator:
                                            .setdefault(bucket, {
                                                 "n": 0, "correct": 0, "ewma": 0.5,
                                            }))
-                    cs["ewma"] = cs["ewma"] + alpha * (weighted - cs["ewma"])
+                    cs_alpha = self._alpha_slow(cs, now_ts) if self._time_based else legacy_alpha
+                    cs["ewma"] = cs["ewma"] + cs_alpha * (weighted - cs["ewma"])
                     cs["n"] += 1
                     cs["correct"] += int(hit)
         if changed:
@@ -558,6 +650,11 @@ class TribeCalibrator:
             "apply": self._apply,
             "halflife_resolved": self._halflife,
             "halflife_resolved_fast": self._halflife_fast,
+            # Phase 2.5: time-based halflives in seconds (None when the
+            # count-based fallback is active).
+            "halflife_resolved_s": self._halflife_s,
+            "halflife_resolved_fast_s": self._halflife_fast_s,
+            "time_based": self._time_based,
             "min_samples": self._min_samples,
             "min_samples_fast": self._min_samples_fast,
             "regime_shift_threshold": self._regime_shift_threshold,
@@ -602,6 +699,14 @@ class TribeCalibrator:
         except Exception as e:
             logger.warning("[calibrator] skill file unreadable, ignoring: {}", e)
             return
+        def _opt_last_ts(cell: dict) -> float | None:
+            """Preserve `last_ts` from persisted state when present so the
+            time-based EWMA doesn't cold-start across restarts. Returns
+            None for pre-Phase-2.5 files — first post-load update then
+            falls back to the 1s cold-start convention."""
+            v = cell.get("last_ts")
+            return float(v) if isinstance(v, (int, float)) else None
+
         skill = data.get("skill") if isinstance(data, dict) else None
         if not isinstance(skill, dict):
             return
@@ -621,6 +726,7 @@ class TribeCalibrator:
                 "correct": int(s.get("correct", 0)),
                 "ewma": ewma,
                 "ewma_fast": ewma_fast,
+                "last_ts": _opt_last_ts(s),
             }
         # Regime-conditional skill (backfill-friendly — older files lack this).
         regime = data.get("skill_by_regime") if isinstance(data, dict) else None
@@ -638,6 +744,7 @@ class TribeCalibrator:
                         "n": rn,
                         "correct": int(rs.get("correct", 0)),
                         "ewma": rewma,
+                        "last_ts": _opt_last_ts(rs),
                     }
                 if clean:
                     self._skill_by_regime[tid] = clean
@@ -659,6 +766,7 @@ class TribeCalibrator:
                         "correct": int(hs.get("correct", 0)),
                         "ewma": hewma,
                         "ewma_fast": hewma_fast,
+                        "last_ts": _opt_last_ts(hs),
                     }
                 if clean_h:
                     self._skill_by_horizon[tid] = clean_h
@@ -683,6 +791,7 @@ class TribeCalibrator:
                             "n": cn,
                             "correct": int(cell.get("correct", 0)),
                             "ewma": cewma,
+                            "last_ts": _opt_last_ts(cell),
                         }
                     if reg_clean:
                         clean_c[str(reg)] = reg_clean

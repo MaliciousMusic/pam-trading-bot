@@ -140,13 +140,20 @@ async def main() -> None:
     # but don't scale votes yet. Flip the yaml flag once there's enough
     # signal (≥ min_samples resolved anchors per tribe — default 30).
     cal_cfg = cfg.get("calibration", {}) or {}
+    # Phase 2.5 — time-based halflives. When `_s` keys are present in the
+    # yaml they take precedence over the legacy count-based keys. Pass
+    # both through so the calibrator can pick its mode.
+    _hl_s = cal_cfg.get("halflife_resolved_s")
+    _hl_fast_s = cal_cfg.get("fast_halflife_resolved_s")
     calibrator = TribeCalibrator(
         halflife_resolved=int(cal_cfg.get("halflife_resolved", 500)),
+        halflife_resolved_s=(float(_hl_s) if _hl_s is not None else None),
         min_samples=int(cal_cfg.get("min_samples", 30)),
         max_shrink=float(cal_cfg.get("max_shrink", 0.6)),
         max_boost=float(cal_cfg.get("max_boost", 1.4)),
         apply=bool(cal_cfg.get("apply", False)),
         fast_halflife_resolved=int(cal_cfg.get("fast_halflife_resolved", 50)),
+        fast_halflife_resolved_s=(float(_hl_fast_s) if _hl_fast_s is not None else None),
         fast_min_samples=int(cal_cfg.get("fast_min_samples", 10)),
         regime_shift_threshold=float(cal_cfg.get("regime_shift_threshold", 0.12)),
         enable_regime_conditional=bool(cal_cfg.get("enable_regime_conditional", False)),
@@ -157,9 +164,11 @@ async def main() -> None:
     # toward the median realized/predicted ratio. Safe by default
     # (clamped, EWMA-smoothed, refuses to move until min_samples seen).
     kc_cfg = cfg.get("projector_calibration", {}) or {}
+    _kc_hl_s = kc_cfg.get("halflife_resolved_s")
     kernel_calibrator = KernelCalibrator(
         initial_gain=float(cfg["projector"]["bps_per_unit_pressure"]),
         halflife_resolved=int(kc_cfg.get("halflife_resolved", 300)),
+        halflife_resolved_s=(float(_kc_hl_s) if _kc_hl_s is not None else None),
         min_samples=int(kc_cfg.get("min_samples", 50)),
         window=int(kc_cfg.get("window", 2000)),
         apply=bool(kc_cfg.get("apply", True)),
