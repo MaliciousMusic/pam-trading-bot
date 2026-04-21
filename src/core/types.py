@@ -3,13 +3,26 @@
 Every module that speaks on the bus or returns results uses these shapes.
 Add fields only when a tribe or downstream module genuinely needs them —
 the types are a contract.
+
+Phase 1 — migrated from @dataclass(slots=True) to msgspec.Struct.
+msgspec.Struct is slot-equivalent (fixed layout, no __dict__), mutable by
+default, and gains native msgspec.json / msgspec.msgpack round-trip
+without the Encoder.enc_hook dance. Field order, defaults, and the
+keyword-only construction convention are preserved verbatim so the 60+
+call sites across ingress/tribes/projector/execution stay drop-in.
+
+We do NOT set gc=False on these Structs: Event.payload is typed
+dict[str, Any] and websocket adapters do occasionally stash arbitrary
+objects in it; turning off cycle-collection there is a Phase 2+ audit
+after a heap profile, not a Phase 1 blind win.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
+
+from msgspec import Struct, field
 
 
 class Side(str, Enum):
@@ -18,8 +31,7 @@ class Side(str, Enum):
     ABSTAIN = "abstain"
 
 
-@dataclass(slots=True)
-class Event:
+class Event(Struct):
     """A normalized market-relevant happening placed on the bus.
 
     `tags` is the attention-filter surface: tribes subscribe by tag.
@@ -40,8 +52,7 @@ class Event:
         return datetime.now(timezone.utc)
 
 
-@dataclass(slots=True)
-class Vote:
+class Vote(Struct):
     """A single tribe's decision for a tick.
 
     `conviction` is the net directional signal (activation-rate-scaled).
@@ -63,8 +74,7 @@ class Vote:
     sell_frac: float = 0.0  # fraction of weight that sells this tick
 
 
-@dataclass(slots=True)
-class Aggregate:
+class Aggregate(Struct):
     """Weighted synthesis of all tribe votes for a single tick."""
     ts: datetime
     net_pressure: float  # -1..+1, signed by side, weighted by conviction*weight
@@ -75,8 +85,7 @@ class Aggregate:
     uncertainty: float   # disagreement measure
 
 
-@dataclass(slots=True)
-class Forecast:
+class Forecast(Struct):
     """Output of the chess projector for a single decision tick."""
     ts: datetime
     steps: list[Aggregate]       # per-step forward aggregates
@@ -144,8 +153,7 @@ class Forecast:
     realized_vol_bps: float | None = None
 
 
-@dataclass(slots=True)
-class Position:
+class Position(Struct):
     """One open position inside the portfolio. Every open trade has its own
     entry price, size, TP/SL, and lifecycle — the executor auto-closes when
     mark-price hits either bracket or the horizon backstop fires."""
@@ -183,8 +191,7 @@ class Position:
         return False
 
 
-@dataclass(slots=True)
-class TradeIntent:
+class TradeIntent(Struct):
     """Decision-layer output handed to the executor. In the portfolio model
     the decision engine only emits entry intents; closes happen inside the
     executor when TP/SL/horizon triggers. Legacy `close` action is kept for

@@ -22,7 +22,7 @@ from datetime import timezone
 from ..aggregator.voting import aggregate_votes
 from ..audit.backscore import ForecastAuditor
 from ..audit.calibrator import TribeCalibrator
-from dataclasses import replace
+from msgspec.structs import replace
 from ..core.bus import EventBus
 from ..core.types import Event, Side
 from ..decision.engine import DecisionEngine

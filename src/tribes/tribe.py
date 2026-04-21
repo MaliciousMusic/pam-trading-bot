@@ -33,7 +33,7 @@ from __future__ import annotations
 import math
 import random
 from collections import deque
-from dataclasses import replace
+from msgspec.structs import replace
 from datetime import datetime, timedelta, timezone
 
 from ..core.types import Event, Side, Vote
