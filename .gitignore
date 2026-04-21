@@ -18,6 +18,11 @@ data/*
 data/baseline/sprint_runs/
 logs/
 
+# Archived epochs of runtime data. The folder + README get committed for
+# provenance, but the heavy jsonl/json payloads under it stay local.
+archive/*/ledger/
+archive/*/audit/
+
 # IDE
 .idea/
 .vscode/
