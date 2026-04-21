@@ -94,6 +94,7 @@ _Table below appended with each Phase 2 commit._
 |---|---|---|---|---|
 | (pre-Phase-2 baseline) | — | 28.96 s | — | — |
 | `feat(perf): RollingSeries NumPy backend` | 28.96 s | 25.53 s | **1.13×** | HELD: 0 vote drift / 14 tribes, end_equity exact, SHA regenerated |
+| `feat(perf): realized_vol_bps NumPy` | 25.53 s | 19.62 s | **1.30×** (cumul **1.48×**) | HELD: 0 vote drift / 14 tribes, end_equity exact, SHA regenerated |
 
 ### Post-commit 1 profile
 
@@ -106,3 +107,20 @@ materialization tax. That tax collapses once `realized_vol_bps` calls
 `_slice_arrays` directly in commit 2.
 
 Snapshot: `docs/perf_baselines/post_rollingseries_numpy.json`.
+
+### Post-commit 2 profile
+
+`realized_vol_bps` tottime collapses from 6.10 s → 0.52 s (11.7× on the
+function itself; 11,627 calls in a 500-tick sprint). `np.diff(np.log(px))`
+plus `.std(ddof=1)` runs in C with one ufunc reduction. Float ordering
+drifts at the 1e-15 level and never flips a downstream vote — all 14
+tribes match BUY/SELL counts exactly; end_equity holds to the cent.
+
+New leaderboard inside `market_state.py` is the structural trio:
+`_trim_to_epoch` (3.29 s), `_advance_clock_epoch` (2.89 s), `snapshot`
+(2.53 s). These are per-ingest and don't have a single easy win —
+they're out of scope for Phase 2 (deferred target 3 in the original
+plan, re-evaluated here). External consumer `indicators.py:54 _prices`
+(2.59 s) is the next reasonable target when we want another round.
+
+Snapshot: `docs/perf_baselines/post_realized_vol_numpy.json`.

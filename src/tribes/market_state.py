@@ -327,24 +327,35 @@ class MarketState:
 
         Scaling: per-tick log-return sigma × √N → cumulative-window sigma.
         Multiplied by 1e4 to express as basis points of price.
+
+        Phase 2 NumPy path: pulls the windowed price slice directly from
+        the RollingSeries ndarray mirror via `_slice_arrays`, then runs
+        `np.diff(np.log(...))` + `.std(ddof=1)` in C. Avoids the Python
+        list comprehension + manual variance loop that showed up as the
+        #2 hot-spot post-RollingSeries refactor (6.1 s tottime / 11.6K
+        calls on the 500-tick sprint).
         """
         import math
-        samples = list(self.prices._window(window_s))
-        if len(samples) < 3:
+        _, vs = self.prices._slice_arrays(window_s)
+        if vs.size < 3:
             return None
-        px = [v for _, v in samples if v is not None and v > 0]
-        if len(px) < 3:
+        # Filter out non-positive / non-finite samples. In steady state
+        # every price is positive and finite, so the mask passes and
+        # boolean indexing simply returns a fresh contiguous copy — which
+        # `np.log`/`np.diff` would allocate anyway.
+        mask = (vs > 0.0) & np.isfinite(vs)
+        px = vs if mask.all() else vs[mask]
+        if px.size < 3:
             return None
-        rets: list[float] = []
-        for i in range(1, len(px)):
-            if px[i - 1] > 0 and px[i] > 0:
-                rets.append(math.log(px[i] / px[i - 1]))
-        if len(rets) < 2:
+        rets = np.diff(np.log(px))
+        # Defensive: if any returns are non-finite (shouldn't happen after
+        # the mask, but belt + suspenders), drop them.
+        if not np.isfinite(rets).all():
+            rets = rets[np.isfinite(rets)]
+        if rets.size < 2:
             return None
-        mean = sum(rets) / len(rets)
-        var = sum((r - mean) ** 2 for r in rets) / (len(rets) - 1)
-        sigma_per_tick = math.sqrt(var)
-        return sigma_per_tick * math.sqrt(len(rets)) * 1e4
+        sigma_per_tick = float(rets.std(ddof=1))
+        return sigma_per_tick * math.sqrt(rets.size) * 1e4
 
     # -- ingest ---------------------------------------------------------
 
