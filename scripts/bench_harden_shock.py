@@ -23,12 +23,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import sys
 import tempfile
 import time
 from collections import Counter
-from dataclasses import asdict
 from datetime import date
 from pathlib import Path
 

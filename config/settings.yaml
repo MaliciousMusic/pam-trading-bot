@@ -291,10 +291,13 @@ execution:
 #   3. sqrt-slippage overlay — multiplies the existing depth-bps by
 #      (1 + sqrt_k × sqrt(size/ref)). Makes medium-to-large orders
 #      bite harder than the linear model predicts.
-# `enabled: false` is the default — the Gentle path is bit-for-bit
-# identical to pre-Harden. Flip to true to run the shock bench.
+# FROZEN DEFAULT (2026-04-21): `enabled: true`. After the 4-seed sweep
+# confirmed the Merciless reality-tax is a constant-like ~−0.45 % ± 0.06 pp
+# (research/phase10_harden/harden_sweep.md), the engine now trains and
+# validates against the adversarial overlay by default. Flip to `false`
+# ONLY for Gentle-vs-Merciless A/B benches (see scripts/bench_harden_*.py).
 harden:
-  enabled: false
+  enabled: true
   # Layer 1: adversarial fill.
   adv_mult: 0.5              # fraction of realized-vol-30s added as bps
   adv_floor_bps: 1.5         # minimum even in flat markets
