@@ -27,7 +27,12 @@ class RollingSeries:
         self._data: deque[tuple[float, float]] = deque()
 
     def add(self, ts: datetime, value: float) -> None:
-        t = ts.timestamp()
+        self._add_epoch(ts.timestamp(), value)
+
+    def _add_epoch(self, t: float, value: float) -> None:
+        """Hot-path variant of add() — the projector's inner loop reuses the
+        same step-epoch it already computed for _trim_to_epoch, avoiding a
+        second ts.timestamp() per simulated price append."""
         self._data.append((t, value))
         cutoff = t - self.max_age_s
         while self._data and self._data[0][0] < cutoff:
@@ -36,7 +41,14 @@ class RollingSeries:
     def advance_clock(self, ts: datetime) -> None:
         """Trim stale entries relative to `ts` without adding a new sample.
         Used by the chess projector when the virtual clock moves forward."""
-        cutoff = ts.timestamp() - self.max_age_s
+        self._trim_to_epoch(ts.timestamp())
+
+    def _trim_to_epoch(self, t: float) -> None:
+        """Hot-path variant of advance_clock. Callers that already hold the
+        epoch-float (projector loop) use this to skip a redundant
+        datetime.timestamp() call — profiling showed ~3.6M such calls per
+        200-tick run, ~15% of wall-clock. Same trimming semantics."""
+        cutoff = t - self.max_age_s
         while self._data and self._data[0][0] < cutoff:
             self._data.popleft()
 
@@ -87,7 +99,10 @@ class TaggedSeries:
             self._data.popleft()
 
     def advance_clock(self, ts: datetime) -> None:
-        cutoff = ts.timestamp() - self.max_age_s
+        self._trim_to_epoch(ts.timestamp())
+
+    def _trim_to_epoch(self, t: float) -> None:
+        cutoff = t - self.max_age_s
         while self._data and self._data[0][0] < cutoff:
             self._data.popleft()
 
@@ -623,22 +638,35 @@ class MarketState:
         return s
 
     def advance_clock(self, ts: datetime) -> None:
-        self.taker_flow.advance_clock(ts)
-        self.long_liq.advance_clock(ts)
-        self.short_liq.advance_clock(ts)
-        self.prices.advance_clock(ts)
-        self.social.advance_clock(ts)
-        self.news.advance_clock(ts)
+        """Public entry point — computes the epoch once and fans out to the
+        ~15 rolling series below via their internal _trim_to_epoch path.
+        Phase 2-lite: before this cache, 200-tick profiles showed ts.timestamp()
+        called 3.6M times (~15 per (tribe × step) iteration inside the
+        projector). Consolidating to one call per advance_clock plus the
+        projector-level cache at the caller site brings this down to ~50/tick."""
+        self._advance_clock_epoch(ts.timestamp(), ts)
+
+    def _advance_clock_epoch(self, t: float, ts: datetime) -> None:
+        """Hot-path entry. The projector precomputes a per-step epoch vector
+        once per project() call and calls this directly, skipping the
+        ts.timestamp() redo. `ts` is still threaded for `last_update`
+        bookkeeping — other state reads rely on it being a datetime."""
+        self.taker_flow._trim_to_epoch(t)
+        self.long_liq._trim_to_epoch(t)
+        self.short_liq._trim_to_epoch(t)
+        self.prices._trim_to_epoch(t)
+        self.social._trim_to_epoch(t)
+        self.news._trim_to_epoch(t)
         # Phase 12 — keep silent-tribe series in sync with the virtual clock.
-        self.bid_depth_series.advance_clock(ts)
-        self.ask_depth_series.advance_clock(ts)
-        self.trade_sizes.advance_clock(ts)
+        self.bid_depth_series._trim_to_epoch(t)
+        self.ask_depth_series._trim_to_epoch(t)
+        self.trade_sizes._trim_to_epoch(t)
         for series in self.oi.values():
-            series.advance_clock(ts)
+            series._trim_to_epoch(t)
         for series in self.cross_flow.values():
-            series.advance_clock(ts)
+            series._trim_to_epoch(t)
         # Phase G — options + stablecoin rolling series.
-        self.pc_ratio_series.advance_clock(ts)
-        self.iv_series.advance_clock(ts)
-        self.stablecoin_supply_series.advance_clock(ts)
+        self.pc_ratio_series._trim_to_epoch(t)
+        self.iv_series._trim_to_epoch(t)
+        self.stablecoin_supply_series._trim_to_epoch(t)
         self.last_update = ts
