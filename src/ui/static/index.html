@@ -2337,7 +2337,24 @@
     if(trail&&trail.length){
       for(const e of trail){ if(VISIBLE[e.label]) all.push(e.predicted_price); }
     }
-    const lo=Math.min(...all),hi=Math.max(...all);const r=hi-lo||1;
+    // Adaptive Y-scaling: when hist range is tiny vs. forecast envelope,
+    // quiet markets render as a dead flat line (the $0.10 tick oscillation
+    // on BTC collapses inside a ±100 bps projection fan). Zoom Y tight on
+    // hist so micro-moves stay visible; forecast may clip, which is fine
+    // when "is the market alive?" matters more than full fan visibility.
+    const histLo=Math.min(...hist),histHi=Math.max(...hist);
+    const histRange=histHi-histLo;
+    const fullLo=Math.min(...all),fullHi=Math.max(...all);
+    const fullRange=fullHi-fullLo;
+    let lo,hi;
+    if(fullRange>0 && histRange<fullRange*0.1){
+      const center=(histLo+histHi)/2;
+      const padded=Math.max(histRange*3,currentPrice*0.0001,0.5);
+      lo=center-padded/2; hi=center+padded/2;
+    } else {
+      lo=fullLo; hi=fullHi;
+    }
+    const r=hi-lo||1;
     const total=Math.max(1, hist.length+projLen-1);
     const xAt=i=>(i/total)*w;
     const yAt=v=>h-((v-lo)/r)*(h-6)-3;

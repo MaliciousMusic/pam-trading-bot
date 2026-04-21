@@ -23,6 +23,24 @@ Fidelity caveat: Binance 1m klines carry no book / liquidation / news
 data. Tribes that key on those channels receive nothing from replay and
 abstain more often than live. The summary report lists per-tribe
 activity rate so silent tribes are surfaced, not hidden.
+
+Phase G3 — proxy book events
+----------------------------
+`bar_to_book_events()` synthesizes coarse `kind="book"` events from the
+same OHLCV input so liquidity-sensitive tribes (microstructure_prober,
+and the depth-aware projector kernel) have something to train on in
+replay. It is a proxy, not live depth — depth and spread are derived
+from bar volatility and volume:
+
+  spread_bps ≈ clamp((high - low) / close × 10_000 × alpha, 0.5, 20.0)
+  depth_5bps ≈ beta × quote_volume / bar_minutes
+  bid/ask split is balanced with a small tilt toward taker-buy direction
+
+This is strictly a fidelity fallback. Whenever real L2 data is
+available (live Binance, recorded tapes), the proxy should be OFF.
+`build_event_stream(..., synth_book=False)` stays the default so
+existing replay baselines remain byte-identical; flip it on explicitly
+for enriched calibration runs.
 """
 from __future__ import annotations
 
@@ -145,6 +163,118 @@ def bar_to_trade_events(
             ts, price, qty,
             is_sell=is_sell, symbol=symbol,
             agg_id=f"replay_{open_ms}_{k}", notional=notional,
+        ))
+    return events
+
+
+# ---------------------------------------------------------------------------
+# Phase G3 — proxy book-depth synthesis (opt-in)
+# ---------------------------------------------------------------------------
+
+# Tunables exposed as module constants so tests / config can override without
+# threading a dozen args through every call-site. These defaults are calibrated
+# against a 2026-04-21 live 5-min snapshot (spread ≈ 0.01 bps, bid_depth_5bps
+# ≈ $400k, ask_depth_5bps ≈ $100k on BTCUSDT perps). Proxy values will be
+# noisier, but they put the tribes in the right regime.
+
+# Fraction of bar HL range we interpret as an instantaneous spread. Real
+# intra-bar spread is << HL range; 0.01 maps a 10-bps HL into a 0.1-bps
+# spread, which sits in the live-observed band.
+PROXY_SPREAD_ALPHA = 0.01
+# Spread clamp (bps). Floor = hardware-lane tightness during calm periods;
+# ceil = stress-regime; wider would look artificial and distort the projector
+# kernel's `depth * pressure / spread` weighting.
+PROXY_SPREAD_MIN_BPS = 0.5
+PROXY_SPREAD_MAX_BPS = 20.0
+# Depth @5bps as a fraction of per-minute quote volume. Live observation:
+# ~$400k depth vs ~$200M/min notional on busy periods → ~0.002. Use
+# 0.003 to match the calmer end of the band where proxy is most useful.
+PROXY_DEPTH_BETA = 0.003
+PROXY_DEPTH_MIN_USD = 10_000.0
+PROXY_DEPTH_MAX_USD = 5_000_000.0
+# Flow asymmetry — how much the bid/ask depth imbalance follows the
+# taker-buy fraction. 0 = symmetric, 1.0 = fully lopsided. 0.35 matches
+# the live distribution where the bid/ask split typically sits around
+# 60/40 to 75/25 on the dominant side.
+PROXY_DEPTH_FLOW_TILT = 0.35
+# Emit N book events per bar, spaced uniformly across the minute. Each
+# event uses the OHLC polyline price at its fractional position as the
+# mid, so bid/ask straddle the synthetic path. 6 per minute ≈ 100ms-ish
+# cadence collapsed to 10s intervals — enough for the microstructure
+# tribe to see a depth-tape, not so many that replay storage balloons.
+PROXY_BOOK_EVENTS_PER_BAR = 6
+
+
+def bar_to_book_events(
+    bar: dict,
+    *,
+    symbol: str = "BTCUSDT",
+    events_per_bar: int = PROXY_BOOK_EVENTS_PER_BAR,
+) -> list[Event]:
+    """Emit proxy `kind="book"` events from an OHLCV bar.
+
+    The events mimic the shape of live Binance `@depth20` events
+    (`best_bid`, `best_ask`, `mid`, `spread_bps`, `bid_depth_5bps_usd`,
+    `ask_depth_5bps_usd`) but the numbers are derived from the bar's
+    volatility + volume rather than a real L2 snapshot.
+
+    Zero-volume / degenerate bars return an empty list so ingest stays
+    quiet rather than polluting MarketState with placeholder depth.
+    """
+    open_ms = int(bar["open_time_ms"])
+    close_ms = int(bar["close_time_ms"])
+    span_ms = max(1, close_ms - open_ms + 1)
+    bar_minutes = span_ms / 60_000.0
+
+    total_quote = float(bar["quote_volume"])
+    if total_quote <= 0 or events_per_bar < 1:
+        return []
+
+    hl_frac = max(0.0, (float(bar["high"]) - float(bar["low"])) / max(float(bar["close"]), 1e-9))
+    spread_bps = max(
+        PROXY_SPREAD_MIN_BPS,
+        min(PROXY_SPREAD_MAX_BPS, hl_frac * 10_000.0 * PROXY_SPREAD_ALPHA),
+    )
+
+    vol_per_min = total_quote / max(bar_minutes, 1e-9)
+    depth_mid_usd = max(
+        PROXY_DEPTH_MIN_USD,
+        min(PROXY_DEPTH_MAX_USD, PROXY_DEPTH_BETA * vol_per_min),
+    )
+
+    # Flow tilt — positive when taker-buys dominate (push ask depth down,
+    # bid depth up, mimicking a market that has been hit on the ask).
+    buy_quote = float(bar["taker_buy_quote_volume"])
+    buy_frac = buy_quote / total_quote  # ∈ [0, 1]
+    tilt = (buy_frac - 0.5) * 2.0 * PROXY_DEPTH_FLOW_TILT  # ∈ [-tilt, +tilt]
+    bid_depth = depth_mid_usd * (1.0 + tilt)
+    ask_depth = depth_mid_usd * (1.0 - tilt)
+
+    events: list[Event] = []
+    n = int(events_per_bar)
+    for k in range(n):
+        frac = (k + 0.5) / n
+        t_ms = open_ms + int(frac * span_ms)
+        ts = datetime.fromtimestamp(t_ms / 1000, tz=timezone.utc)
+        mid = _ohlc_price_at(bar, frac)
+        half = mid * spread_bps / 2.0 / 10_000.0
+        best_bid = mid - half
+        best_ask = mid + half
+        events.append(Event(
+            ts=ts,
+            source="replay.depth20_proxy",
+            kind="book",
+            symbol=symbol,
+            payload={
+                "best_bid": best_bid,
+                "best_ask": best_ask,
+                "mid": mid,
+                "spread_bps": spread_bps,
+                "bid_depth_5bps_usd": bid_depth,
+                "ask_depth_5bps_usd": ask_depth,
+            },
+            tags={"orderbook_tick", "book", "proxy"},
+            severity=0.0,
         ))
     return events
 

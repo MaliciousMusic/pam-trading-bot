@@ -9,13 +9,20 @@ base_capital_usd: 50000       # paper-only; bumped so per-trade P&L is visible
 leverage: 15
 
 clock:
-  tick_seconds: 5             # voting cadence — 5s keeps the event loop responsive
-  # 50 × 5s = ~4-minute forward horizon. The UI pins prediction anchors at
-  # +15s, +1min, +5min, +10min and colors them; over time you get a
-  # dot-trail you can compare against actual price. (+15m dropped; beyond horizon.)
-  # Projector error compounds per step — 50 steps keeps the forecast tight
-  # and the tick cadence holding without CPU starvation.
-  projector_steps: 50
+  # Phase 2.5 — 1 Hz heartbeat tick. The engine fires every second; events
+  # accumulate in MarketState between boundaries and flow into one aggregated
+  # tick. In quiet markets the loop still wakes once per second (no event =
+  # "no new info" vote, horizons still advance). 1 Hz is the finest cadence
+  # that keeps the audit/calibrator loop honest without burning CPU on
+  # volatile bursts. Previous setting was 5 s; see
+  # docs/roadmap_phase_2_through_10harden.md §3.
+  tick_seconds: 1
+  # 250 steps × 1 s = 250 s (~4-minute) forward horizon. Preserved verbatim
+  # from the pre-2.5 setup (50 steps × 5 s) so the projector kernel, the
+  # per-tribe horizon decay curves, and the UI anchor pins (+15s, +1min,
+  # +5min) stay semantically unchanged — only the step resolution became
+  # finer.
+  projector_steps: 250
 
 risk:
   # Portfolio caps. Every tick that passes entry gates opens a NEW trade
@@ -232,7 +239,12 @@ projector:
 # measures only (visible in UI, projector keeps the hand-picked default).
 projector_calibration:
   apply: true
-  halflife_resolved: 300    # EWMA halflife in resolved anchors (~15–30 min)
+  # Phase 2.5 — time-based halflife in wallclock seconds. Preserves the
+  # old ~25 min constant (300 anchors × ~5 s mean anchor cadence ≈ 1500 s).
+  # The legacy count-based `halflife_resolved` key is the fallback if
+  # `_s` is missing; leave both during the transition window.
+  halflife_resolved_s: 1500.0
+  halflife_resolved: 300
   min_samples: 50           # wait for this many usable pairs before adjusting
   window: 2000              # trailing pairs kept for the median fit
 
@@ -268,6 +280,41 @@ execution:
   # Set to 0.0 to disable clipping.
   book_depth_frac_cap: 0.25
 
+# Phase 10-Harden — "Merciless mode" adversarial execution overlay.
+# Three stacked layers, each independently gated:
+#   1. adversarial fill  — additive bps on every fill, function of
+#      short-window realized vol. Models "MM saw your order first and
+#      the book moved against you during the 1s decision-to-fill window".
+#   2. fat-tailed latency — mixture of exponential (normal noise) and
+#      Pareto (network hiccups / matching stalls). Latencies ≥ tick
+#      cadence defer the fill to a future tick's mark.
+#   3. sqrt-slippage overlay — multiplies the existing depth-bps by
+#      (1 + sqrt_k × sqrt(size/ref)). Makes medium-to-large orders
+#      bite harder than the linear model predicts.
+# FROZEN DEFAULT (2026-04-21): `enabled: true`. After the 4-seed sweep
+# confirmed the Merciless reality-tax is a constant-like ~−0.45 % ± 0.06 pp
+# (research/phase10_harden/harden_sweep.md), the engine now trains and
+# validates against the adversarial overlay by default. Flip to `false`
+# ONLY for Gentle-vs-Merciless A/B benches (see scripts/bench_harden_*.py).
+harden:
+  enabled: true
+  # Layer 1: adversarial fill.
+  adv_mult: 0.5              # fraction of realized-vol-30s added as bps
+  adv_floor_bps: 1.5         # minimum even in flat markets
+  adv_vol_window_s: 30.0     # short-window realized vol lookback
+  adv_cap_bps: 20.0          # sanity cap on this layer alone
+  # Layer 2: fat-tailed latency.
+  p_spike: 0.02              # prob of hitting the Pareto regime
+  normal_mean_s: 0.08        # exponential mean for non-spike draws
+  spike_scale_s: 1.5         # Pareto scale (minimum value)
+  spike_alpha: 1.3           # Pareto alpha — heavy tail (< 2 → infinite var)
+  spike_cap_s: 30.0          # hard cap on any single draw
+  # Layer 3: sqrt-slippage overlay.
+  sqrt_k: 0.8                # coefficient; 0 disables the layer
+  sqrt_ref_usd: 100000.0     # size reference for the sqrt scaling
+  # Determinism — same seed → same adversarial trajectory.
+  seed: 42
+
 audit:
   horizon_seconds: 60           # forward-price window used to score each tribe vote
 
@@ -278,7 +325,13 @@ audit:
 # safe default — measure first, close the loop once there's real data.
 calibration:
   apply: true                  # scales vote conviction by measured skill
-  halflife_resolved: 500       # slow EWMA halflife in resolved anchors (stable skill)
+  # Phase 2.5 — time-based halflives in wallclock seconds. Preserves the
+  # old constants (500 anchors at the old 5 s tick ≈ 2500 s slow, 250 s fast).
+  # Any tick-cadence change from here on out leaves the decay speed intact.
+  # Legacy count-based keys are kept as fallback for downstream tooling
+  # that might still read them.
+  halflife_resolved_s: 2500.0  # slow EWMA wallclock halflife (~41 min)
+  halflife_resolved: 500
   min_samples: 30              # don't multiply until this many resolutions per tribe
   max_shrink: 0.6              # unreliable tribe: down to 0.6× its conviction
   max_boost: 1.4               # reliable tribe: up to 1.4× its conviction
@@ -289,7 +342,8 @@ calibration:
   # informative. Resolves the chop→cascade-flip adaptation gap where a
   # tribe skilled in one regime bleeds conviction into the next one until
   # the slow EWMA catches up hundreds of anchors later.
-  fast_halflife_resolved: 50   # fast EWMA halflife (~minutes within a busy session)
+  fast_halflife_resolved_s: 250.0  # fast EWMA wallclock halflife (~4 min)
+  fast_halflife_resolved: 50       # legacy count-based fallback
   fast_min_samples: 10         # fast floor — smaller because halflife is smaller
   regime_shift_threshold: 0.12 # |fast − slow| above this triggers fast-override
   # Regime-conditional skill (added 2026-04-19). Tracks a separate EWMA per
@@ -390,3 +444,12 @@ replay:
     - synth_600
   watch_default_speed: 10        # × real-time; user can pick 1/10/25/50/100
   parallel_day_fetches: 2        # kline fetcher politeness cap
+  # Phase G3 — proxy book-depth synthesis.
+  # When true, `bar_to_book_events()` emits coarse `kind="book"` events so
+  # microstructure_prober + the depth-aware projector have a training
+  # signal even in backtest. Spread & depth derive from bar HL / volume;
+  # this is strictly a fidelity fallback — whenever real L2 data is
+  # available the flag should stay OFF. Default false to preserve
+  # existing byte-identical replay baselines; runs with this on produce
+  # a DIFFERENT SHA (new input channel, not a determinism regression).
+  synth_book: false

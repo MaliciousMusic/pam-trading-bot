@@ -16,8 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import orjson
-
+from ..core import serde
 from ..core.types import Forecast, Vote
 
 
@@ -40,8 +39,8 @@ def _disagreement(votes: list[Vote]) -> float:
 
 class DecisionLogWriter:
     """Owns the decisions.jsonl file handle for a single sprint run.
-    Uses orjson line-by-line; lightweight enough that per-tick writes add
-    negligible overhead vs the engine work.
+    Uses serde.dumps (msgspec-backed) line-by-line; lightweight enough that
+    per-tick writes add negligible overhead vs the engine work.
 
     Open via `with`; flushes on exit."""
 
@@ -107,6 +106,6 @@ class DecisionLogWriter:
             "positions_open": positions_open,
             "tribe_disagreement": _disagreement(votes),
         }
-        self._f.write(orjson.dumps(row))
+        self._f.write(serde.dumps(row))
         self._f.write(b"\n")
         self._count += 1

@@ -1,7 +1,22 @@
 # PAM Council — Participant Archetype Modeling Trading Bot
 
 > **Paper-trading research platform for BTC/USDT perpetual futures.**
-> A council of 24 heterogeneous trading archetypes votes every 5 seconds to produce a weighted consensus price forecast. The bot sizes, enters, and exits positions based on that consensus — and continuously calibrates itself from its own resolved predictions.
+> A council of 24 heterogeneous trading archetypes votes every second to produce a weighted consensus price forecast. The bot sizes, enters, and exits positions based on that consensus — and continuously calibrates itself from its own resolved predictions.
+
+### At a glance
+
+| Item | Value |
+|---|---|
+| Engine cadence | **1 Hz** heartbeat tick (Phase 2.5) |
+| Forecast horizon | **250 steps × 1 s = 250 s** (projector) |
+| Archetypes in council | **24** (`config/tribes/*.yaml`) |
+| Execution model | **Merciless** — adversarial overlay **on by default** (Phase 10-Harden, frozen 2026-04-21) |
+| Reality tax (measured, 4-seed sweep) | **−0.45 % ± 0.06 pp** of starting equity (range `[−0.51 %, −0.38 %]`) — see `research/phase10_harden/` |
+| Live capital | **none.** Paper-mode only. Gated on `docs/STABILITY_GATE.md` (G2: 7 An-0 days, Sharpe > 2.0, zero guard alerts) |
+| Data stance | **Free-data only** until budget is discussed |
+| Current commit lineage | `fc5e537` (Phase 10-Harden) ← `c73b8fc` (Phase 2.5) ← `0b6e7ad` (An-0 starts) |
+
+The "reality tax" above is the single most important empirical number in this repo. It is the quasi-deterministic friction the council must carry every session — measured, reproducible, stable across seeds. Everything that follows is engineered around paying that tax and still booking positive Sharpe.
 
 ---
 
@@ -27,6 +42,8 @@
 18. [Daily Audit & Evolution Scheduler](#18-daily-audit--evolution-scheduler)
 19. [Formula Glossary](#19-formula-glossary)
 20. [Running the Bot](#20-running-the-bot)
+21. [Phase 10-Harden — Merciless Mode](#21-phase-10-harden--merciless-mode)
+22. [Roadmap Status](#22-roadmap-status)
 
 ---
 
@@ -38,31 +55,35 @@ The core thesis: **information asymmetry creates a predictable cascade.** Market
 
 Every forecast is logged, resolved against realized prices, and fed back into two live calibration loops — one that adjusts per-tribe vote multipliers (TribeCalibrator) and one that adjusts the projector's gain (KernelCalibrator). The system learns continuously within a session.
 
+Paper-trading only. Free-data-only. No live capital until the Stability Gate passes (7 An-0 days under Merciless mode, Sharpe > 2.0, zero guard alerts — full spec in `docs/STABILITY_GATE.md`; summary in §22).
+
 ---
 
 ## 2. Architecture Overview
 
 ```
- INGRESS                    CORE ENGINE (5s tick)               UI
- ─────────────────────      ────────────────────────────────    ──────────────
- BinancePerpsWS  ──┐        1. MarketState.update(events)       WebSocket /ws
- BybitPublicWS   ──┤        2. Each Tribe.vote(ts, state)         │
- OKXPublicWS     ──┤  Bus   3. RegimeClassifier.classify()       Dashboard
- HTFTrendPoller  ──┤  ───►  4. TribeCalibrator.apply_mult()      (index.html)
+ INGRESS                    CORE ENGINE (1 Hz tick)              UI
+ ─────────────────────      ────────────────────────────────     ──────────────
+ BinancePerpsWS  ──┐        1. MarketState.ingest(events)        WebSocket /ws
+ BybitPublicWS   ──┤        2. Each Tribe.vote(ts, state)          │
+ OKXPublicWS     ──┤  Bus   3. RegimeClassifier.classify()        Dashboard
+ HTFTrendPoller  ──┤  ───►  4. TribeCalibrator.apply_mult()       (index.html)
  OIPoller        ──┤        5. aggregate_votes() → Aggregate
  DeribitOptions  ──┤        6. ChessProjector.project()
- StablecoinPoll  ──┤        7. Executor.evaluate_exits()
- FGIPoller       ──┤        8. Executor.mark_to_market()
- RedditRSSPoller ──┤        9. ShadowLedgers.on_tick()
- RSSFeedPoller   ──┘       10. DecisionEngine.decide()
-                            11. Executor.execute()
-                            12. ForecastAuditor.record_tick()
- CALIBRATION LOOPS          13. UIBroadcaster.publish()
- ─────────────────────
+ StablecoinPoll  ──┤      2b.5 PaperExecutor.tick()  ──┐  Phase 10-Harden:
+ FGIPoller       ──┤                                   │  drains latency-
+ RedditRSSPoller ──┤        7. Executor.evaluate_exits() deferred fills
+ RSSFeedPoller   ──┘        8. Executor.mark_to_market()
+                            9. ShadowLedgers.on_tick()
+                           10. DecisionEngine.decide()
+ CALIBRATION LOOPS         11. Executor.execute()
+ ─────────────────────     12. ForecastAuditor.record_tick()
  TribeCalibrator  ◄── resolved anchors ── ForecastAuditor
  KernelCalibrator ◄── resolved anchors ─┘
  TribeTradingScorer ◄── closed shadow-ledger positions
 ```
+
+**Tick cadence.** Since Phase 2.5 (commit `c73b8fc`), the engine fires at **1 Hz** instead of 5 s. Events accumulate in `MarketState` between boundaries and flow into one aggregated tick. The projector still runs a **250 s forward horizon** — 250 steps × 1 s instead of 50 steps × 5 s — so every downstream formula (horizon decay, anchor pins at +15 s / +1 min / +5 min, calibrator EWMA half-lives) is semantically preserved, just sampled 5× finer.
 
 **Key files:**
 
@@ -75,17 +96,21 @@ Every forecast is logged, resolved against realized prices, and fed back into tw
 | `src/aggregator/voting.py` | `aggregate_votes()` — council consensus |
 | `src/decision/engine.py` | `DecisionEngine` — forecast → `TradeIntent` |
 | `src/execution/paper.py` | `PaperExecutor` — sizing, entry, exit, risk |
+| `src/execution/harden.py` | `HardenConfig` + Merciless overlay (§21) |
 | `src/execution/shadow.py` | Per-tribe isolated paper accounts |
 | `src/audit/backscore.py` | `ForecastAuditor` — anchor create / resolve |
-| `src/audit/calibrator.py` | `TribeCalibrator` — EWMA vote-weight multipliers |
+| `src/audit/calibrator.py` | `TribeCalibrator` — time-based EWMA vote multipliers |
 | `src/projector/kernel_calibrator.py` | `KernelCalibrator` — live gain fitting |
 | `src/audit/tribe_scorer.py` | `TribeTradingScorer` — per-tribe P&L composite |
 | `src/regime/classifier.py` | `RegimeClassifier` — chop / trend / cascade labels |
+| `src/replay/harness.py` | `SprintEngine` + `run_sprint()` for offline bench |
 | `src/ui/server.py` | FastAPI app — REST + WebSocket endpoints |
 | `src/ui/broadcaster.py` | `UIBroadcaster` — tick broadcast + replay buffer |
 | `config/settings.yaml` | All runtime parameters |
-| `config/tribes/*.yaml` | Per-archetype specs |
+| `config/tribes/*.yaml` | Per-archetype specs (24 files) |
 | `scripts/run_bot_ui.py` | Entry point |
+| `scripts/bench_harden_shock.py` | Gentle-vs-Merciless shock bench (§21) |
+| `scripts/bench_harden_sweep.py` | Multi-seed Merciless sweep (§21) |
 
 ---
 
@@ -107,7 +132,7 @@ All sources publish normalized `Event` objects to a shared `EventBus`. No raw ex
 | **RSS Feeds** | `src/ingress/rss_feeds.py` | `news` every 180 s | 16 curated feeds: SEC, Fed, CFTC, crypto news, Nitter |
 | **Event Recorder** | `src/ingress/event_recorder.py` | — | Tapes all events → `data/events/YYYY-MM-DD.jsonl` for replay |
 
-**Event Severity** (`src/ingress/event_classifier.py`):
+**Event severity** (`src/ingress/event_classifier.py`):
 
 ```
 severity = log₁₀(notional_usd + 1) / scale    ∈ [0, 1]
@@ -125,23 +150,28 @@ Tags: `{price, taker_buy, taker_sell, liq_long, liq_short, funding, news, oi, op
 |----|----------------|-------------|------|
 | `mm_algo` | mean_reverter_mm | $1M–$100M | Co-located market maker, high-frequency |
 | `basis_arb` | cross_venue_arb | $500k–$10M | Funding / spot-perp basis arbitrage |
-| `microstructure_prober` | microstructure | $100k–$2M | Reads order-book imbalance, depth events |
+| `microstructure_prober` | microstructure | $100k–$2M | Reads order-book imbalance, queue-decay, iceberg sigs |
 | `liquidation_hunter` | event_liquidation | $200k–$5M | Trades into cascading liquidations |
 | `news_fader` | news_reactor | $50k–$2M | Fades sentiment overreaction |
+| `news_scalper` | news_reactor | $50k–$2M | Momentum-follows breaking news |
 | `mev_frontrunner` | mev | $500k–$20M | Front-runs large pending orders |
 | `options_hedger_proxy` | options_delta_hedge | $1M–$50M | Delta hedges options book |
 | `options_dealer_gamma` | gamma_scalper | $2M–$100M | Gamma scalps around options strikes |
+| `put_call_fader` | options_sentiment | $100k–$5M | Fades extreme put/call skew |
 | `passive_whale_twap` | passive_whale | $5M–$500M | Slow TWAP accumulation / distribution |
 | `leverage_cycle` | leverage_cycle | $100k–$5M | Rides funding-rate leverage cycles |
-| `ta_day_trader` (×3 TZs) | ta_breakout | $10k–$200k | TA breakout/momentum (APAC/EU/US slots) |
-| `swing_trend_follower` | trend_follower | $50k–$1M | Multi-day trend signals |
+| `ta_day_trader` | ta_breakout | $10k–$200k | TA breakout / momentum |
+| `cta_systematic_trend` | trend_follower | $1M–$50M | Multi-day CTA trend signals |
+| `swing_trend_follower` | trend_follower | $50k–$1M | Multi-day swing trend |
 | `contrarian_funding_fader` | funding_fade | $100k–$3M | Fades extreme funding rates |
 | `retail_app_newbie` | retail_degen_leveraged | $500–$10k | FOMO / panic retail |
+| `retail_degen_leveraged` | retail_degen_leveraged | $1k–$25k | High-leverage retail |
 | `retail_grid_bot` | copy_trader | $5k–$50k | Automated grid / copy trading |
+| `copy_trader` | copy_trader | $5k–$100k | Follows live signal providers |
 | `capitulation_buyer` | contrarian_fade | $50k–$2M | Buys cascading sell-offs |
 | `cascade_amplifier` | cascade | $500k–$10M | Amplifies momentum in cascade regimes |
-| `put_call_fader` | options_sentiment | $100k–$5M | Fades extreme put/call skew |
-| `stablecoin_flow_proxy` | macro_flow | $500k–$20M | Stablecoin supply as bridge-flow signal |
+| `cross_venue_arb` | cross_venue_arb | $500k–$10M | Spot vs perp, inter-exchange arb |
+| `stablecoin_flow_buyer` | macro_flow | $500k–$20M | Stablecoin supply as bridge-flow signal |
 
 ### 4.2 TribeSpec (YAML-driven)
 
@@ -285,7 +315,9 @@ if lo / hi >= 0.82:
 
 **File:** `src/projector/chess.py`
 
-The projector runs **50 steps × 5 s = 250 seconds** of recursive agent-based simulation. Each tribe follows deterministic behavioural DNA while reacting to shared world shocks sampled from a regime-aware schedule.
+The projector runs **250 steps × 1 s = 250 seconds** of recursive agent-based simulation. Each tribe follows deterministic behavioural DNA while reacting to shared world shocks sampled from a regime-aware schedule.
+
+_Pre-Phase-2.5 this was 50 steps × 5 s = 250 s. The horizon is preserved; only the step resolution became finer._
 
 ### Pipeline
 
@@ -358,10 +390,10 @@ conviction_boost *= 2.0
 ```
 
 #### Step 8 — Per-Tribe Recursive Walk (DNA)
-For each tribe `i` and each step `h`:
+For each tribe `i` and each step `h` (250 steps at 1 s each):
 
 ```python
-elapsed_s = h × tick_seconds
+elapsed_s = h × tick_seconds                       # tick_seconds = 1 since Phase 2.5
 decay = exp(−elapsed_s / tribe_horizon_s)          # horizon decay
 base_strength = base_strength_pre × decay
 
@@ -397,13 +429,13 @@ Each tribe's path is weighted jointly by:
 
 ```python
 class Forecast:
-    steps_bps: list[float]          # cumulative consensus curve (50 steps)
+    steps_bps: list[float]          # cumulative consensus curve (250 steps)
     steps_sigma_bps: list[float]    # per-step stddev (uncertainty fan)
     sample_paths_bps: list[...]     # MC realizations (n = sample_paths_n)
 
     expected_move_bps: float        # steps_bps[-1] × conviction_boost
     confidence: float               # Σ (decay^h × agreement_h) / norm
-    horizon_seconds: int            # n_steps × tick_seconds
+    horizon_seconds: int            # n_steps × tick_seconds  (= 250 s)
 
     diversity_score: float          # Shannon entropy of category buy/sell mass
     category_mass: dict             # {"retail": {"buy": …, "sell": …}, …}
@@ -563,16 +595,13 @@ if delta_bps > black_swan_sigma × ref_sigma:   # default 5σ
 
 **File:** `src/execution/paper.py`
 
-### Entry
+### Entry (Gentle baseline — `harden.enabled: false`)
 ```python
-# Size-scaled slippage
+# Size-scaled slippage (linear in size)
 slippage_effective = slippage_bps × (1 + slippage_size_k × size_usd / slippage_ref_notional)
 slippage_effective = min(slippage_effective, slippage_cap_bps)   # cap 30 bps
 
-entry_cost_bps = fee_rate_bps + slippage_effective    # typically 4–5 bps
-
-# Half-spread adjustment
-entry_cost_bps += half_spread_bps
+entry_cost_bps = fee_rate_bps + slippage_effective + half_spread_bps    # typically 4–5 bps
 
 # Adjusted entry price
 entry_price_adj = mark_price × (1 + entry_cost_bps / 10000)   # long
@@ -582,15 +611,27 @@ entry_price_adj = mark_price × (1 − entry_cost_bps / 10000)   # short
 tp_price = entry_price_adj ± |emove × conf × tp_factor| / 10000
 ```
 
+### Book-Capacity Clip
+```python
+# Pre-harden size clip against 5-bp-band book depth
+cap_usd = book_depth_frac_cap × side_depth_5bps_usd     # default 25%
+if size_usd > cap_usd:
+    size_usd = cap_usd                                   # emit capacity_clipped event
+```
+
+### Merciless Overlay (`harden.enabled: true`)
+
+See §21 for the full treatment. In one line: an additive adversarial bps term, a fat-tailed latency draw that can defer the fill to a future tick, and a concave sqrt-slippage overlay on top of the linear depth term.
+
 ### Round-trip Fee Budget
 ```
-Entry: ~4–5 bps (fee + slippage)
-Exit:  ~4–5 bps (symmetric)
-Total: ~10 bps base → 30 bps max (at slippage cap)
+Entry (Gentle):    ~4–5 bps (fee + slippage + half-spread)
+Entry (Merciless): ~5–7 bps (Gentle + adv_bps + sqrt-k)   [measured: +85 % inflation]
+Exit (symmetric):  ~4–5 bps
 ```
 
 ### Ledger
-Every execution and tick mark-to-market is appended to `data/ledger/YYYY-MM-DD.jsonl`.
+Every execution and tick mark-to-market is appended to `data/ledger/YYYY-MM-DD.jsonl` in live mode, or `<run_dir>/ledger/*.jsonl` in replay mode.
 
 ---
 
@@ -669,12 +710,12 @@ if remaining_move < edge_exhausted_factor × round_trip_fees_bps:
 ### Anchor Creation (every tick)
 The engine emits predictions at 4 standard horizons:
 
-| Label | Horizon | Step Index (50-step projector) |
-|-------|---------|-------------------------------|
-| `15s` | 15 s | step 3 |
-| `1m` | 60 s | step 12 |
-| `5m` | 300 s | step 60 (capped at 50) |
-| `10m` | 600 s | step 120 (capped at 50) |
+| Label | Horizon | Step Index (250-step projector at 1 Hz) |
+|-------|---------|-----------------------------------------|
+| `15s` | 15 s | step 15 |
+| `1m` | 60 s | step 60 |
+| `5m` | 300 s | step 300 (capped at 250) |
+| `10m` | 600 s | step 600 (capped at 250) |
 
 ```python
 anchor = PendingAnchor(
@@ -706,16 +747,18 @@ Persisted to `data/forecasts/YYYY-MM-DD.jsonl`. Fed immediately to TribeCalibrat
 
 ## 13. Calibration Loops
 
-### 13.1 TribeCalibrator (Phase G + H)
+### 13.1 TribeCalibrator (Phases G + H + Phase 2.5 time-based EWMAs)
 
 **File:** `src/audit/calibrator.py`
 
 Tracks per-tribe directional accuracy on resolved anchors and converts it into a live vote-weight multiplier.
 
-**EWMA Update:**
+**EWMA update (time-based since Phase 2.5):**
 ```python
-α_slow = 1 − 0.5^(1 / halflife_resolved)    # halflife ≈ 500 resolved anchors
-α_fast = 1 − 0.5^(1 / fast_halflife)        # halflife ≈ 50 resolved anchors
+# halflife_resolved_s and fast_halflife_resolved_s are wallclock seconds;
+# α is recomputed per-anchor from the gap since the cell's last observation.
+α_slow = 1 − 0.5 ** (dt_s / halflife_resolved_s)    # halflife ≈ 2500 s
+α_fast = 1 − 0.5 ** (dt_s / fast_halflife_resolved_s) # halflife ≈ 250 s
 
 hit = 1.0 if tribe_vote_sign == realized_move_sign else 0.0
 # (skips votes with conviction < 0.05 — unfalsifiable micro-votes)
@@ -724,7 +767,9 @@ ewma_slow += α_slow × (hit − ewma_slow)
 ewma_fast += α_fast × (hit − ewma_fast)
 ```
 
-**Skill → Multiplier mapping** (`max_shrink=0.6`, `max_boost=1.4`):
+_The older count-based `halflife_resolved` / `fast_halflife_resolved` knobs are still accepted as fallback — omit the `_s` variants to keep count semantics._
+
+**Skill → multiplier mapping** (`max_shrink=0.6`, `max_boost=1.4`):
 ```
 ewma ≤ 0.5  →  mult = 0.6 + (1.0 − 0.6) × (2 × ewma)     # below chance → shrink
 ewma > 0.5  →  mult = 1.0 + (1.4 − 1.0) × 2 × (ewma − 0.5) # above chance → boost
@@ -742,7 +787,7 @@ if |ewma_fast − ewma_slow| > regime_shift_threshold (0.12):
     converge back to slow EWMA as gap closes
 ```
 
-**3D Accuracy Mask (Task 2 — TA Cemetery / Contrarian Inversion):**
+**3D accuracy mask (Task 2 — TA Cemetery / Contrarian Inversion):**
 Per `(tribe, regime, horizon_bucket)` cell: if the tribe's accuracy in that specific context is *reliably below 0.5*, the projector flips its vote in that context rather than silencing it — turning a reliable loser into a contrarian signal.
 
 ### 13.2 KernelCalibrator (Phase A)
@@ -757,8 +802,8 @@ ratio = realized_move_bps / predicted_move_bps   # if |predicted| > 1 bps
 # Rolling median of last `window` (2000) ratios — robust to outliers
 gain = clamp(median(ratio_window), 1.0, 40.0)
 
-# EWMA smoothing
-α = 1 − 0.5^(1 / halflife_resolved)   # halflife ≈ 300 anchors
+# EWMA smoothing (time-based since Phase 2.5)
+α = 1 − 0.5 ** (dt_s / halflife_resolved_s)   # halflife ≈ 1500 s
 gain_ewma += α × (ratio − gain_ewma)
 
 if apply:
@@ -819,28 +864,26 @@ conviction_boost = 1.0 + 0.5 × (contrarian_mass / total_mass)
 
 ## 15. Replay System
 
-**Files:** `src/replay/`, `src/replay/watch_engine.py`
+**Files:** `src/replay/`, `src/replay/watch_engine.py`, `src/replay/harness.py`
 
 The replay system enables backtesting, A/B variant testing, and adversarial stress-testing against historical or synthetic event tapes.
 
-| Phase | Script / Module | Purpose |
-|-------|----------------|---------|
-| **1** | `test_replay_phase1.py` | OHLCV ingest → normalized Event stream |
-| **2** | `test_replay_phase2.py` | Tribe vote accuracy audit on historical events |
-| **3** | `test_replay_phase3.py` | Forecast calibration: anchor create → resolve |
-| **4** | `run_replay.py` | Full replay with live UI feed via WatchController |
-| **6** | `run_multi_variant.py` | A/B tournament: N config variants, same event tape |
-| **7** | `run_adversarial.py` | Adversarial: synthetic cascade / liquidation storms |
-| **8** | `build_report.py` | Week summary: HTML report, P&L curve, accuracy heatmap |
-| **9** | `test_replay_phase9.py` | Tribe family breakdown (TA/Retail/MM composite P&L) |
+### Sprint mode (`src/replay/harness.py::run_sprint`)
 
-**WatchController** (`src/replay/watch_engine.py`):
-- Accepts a `day` + optional `speed` multiplier (default 10×) and `seed`
-- Mutes live-tick broadcasts during replay; unmutes on completion
-- Supports multi-day chaining with equity carry-over
-- Multi-variant mode: runs N configs concurrently on the same tape for fair comparison
+Synchronous driver that replays a day's event stream through the full tribes → council → decision stack as fast as possible, writing per-tick decisions to `decisions.jsonl` and per-trade events to `<run_dir>/ledger/*.jsonl`. Deterministic for a given `(day, seed, synth_rate, synth_book)`.
 
-**Event tape** stored in `data/events/YYYY-MM-DD.jsonl` by the `EventRecorder` during live sessions.
+Used by:
+- **Determinism gate** — `scripts/verify_determinism.py` runs two 500-tick sprints and confirms bit-identical SHAs.
+- **Phase 10-Harden shock bench** — `scripts/bench_harden_shock.py` runs the same sprint twice (Gentle vs Merciless) and diffs the outputs.
+- **Multi-seed sweep** — `scripts/bench_harden_sweep.py` runs the shock pair across N seeds to confirm friction stability (currently mean −0.450 %, stdev 0.055 pp over `{42, 123, 777, 2024}`).
+
+### Watch mode (`src/replay/watch_engine.py`)
+
+Paced async replay streaming to the live UI. Accepts a `day` + optional `speed` multiplier (default 10×) and `seed`. Mutes live-tick broadcasts during replay; unmutes on completion. Supports multi-day chaining with equity carry-over and multi-variant concurrent mode.
+
+### Event tape
+
+Stored in `data/events/YYYY-MM-DD.jsonl` by the `EventRecorder` during live sessions.
 
 ---
 
@@ -873,7 +916,7 @@ The replay system enables backtesting, A/B variant testing, and adversarial stre
 
 ### WebSocket `/ws`
 
-Replays recent tick buffer on connect, then streams live ticks. Each message:
+Replays recent tick buffer on connect, then streams live ticks (1 Hz). Each message:
 
 ```json
 {
@@ -887,7 +930,7 @@ Replays recent tick buffer on connect, then streams live ticks. Each message:
   "confidence": 0.72,
   "regime": { "label": "trend_up", "multiplier": 1.2, "vol_bps": 28.5 },
   "votes": [{ "tribe_id": "mm_algo", "side": "buy", "conviction": 0.38, "weight": 0.30 }],
-  "forecast_steps_bps": [0.2, 0.4, 0.7, 1.1, "...50 steps"],
+  "forecast_steps_bps": [0.2, 0.4, 0.7, 1.1, "...250 steps"],
   "forecast_sigma_bps": [2.0, 2.5, 3.1, "..."],
   "diversity_score": 0.68,
   "category_mass": { "mm": { "buy": 0.25, "sell": 0.15 }, "retail": { "buy": 0.20 } },
@@ -931,8 +974,8 @@ leverage: 15           # notional multiplier
 base_capital_usd: 50000
 
 clock:
-  tick_seconds: 5           # vote + project cadence
-  projector_steps: 50       # 50 × 5s = 250s horizon
+  tick_seconds: 1           # Phase 2.5 — 1 Hz heartbeat
+  projector_steps: 250      # 250 × 1 s = 250 s forward horizon (preserved)
 
 risk:
   max_drawdown_from_peak_pct: 8.0
@@ -985,10 +1028,35 @@ sizing:
 execution:
   fee_rate_bps: 2.0
   slippage_bps: 2.0
-  slippage_size_k: 0.5
+  slippage_size_k: 0.5               # linear size scaling (Gentle)
   slippage_ref_notional_usd: 100000.0
   slippage_cap_bps: 30.0
   half_spread_bps: 0.5
+  book_depth_frac_cap: 0.25          # 25% of 5-bp-band depth
+
+# Phase 10-Harden — adversarial overlay (§21). FROZEN DEFAULT (2026-04-21):
+# enabled: true. The engine trains and validates against Merciless by
+# default after the 4-seed sweep confirmed the reality tax is a stable
+# constant. Flip to false ONLY for Gentle-vs-Merciless A/B benches —
+# the bench scripts do this themselves via a scoped settings() patch.
+harden:
+  enabled: true
+  # Layer 1 — adversarial fill
+  adv_mult: 0.5              # frac of realized-vol-30s added as bps
+  adv_floor_bps: 1.5         # minimum even in flat markets
+  adv_vol_window_s: 30.0
+  adv_cap_bps: 20.0
+  # Layer 2 — fat-tailed latency
+  p_spike: 0.02              # prob of hitting the Pareto regime
+  normal_mean_s: 0.08        # exponential mean for non-spike draws
+  spike_scale_s: 1.5         # Pareto scale (minimum value)
+  spike_alpha: 1.3           # Pareto alpha (<2 → infinite variance)
+  spike_cap_s: 30.0
+  # Layer 3 — sqrt-slippage overlay
+  sqrt_k: 0.8
+  sqrt_ref_usd: 100000.0
+  # Determinism
+  seed: 42
 
 projector:
   bps_per_unit_pressure: 8.0    # kernel gain (overwritten by KernelCalibrator)
@@ -1000,14 +1068,17 @@ projector:
 
 projector_calibration:
   apply: true
-  halflife_resolved: 300
+  halflife_resolved: 300        # legacy (count-based) fallback
+  halflife_resolved_s: 1500     # Phase 2.5 — time-based, preferred
   min_samples: 50
   window: 2000
 
 calibration:
   apply: false          # flip to true once ≥ min_samples accumulated
-  halflife_resolved: 500
-  fast_halflife_resolved: 50
+  halflife_resolved: 500           # legacy fallback
+  fast_halflife_resolved: 50       # legacy fallback
+  halflife_resolved_s: 2500        # Phase 2.5 — time-based
+  fast_halflife_resolved_s: 250    # Phase 2.5 — time-based
   min_samples: 30
   max_shrink: 0.6
   max_boost: 1.4
@@ -1034,7 +1105,7 @@ htf:
   poll_seconds: 60
 
 regime:
-  # thresholds and per-label multipliers (see RegimeClassifier)
+  # thresholds and per-label multipliers (see RegimeClassifier §7)
 
 recorder:
   include_depth: false    # true = full-fidelity replay (large files)
@@ -1080,7 +1151,7 @@ Per strategy family, mutations target specific params:
 | `basis_arb` | `funding_threshold`, `arb_spread_bps` |
 | `event_*` | `min_severity`, `cooldown_seconds`, `daily_fire_budget` |
 
-Generated variants are written to `data/audit/YYYY-MM-DD/variants/` and scored in the next tournament run.
+Generated variants are written to `config/tribes_variants/YYYY-MM-DD/` and scored in the next tournament run.
 
 ---
 
@@ -1097,8 +1168,11 @@ Generated variants are written to `data/audit/YYYY-MM-DD/variants/` and scored i
 | `inventory_haircut` | `(1 − \|inv\|) / (1 − 0.5)` if `\|inv\| > 0.5` | Capacity-constrained tribe scaling |
 | `skill_mult` (below chance) | `max_shrink + (1 − max_shrink) × 2 × ewma` | Skill → multiplier (shrink side) |
 | `skill_mult` (above chance) | `1.0 + (max_boost − 1.0) × 2 × (ewma − 0.5)` | Skill → multiplier (boost side) |
-| `α_ewma` | `1 − 0.5^(1/halflife)` | EWMA learning rate from half-life |
-| `slippage_eff` | `slip_bps × (1 + k × size / ref)` | Size-scaled slippage |
+| `α_ewma` (time) | `1 − 0.5^(dt_s / halflife_s)` | Time-based EWMA learning rate (Phase 2.5) |
+| `slippage_eff` (Gentle) | `slip_bps × (1 + k × size / ref)` | Size-scaled slippage, linear |
+| `adv_bps` (Harden L1) | `min(cap, adv_mult × vol_bps_30s + floor)` | Adversarial fill, additive |
+| `latency_draw` (Harden L2) | `Pareto(α, scale) w.p. p_spike else Exp(μ)` | Fat-tailed latency draw |
+| `sqrt_overlay` (Harden L3) | `depth_bps × (1 + sqrt_k × √(size/ref))` | Concave size impact |
 | `ratchet_close` | `peak_unrealized × (1 − retrace_frac)` | Ratchet TP trigger level |
 | `W[t][h]` update | `W *= exp(0.01 × delta)` | Per-(tribe, horizon) ledger weight update |
 | `consensus_bps[h]` | `Σ(path_t,h × W_t,h × pool_w_t) / Σ(W_t,h × pool_w_t)` | Performance-weighted forecast |
@@ -1112,6 +1186,7 @@ Generated variants are written to `data/audit/YYYY-MM-DD/variants/` and scored i
 ### Prerequisites
 ```bash
 pip install -r requirements.txt
+# Python 3.14.2t (free-threaded) recommended — see .venv314t
 ```
 
 ### Paper Trading (live market, no real money)
@@ -1120,7 +1195,7 @@ python -m scripts.run_bot_ui
 # Dashboard: http://127.0.0.1:8765
 ```
 
-### Replay Historical Session
+### Replay a Historical Session
 ```bash
 python -m scripts.run_replay
 # or POST /api/replay/start  {"day": "2026-04-19", "speed": 10}
@@ -1134,6 +1209,31 @@ python -m scripts.run_multi_variant
 ### Adversarial Stress Test
 ```bash
 python -m scripts.run_adversarial
+```
+
+### Phase 10-Harden Shock Bench
+
+Gentle-vs-Merciless shock report on a single seed (details §21). Both scripts inject a scoped `HardenConfig` via a monkey-patch of `settings()` — they override the frozen `harden.enabled: true` default so the *Gentle* side of the pair runs clean:
+```bash
+python -m scripts.bench_harden_shock \
+    --day 2026-04-20 --max-ticks 500 \
+    --out research/phase10_harden/harden_shock.json \
+    --md-out research/phase10_harden/harden_shock.md
+```
+
+Multi-seed Merciless sweep (friction-constant audit):
+```bash
+python -m scripts.bench_harden_sweep \
+    --day 2026-04-20 --max-ticks 500 \
+    --seeds 42,123,777,2024 \
+    --out research/phase10_harden/harden_sweep.json \
+    --md-out research/phase10_harden/harden_sweep.md
+```
+
+### Determinism Gate
+```bash
+python -m scripts.verify_determinism --day 2026-04-20 --max-ticks 500
+# Runs two sprints, compares decisions.jsonl SHA256 — must match byte-for-byte.
 ```
 
 ### Build Weekly Report
@@ -1158,10 +1258,129 @@ python -m scripts.run_bot_ui
 | `data/forecasts/` | Resolved forecast anchors |
 | `data/ledger/` | Trade and mark-to-market records |
 | `data/calibration/` | Persisted tribe skill + projector gain (survive restarts) |
-| `data/audit/` | Daily audit reports + hypothesis variants |
-| `data/replays/` | Completed replay runs (manifests + decisions) |
+| `data/audit/` | Daily audit reports |
+| `data/replays/` | Completed replay runs (manifests + decisions + per-trade ledger) |
+| `data/baseline/` | Phase-locked baseline snapshots |
+| `docs/perf_baselines/` | Per-phase perf snapshots (pre/post-Phase-2, Phase-2.5 heartbeat, …) |
+| `research/phase10_harden/` | Frozen R&D artifacts: shock + sweep JSON/MD, methodology README |
 | `logs/` | Rotating daily bot logs |
 
 ---
 
-*PAM Council is a research platform. All trading is paper-mode by default. No financial advice implied.*
+## 21. Phase 10-Harden — Merciless Mode
+
+**File:** `src/execution/harden.py` — `HardenConfig`, `HardenState`, `PendingFill`
+**Status:** shipped `fc5e537`, frozen as default `2026-04-21`. `config/settings.yaml` now ships with `harden.enabled: true`; the Gentle path is kept as the short-circuit branch for benches and for any future A/B work.
+
+Phase 10-Harden bolts a three-layer adversarial execution model on top of the existing `PaperExecutor`. Each layer is independently togglable via `HardenConfig`; when the master flag `harden.enabled` is `false`, every call site short-circuits and the executor behaves **bit-for-bit** like pre-Harden.
+
+### Why it exists
+
+The Gentle model (§10) assumes:
+- You get the mark price plus a linear size-scaled slippage.
+- Your fill happens this tick, no matter what.
+- Book depth is static, your order doesn't move it.
+
+Real markets don't work like that. Marker makers see resting orders; the matching engine has fat-tailed delays; big orders eat books concavely, not linearly. **Merciless mode is the simplest stack that breaks all three assumptions in calibrated ways.**
+
+### The three layers
+
+| # | Name | Formula | Effect |
+|---|------|---------|--------|
+| 1 | **Adversarial fill** | `adv_bps = min(cap, adv_mult × vol_bps_30s + floor)` added to entry cost | Charges a fraction of short-window realized vol every fill, plus a floor so dead markets still pay |
+| 2 | **Fat-tailed latency** | `draw = Pareto(α=1.3, scale=1.5s) w.p. 0.02 else Exp(μ=0.08s)` | Sub-tick draws absorbed; ≥ tick_seconds defer the fill via `_pending_fills` queue. Drained by `PaperExecutor.tick()` at future tick's mark |
+| 3 | **sqrt-slippage overlay** | `depth_bps ×= 1 + sqrt_k × √(size_usd / ref)` | Concave Almgren–Chriss-style impact on top of the existing linear `slippage_size_k` term |
+
+### Deferred fills and drift telemetry
+
+When layer 2 defers a fill, the intent sits in `_pending_fills` until its `fill_due_ts` lands. At that point `_fill_price` runs fresh against the *now* mark — which has moved — and the open row stamps:
+
+```python
+"harden_deferred": true,
+"decision_ts": <when the council decided>,
+"decision_mark": <mark at decision time>,
+"latency_s": <actual draw>,
+"latency_was_pareto": true/false,
+"latency_drift_bps": <signed vs trade direction — negative = market moved against us>,
+```
+
+This gives the shock report an exact dollar accounting of latency cost.
+
+### Determinism
+
+`HardenState` owns a seeded `numpy.random.default_rng` (PCG64). Same `(day, seed, synth_rate, harden.seed)` → bit-identical adversarial trajectory. A 10 000-sample smoke test of the mixture confirms the distribution is on-spec (2.09 % Pareto rate at `p_spike=0.02`, body mean 0.080 s at `normal_mean_s=0.08`, Pareto mean ≈ 4.37 s with a 30 s hard cap).
+
+### Shock report — seed 42, 2026-04-20, 500 ticks
+
+See `research/phase10_harden/harden_shock.md` for the full side-by-side:
+
+| Metric | Gentle | Merciless | Δ |
+|---|---:|---:|---:|
+| Trades | 102 | 102 | 0 |
+| Wins | 28 | 20 | −8 |
+| Win rate | 27.5 % | 19.6 % | −7.8 pp |
+| End equity | $49,393 | $49,139 | **−$254** |
+| Entry slip avg | 2.59 bp | 4.80 bp | **+2.21 bp (+85 %)** |
+
+**Reality tax: −0.51 % of starting equity.** Same council decisions on both sides (identical seed, identical event tape) — the tax is purely adversarial execution eating marginal trades.
+
+### Multi-seed sweep — friction is a constant
+
+Same tape (2026-04-20), same 500 ticks, toggle the seed across `{42, 123, 777, 2024}`. Full report in `research/phase10_harden/harden_sweep.md`.
+
+| Seed | Gentle eq | Merciless eq | Tax | Slip bump | Pareto / deferred |
+|---:|---:|---:|---:|---:|---:|
+| 42 | $49,393.12 | $49,138.96 | **−0.508 %** | +2.21 bp | 0 / 0 |
+| 123 | $49,436.38 | $49,247.70 | **−0.377 %** | +2.22 bp | 5 / 5 |
+| 777 | $49,345.64 | $49,112.29 | **−0.467 %** | +2.21 bp | 0 / 0 |
+| 2024 | $49,396.65 | $49,173.59 | **−0.446 %** | +2.17 bp | 3 / 3 |
+
+**Aggregated:**
+- Reality tax: mean **−0.450 %**, stdev **0.055 pp**, range `[−0.508 %, −0.377 %]` — spread of 0.131 pp across 4 seeds.
+- Slippage inflation: mean **+2.20 bp**, stdev **0.02 bp** — essentially a structural constant. L1 (`adv_bps = 0.5 · vol_30s + 1.5 bp floor`) is the dominant tax layer.
+- Win-rate delta: mean **−7.01 pp**, stdev **5.43 pp** — wider because *which* trades get taxed is seed-dependent, even though the *amount* of tax is not.
+- Trade counts match 1-for-1 per seed (`102/102`, `77/77`, `93/93`, `97/97`) — confirms the decision layer is fully isolated from the executor overlay.
+- Pareto-tail draws: 8 across the sweep (`p_spike = 0.02`, consistent with the 2 % target on ~369 trade openings). Deferred fills equal pareto draws — every spike correctly defers execution by ≥ 1 tick.
+
+**Verdict: CONSTANT-LIKE.** The −0.51 % single-seed number was not a lucky/unlucky draw. The Merciless overlay subtracts ~0.45 % ± 0.06 pp of starting equity per tape on the current knobs. Stability Gate pass conditions (§22) are calibrated against this baseline.
+
+### Running it yourself
+
+The live loop trades Merciless by default as of the `2026-04-21` freeze (`config/settings.yaml` → `harden.enabled: true`). For offline A/B comparisons, `scripts/bench_harden_shock.py` (single seed) and `scripts/bench_harden_sweep.py` (multi-seed) both inject an explicit `HardenConfig(enabled=False)` for the Gentle side via a scoped monkey-patch of `settings()` — no yaml edit required, the freeze is not subverted.
+
+---
+
+## 22. Roadmap Status
+
+| Phase | Scope | Status |
+|-------|-------|--------|
+| **Yeux Ouverts** | Socle + An-0 accumulation (depth routing fix `0b6e7ad`) | ✅ shipped |
+| **Phase 2** | NumPy-backed RollingSeries + realized_vol_bps | ✅ shipped (1.48× cumul speedup) |
+| **Phase 2.5** | 1 Hz heartbeat tick + time-based EWMA | ✅ shipped (commit `c73b8fc`) |
+| **Phase 10 — Risk Guardrails** | DD / black-swan / SL / session halt | ✅ shipped |
+| **Phase 11 — Realistic Execution** | book-depth fills, capacity clip, half-spread | ✅ shipped |
+| **Phase 10-Harden** | Merciless execution overlay (§21) — reality tax **−0.45 % ± 0.06 pp** (4-seed sweep) | ✅ shipped (commit `fc5e537`), default-on since `2026-04-21` |
+| **Stability Gate (G2)** | **7 An-0 days under Merciless, Sharpe > 2.0, zero guard alerts** — spec: `docs/STABILITY_GATE.md` | ⏳ **OPEN — blocks live-capital bridge** |
+| **Phase 12** | Silent tribe — microstructure L2 inputs | ◻ pending (post-G2) |
+| **Phase 13** | Evolutionary variant search | ◻ pending (post-G2) |
+| **Phase 14** | Adversarial replay fixtures | ◻ pending (post-G2) |
+
+G2 is the single blocking milestone before any live-capital conversation. The shipped phases above are its prerequisites; the pending phases are orthogonal research and queue independently once G2 passes. Failure modes for G2 are themselves informative — see the fail-mode table in `docs/STABILITY_GATE.md`.
+
+---
+
+## Engine freeze — 2026-04-21
+
+The R&D chapter that produced the 1 Hz heartbeat, the NumPy rolling-series upgrade, and the Merciless overlay is **closed**. The engine's behavioural contract is now:
+
+1. **Decision layer** — 24 archetypes, 1 Hz, 250 s forecast horizon. Deterministic given `(day, seed, synth_rate)`. Calibrators run with time-based EWMAs that survive any future tick-cadence change.
+2. **Execution layer** — Merciless by default. Three adversarial layers (`adv_bps`, fat-tail latency, sqrt-overlay), seeded PCG64 RNG, `_pending_fills` deferral. Bit-for-bit reproducible given the same inputs.
+3. **Verification layer** — `scripts/verify_determinism.py` for bit-identity, `scripts/bench_harden_shock.py` and `scripts/bench_harden_sweep.py` for the reality-tax envelope, `research/phase10_harden/` for the frozen R&D artifacts.
+
+Everything above is implementation. Everything below is measurement.
+
+The next session opens against `docs/STABILITY_GATE.md`.
+
+---
+
+_PAM Council is a research platform. All trading is paper-mode by default. No financial advice implied._

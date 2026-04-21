@@ -1,15 +1,31 @@
-# Python
+# Python. .venv314t/ is the Phase 0.5 free-threaded runtime; kept per-machine
+# so the commit stays portable across dev laptops and the future headless box.
 __pycache__/
 *.py[cod]
 *$py.class
 *.egg-info/
 .venv/
+.venv*/
 venv/
 .Python
 
-# Runtime data
-data/
+# Runtime data. Local tick ledgers, API caches, and replay outputs are
+# per-machine and huge; fixtures + baseline summaries are small, committed
+# artifacts the tensor-engine refactor needs for cross-phase parity diffs.
+data/*
+!data/fixtures/
+!data/baseline/
+data/baseline/sprint_runs/
 logs/
+
+# Archived epochs of runtime data. The folder + README get committed for
+# provenance, but the heavy jsonl/json payloads under it stay local.
+archive/*/ledger/
+archive/*/audit/
+
+# Raw cProfile dumps — per-machine, regenerable via profile_sprint.py.
+data/perf/
+
 
 # IDE
 .idea/

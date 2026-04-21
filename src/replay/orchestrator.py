@@ -29,7 +29,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Sequence
 
-import orjson
+from ..core import serde
 from loguru import logger
 
 from ..core.config import PROJECT_ROOT, settings
@@ -155,7 +155,7 @@ async def _run_worker(
         result: SprintResult | None = None
         manifest_path = variant_dir / "manifest.json"
         if exit_code == 0 and manifest_path.exists():
-            m = orjson.loads(manifest_path.read_bytes())
+            m = serde.loads(manifest_path.read_bytes())
             result = SprintResult(
                 run_id=m["run_id"],
                 variant_id=m["variant_id"],
@@ -291,7 +291,7 @@ async def run_multi_variant(
     }
     rollup_path = outputs_root / run_id / "multi_manifest.json"
     rollup_path.parent.mkdir(parents=True, exist_ok=True)
-    rollup_path.write_bytes(orjson.dumps(rollup, option=orjson.OPT_INDENT_2))
+    rollup_path.write_bytes(serde.dumps_indent(rollup))
     logger.info(
         "[orch] wrote {}  total_wall={:.1f}s",
         rollup_path, wall,

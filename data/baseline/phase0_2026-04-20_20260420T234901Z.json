@@ -1,0 +1,51 @@
+{
+  "phase": 0,
+  "captured_at_utc": "2026-04-21T04:40:02.999940+00:00",
+  "branch": "feat/tensor-engine",
+  "git_head_at_capture": "4798c9c4eff1ef481c6b1f2a162553c4d3389fa7",
+  "python_version": "3.11.9",
+  "python_implementation": "CPython",
+  "platform": "Windows-10-10.0.26200-SP0",
+  "day": "2026-04-20",
+  "synth_rate": 60,
+  "seed": 42,
+  "config": {
+    "tick_seconds": 5,
+    "projector_steps": 50
+  },
+  "sprint": {
+    "run_id": "baseline_2026-04-20",
+    "ticks": 16811,
+    "events_consumed": 84063,
+    "trades": 69,
+    "wins": 3,
+    "start_equity_usd": 50000.0,
+    "end_equity_usd": 49437.696855354545,
+    "equity_delta_usd": -562.3031446454552,
+    "decisions_path": "C:\\Users\\agent\\Desktop\\TRADING BOT\\data\\baseline\\sprint_runs\\baseline_2026-04-20\\variants\\phase0\\decisions.jsonl",
+    "manifest_path": "C:\\Users\\agent\\Desktop\\TRADING BOT\\data\\baseline\\sprint_runs\\baseline_2026-04-20\\variants\\phase0\\manifest.json"
+  },
+  "decisions_sha256": "3665260fe1aa2a9ce3acc8018806ad1ccf61f364c3b5c4bee2f48b229526c936",
+  "decisions_bytes": 52616364,
+  "timing": {
+    "total_wall_clock_s": 17461.502,
+    "ticks_instrumented": 16811,
+    "per_tick_ms": {
+      "avg": 1038.041,
+      "p50": 1007.858,
+      "p95": 1203.292,
+      "p99": 1271.117,
+      "max": 1603.374
+    }
+  },
+  "memory": {
+    "tracemalloc_peak_bytes": 4533738,
+    "tracemalloc_peak_mb": 4.32,
+    "tracemalloc_final_bytes": 708396
+  },
+  "scope_notes": [
+    "SprintEngine path \u2014 no shadow_ledgers, no auditor, no calibrator.",
+    "Shadow ledger baseline deferred to Phase 2 entry (live-bot replay).",
+    "tracemalloc tracks Python heap only; true RSS arrives in Phase 0.5."
+  ]
+}

@@ -12,7 +12,7 @@ Run:  python -m pytest tests/test_decision_engine.py -q
 """
 from __future__ import annotations
 
-from dataclasses import replace
+from msgspec.structs import replace  # noqa: F401 — kept for parity with src/ post-Struct migration
 from datetime import datetime, timezone
 
 import pytest

@@ -16,7 +16,7 @@ from copy import deepcopy
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
-import orjson
+from ..core import serde
 import yaml
 from loguru import logger
 
@@ -178,7 +178,7 @@ def write_hypothesis_variants(
         lineage["hypotheses"].append(entry)
 
     with (base / "generation.json").open("wb") as f:
-        f.write(orjson.dumps(lineage, option=orjson.OPT_INDENT_2))
+        f.write(serde.dumps_indent(lineage))
 
     logger.info("generation {} → {} variants (adaptive branching)",
                 generation_tag, len(variants))

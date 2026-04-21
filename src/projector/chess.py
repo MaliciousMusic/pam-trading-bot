@@ -40,7 +40,7 @@ from __future__ import annotations
 import math
 import random
 from collections import deque
-from dataclasses import replace
+from msgspec.structs import replace
 from datetime import datetime, timedelta, timezone
 
 from loguru import logger
@@ -522,6 +522,24 @@ class ChessProjector:
         per_tribe_ids: list[str] = []
         decayed_by_step: list[list] = [[] for _ in range(n_steps)]
 
+        # Phase 2-lite — precompute the step-time axis once per project()
+        # call so the inner tribe × step loop below doesn't re-derive
+        # `ts + timedelta` or re-call `ts.timestamp()` on every iteration.
+        # Profiling showed ~18k ts.timestamp() calls per tick before this
+        # cache (advance_clock's 13 series trims × 24 tribes × 50 steps +
+        # step_event_bps's 2 per step). Lifting the cache here keeps the
+        # *semantics* identical — datetime arithmetic and timestamps are
+        # pure functions of start_ts + step index — while collapsing the
+        # Python-level call count by ~360×.
+        step_timestamps: list[datetime] = []
+        step_epochs: list[float] = []
+        _cur = start_ts
+        for _h in range(n_steps):
+            _cur = _cur + timedelta(seconds=dt_s)
+            step_timestamps.append(_cur)
+            step_epochs.append(_cur.timestamp())
+        prev_epochs: list[float] = [start_ts.timestamp()] + step_epochs[:-1]
+
         for tribe in self.tribes:
             tid = tribe.spec.id
             cat = _TRIBE_CATEGORY.get(tid, "ta")
@@ -530,15 +548,14 @@ class ChessProjector:
             perceived = perceived_per_tribe[tid]
             hs = self._tribe_horizon_s.get(tid, self.default_horizon_seconds)
             sim = state.snapshot()
-            ts = start_ts
-            prev_ts = ts
             cum_bps = 0.0
             prev_delta = 0.0
             curve: list[float] = []
             for step_i in range(n_steps):
-                prev_ts = ts
-                ts = ts + timedelta(seconds=dt_s)
-                sim.advance_clock(ts)
+                ts = step_timestamps[step_i]
+                t_now = step_epochs[step_i]
+                t_prev = prev_epochs[step_i]
+                sim._advance_clock_epoch(t_now, ts)
                 elapsed_s = (step_i + 1) * dt_s
                 # Horizon decay — scalpers fade out fast, swing traders
                 # carry through the full window. Same kernel as before.
@@ -566,7 +583,7 @@ class ChessProjector:
                 # shocks) — preserves the existing event-wave overlay.
                 event_bps = step_event_bps(
                     sim.pending_events, [tribe],
-                    prev_ts.timestamp(), ts.timestamp(),
+                    t_prev, t_now,
                 )
                 total_bps = dna_delta + event_bps
                 # Depth scaling — thin books amplify pushes.
@@ -589,7 +606,7 @@ class ChessProjector:
                 curve.append(cum_bps)
                 if sim.last_price is not None and sim.last_price > 0:
                     sim.last_price = sim.last_price * (1 + step_bps / 10_000.0)
-                    sim.prices.add(ts, sim.last_price)
+                    sim.prices._add_epoch(t_now, sim.last_price)
                 if sim.last_funding_rate is not None:
                     sim.last_funding_rate *= 0.995
             per_tribe_curves.append(curve)

@@ -28,7 +28,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import aiohttp
-import orjson
+from ..core import serde
 from loguru import logger
 
 
@@ -91,14 +91,14 @@ def _write_jsonl_atomic(path: Path, rows: list[dict]) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     with tmp.open("wb") as f:
         for r in rows:
-            f.write(orjson.dumps(r))
+            f.write(serde.dumps(r))
             f.write(b"\n")
     os.replace(tmp, path)
 
 
 def _read_jsonl(path: Path) -> list[dict]:
     with path.open("rb") as f:
-        return [orjson.loads(line) for line in f if line.strip()]
+        return [serde.loads(line) for line in f if line.strip()]
 
 
 async def fetch_klines_page(
@@ -173,7 +173,7 @@ class CachedHistoricalClient:
             return False
         try:
             rows = _read_jsonl(path)
-        except (OSError, orjson.JSONDecodeError):
+        except (OSError, serde.JSONDecodeError):
             return False
         return len(rows) == expected_count
 

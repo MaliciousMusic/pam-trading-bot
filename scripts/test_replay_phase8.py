@@ -17,7 +17,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-import orjson
+from src.core import serde
 from loguru import logger
 logger.remove()
 logger.add(sys.stderr, level="WARNING")
@@ -57,7 +57,7 @@ def _write_decisions(path: Path, n: int = 20) -> None:
                 "positions_open": 0,
                 "tribe_disagreement": 0.2,
             }
-            f.write(orjson.dumps(row) + b"\n")
+            f.write(serde.dumps(row) + b"\n")
 
 
 def _make_events(n: int = 60) -> list[Event]:
@@ -178,7 +178,7 @@ async def test_watch_engine_writes_decisions() -> None:
         await engine.run(iter(_make_events(n=60)))
 
         assert decisions_path.exists(), "decisions.jsonl not written"
-        rows = [orjson.loads(line) for line in decisions_path.read_bytes().splitlines() if line.strip()]
+        rows = [serde.loads(line) for line in decisions_path.read_bytes().splitlines() if line.strip()]
         assert len(rows) > 0, "decisions.jsonl is empty"
         assert rows[0]["tick"] == 1
         assert "price" in rows[0] and "votes" in rows[0] and "action" in rows[0]

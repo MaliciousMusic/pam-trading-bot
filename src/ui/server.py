@@ -14,7 +14,7 @@ from pathlib import Path
 
 from datetime import datetime, timezone
 
-import orjson
+from ..core import serde
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel
@@ -243,7 +243,7 @@ def create_app(
                 mp = d / manifest_name
                 if mp.exists():
                     try:
-                        m = orjson.loads(mp.read_bytes())
+                        m = serde.loads(mp.read_bytes())
                         meta.update({k: m.get(k) for k in ("day", "symbol") if m.get(k)})
                         meta["type"] = "multi" if manifest_name == "multi_manifest.json" else "single"
                     except Exception:
@@ -286,7 +286,7 @@ def create_app(
             for line in f:
                 if not line.strip():
                     continue
-                row = orjson.loads(line)
+                row = serde.loads(line)
                 if row.get("tick") == tick:
                     return JSONResponse(row)
 

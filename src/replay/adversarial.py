@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-import orjson
+from ..core import serde
 from loguru import logger
 
 from ..core.config import PROJECT_ROOT, settings
@@ -103,7 +103,7 @@ def _score_window(
             if not line:
                 continue
             try:
-                row = orjson.loads(line)
+                row = serde.loads(line)
             except Exception:
                 continue
             ts_str = row.get("ts")
@@ -360,7 +360,7 @@ async def run_adversarial(
         ],
     }
     (run_root / "adversarial_report.json").write_bytes(
-        orjson.dumps(payload, option=orjson.OPT_INDENT_2)
+        serde.dumps_indent(payload)
     )
     (run_root / "adversarial_report.md").write_text(
         render_adversarial_md(report), encoding="utf-8"

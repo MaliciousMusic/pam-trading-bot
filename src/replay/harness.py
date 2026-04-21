@@ -18,7 +18,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Iterable, Iterator
 
-import orjson
+from ..core import serde
 from loguru import logger
 
 from ..aggregator.voting import aggregate_votes
@@ -26,6 +26,7 @@ from ..core.config import PROJECT_ROOT, settings
 from ..core.types import Event, Side
 from ..decision.engine import DecisionEngine
 from ..execution.ledger import Ledger
+from ..execution.harden import HardenConfig
 from ..execution.paper import PaperExecutor
 from ..projector.chess import ChessProjector
 from ..regime.classifier import RegimeClassifier
@@ -75,6 +76,7 @@ class SprintEngine:
         regime_classifier: RegimeClassifier,
         tick_seconds: int,
         log_writer: DecisionLogWriter,
+        max_ticks: int | None = None,
     ) -> None:
         self.tribes = tribes
         self.state = state
@@ -87,11 +89,19 @@ class SprintEngine:
         self.start_equity = executor.equity_usd
         self.ticks = 0
         self.events_consumed = 0
+        # Optional hard cap on ticks. When set, the event stream stops being
+        # consumed the moment `self.ticks` reaches this number. Used by the
+        # fast-lane determinism gate in scripts/verify_determinism.py so we
+        # don't pay full-day wall-clock for a bit-exact check.
+        self.max_ticks = max_ticks
 
     def run(self, events: Iterable[Event]) -> dict:
         last_tick_ts: datetime | None = None
         last_ts: datetime | None = None
+        stopped_early = False
         for ev in events:
+            if stopped_early:
+                break
             self.events_consumed += 1
             last_ts = ev.ts
             self.state.ingest(ev)
@@ -102,6 +112,9 @@ class SprintEngine:
             while elapsed >= self.tick_seconds:
                 last_tick_ts = last_tick_ts + timedelta(seconds=self.tick_seconds)
                 self._tick(last_tick_ts)
+                if self.max_ticks is not None and self.ticks >= self.max_ticks:
+                    stopped_early = True
+                    break
                 elapsed = (ev.ts - last_tick_ts).total_seconds()
         # Force-close any remaining positions so equity reflects realized book.
         if last_ts is not None and self.state.last_price:
@@ -137,6 +150,13 @@ class SprintEngine:
                 self.state.last_funding_rate or 0.0,
                 float(self.tick_seconds),
             )
+
+        # Phase 10-Harden — drain latency-spiked pending opens before
+        # evaluate_exits, so a fill that landed this tick participates in
+        # the rest of the tick's pipeline (log row, exit evaluation on
+        # subsequent ticks). No-op when harden is disabled.
+        if hasattr(self.executor, "tick"):
+            self.executor.tick(ts, self.state)
 
         self.executor.evaluate_exits(
             ts, self.state.last_price, forecast, regime_label=regime_label,
@@ -219,6 +239,11 @@ def _build_stack(
         slippage_cap_bps=float(_exec.get("slippage_cap_bps", 30.0)),
         book_depth_frac_cap=float(_exec.get("book_depth_frac_cap", 0.25)),
         half_spread_bps=float(_exec.get("half_spread_bps", 0.5)),
+        # Phase 10-Harden — optional adversarial overlay. Pre-harden
+        # callers who don't set the yaml block get the default config
+        # (`enabled=False`), which is a bit-for-bit no-op.
+        harden=HardenConfig.from_yaml(cfg.get("harden", {}) or {}),
+        tick_seconds=float(cfg["clock"].get("tick_seconds", 1)),
     )
     regime_classifier = RegimeClassifier(cfg.get("regime", {}) or {})
     return tribes, state, projector, decision, executor, regime_classifier
@@ -238,6 +263,8 @@ async def run_sprint(
     funding: list[dict] | None = None,
     starting_equity_usd: float | None = None,
     tribes_dir: Path | None = None,
+    max_ticks: int | None = None,
+    synth_book: bool | None = None,
 ) -> SprintResult:
     """Run one sprint-mode replay of `day` at the given `synth_rate`.
 
@@ -246,10 +273,22 @@ async def run_sprint(
       - manifest.json     (inputs for reproducibility)
       - ledger/           (executor's per-trade audit)
 
-    Same `(day, seed, synth_rate)` → byte-identical `decisions.jsonl`.
-    That's the phase-2 exit criterion."""
+    Same `(day, seed, synth_rate, synth_book)` → byte-identical
+    `decisions.jsonl`. That's the phase-2 exit criterion, now parameterized
+    on the G3 book-proxy switch.
+
+    `max_ticks`, if provided, caps the sprint at that many ticks. Used by
+    the fast-lane determinism gate; does not affect full-day capture runs.
+
+    `synth_book`, if None, falls back to `settings.replay.synth_book` (default
+    False). Pass True explicitly to enable the proxy depth stream; the SHA
+    of the resulting decisions.jsonl will differ from a synth_book=False run
+    on the same day/seed because MarketState gains a new input channel."""
     cfg = settings()
     repl = cfg.get("replay", {}) or {}
+    effective_synth_book = bool(
+        synth_book if synth_book is not None else repl.get("synth_book", False)
+    )
 
     if run_id is None:
         run_id = f"sprint_{day.isoformat()}_{datetime.utcnow().strftime('%H%M%S')}"
@@ -290,8 +329,13 @@ async def run_sprint(
             regime_classifier=regime_classifier,
             tick_seconds=int(cfg["clock"]["tick_seconds"]),
             log_writer=writer,
+            max_ticks=max_ticks,
         )
-        events = build_event_stream(bars, funding, synth_rate=synth_rate, symbol=symbol)
+        events = build_event_stream(
+            bars, funding,
+            synth_rate=synth_rate, symbol=symbol,
+            synth_book=effective_synth_book,
+        )
         summary = engine.run(events)
 
     result = SprintResult(
@@ -318,6 +362,7 @@ async def run_sprint(
         "symbol": symbol,
         "seed": seed,
         "synth_rate": synth_rate,
+        "synth_book": effective_synth_book,
         "tick_seconds": int(cfg["clock"]["tick_seconds"]),
         "bars": len(bars),
         "funding_events": len(funding),
@@ -331,7 +376,7 @@ async def run_sprint(
         "tribes_dir": str(tribes_dir) if tribes_dir is not None else None,
         "created_at_utc": datetime.utcnow().isoformat() + "Z",
     }
-    manifest_path.write_bytes(orjson.dumps(manifest, option=orjson.OPT_INDENT_2))
+    manifest_path.write_bytes(serde.dumps_indent(manifest))
 
     logger.info(
         "[sprint] done  ticks={} trades={} Δeq=${:+.2f}  → {}",
@@ -352,6 +397,7 @@ async def run_watch(
     cache_root: Path | None = None,
     bars: list[dict] | None = None,
     funding: list[dict] | None = None,
+    synth_book: bool | None = None,
 ) -> None:
     """Run a watch-mode replay, broadcasting each tick to `broadcaster`.
 
@@ -363,6 +409,9 @@ async def run_watch(
 
     cfg = settings()
     repl = cfg.get("replay", {}) or {}
+    effective_synth_book = bool(
+        synth_book if synth_book is not None else repl.get("synth_book", False)
+    )
     if run_id is None:
         run_id = f"watch_{day.isoformat()}_{datetime.utcnow().strftime('%H%M%S')}"
 
@@ -392,5 +441,9 @@ async def run_watch(
         run_id=run_id, day=day.isoformat(),
         speed=speed, total_ticks_est=total_ticks_est,
     )
-    events = build_event_stream(bars, funding, synth_rate=synth_rate, symbol=symbol)
+    events = build_event_stream(
+        bars, funding,
+        synth_rate=synth_rate, symbol=symbol,
+        synth_book=effective_synth_book,
+    )
     await engine.run(events)

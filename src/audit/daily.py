@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-import orjson
+from ..core import serde
 from loguru import logger
 
 from ..execution.ledger import LEDGER_DIR
@@ -89,7 +89,7 @@ def _read_jsonl(path: Path):
             line = line.strip()
             if not line:
                 continue
-            yield orjson.loads(line)
+            yield serde.loads(line)
 
 
 def audit_day(day: str, horizon_seconds: int = 60) -> DailyReport:

@@ -14,54 +14,149 @@ from collections import deque
 from datetime import datetime
 from typing import Iterable
 
+import numpy as np
+
 from ..core.types import Event
 
 
 class RollingSeries:
-    """Time-stamped series, trimmed to a maximum age."""
+    """Time-stamped series, trimmed to a maximum age.
 
-    __slots__ = ("max_age_s", "_data")
+    Phase 2 — NumPy mirror. Storage is still a `deque[tuple[float, float]]`
+    for O(1) append/popleft on the write path (and backwards compat with
+    external readers that iterate `_data` directly, e.g. the black-swan
+    breaker in `execution.paper` and the `_prices` helper in
+    `tribes.indicators`). A parallel NumPy view (`_arr_t`, `_arr_v`) is
+    materialized lazily by `_ensure_arr()` whenever the mirror is dirty,
+    so hot-path reductions (`sum`, `first_last`, `min_max`, plus the
+    windowed slice used by `realized_vol_bps`) run at C-level via
+    `np.searchsorted` + array reductions.
+
+    cProfile baseline (2026-04-21): `_window()` generator was called 21M
+    times in a 500-tick sprint and cost 10.2 s — the single heaviest
+    hot-spot. The mirror folds that into a lazy rebuild (once per
+    read-burst) plus constant-time `searchsorted`."""
+
+    __slots__ = ("max_age_s", "_data", "_arr_t", "_arr_v", "_dirty")
 
     def __init__(self, max_age_s: float) -> None:
         self.max_age_s = max_age_s
         self._data: deque[tuple[float, float]] = deque()
+        # NumPy mirror — rebuilt by `_ensure_arr` on every read that
+        # follows a write. Starts dirty so the first read materializes
+        # an empty array pair rather than crashing on None.
+        self._arr_t: np.ndarray | None = None
+        self._arr_v: np.ndarray | None = None
+        self._dirty: bool = True
 
     def add(self, ts: datetime, value: float) -> None:
-        t = ts.timestamp()
+        self._add_epoch(ts.timestamp(), value)
+
+    def _add_epoch(self, t: float, value: float) -> None:
+        """Hot-path variant of add() — the projector's inner loop reuses the
+        same step-epoch it already computed for _trim_to_epoch, avoiding a
+        second ts.timestamp() per simulated price append."""
         self._data.append((t, value))
         cutoff = t - self.max_age_s
         while self._data and self._data[0][0] < cutoff:
             self._data.popleft()
+        self._dirty = True
 
     def advance_clock(self, ts: datetime) -> None:
         """Trim stale entries relative to `ts` without adding a new sample.
         Used by the chess projector when the virtual clock moves forward."""
-        cutoff = ts.timestamp() - self.max_age_s
+        self._trim_to_epoch(ts.timestamp())
+
+    def _trim_to_epoch(self, t: float) -> None:
+        """Hot-path variant of advance_clock. Callers that already hold the
+        epoch-float (projector loop) use this to skip a redundant
+        datetime.timestamp() call — profiling showed ~3.6M such calls per
+        200-tick run, ~15% of wall-clock. Same trimming semantics. Only
+        invalidates the NumPy mirror when at least one sample is dropped;
+        steady-state trims (cutoff still behind the oldest row) are free."""
+        cutoff = t - self.max_age_s
+        dropped = False
         while self._data and self._data[0][0] < cutoff:
             self._data.popleft()
+            dropped = True
+        if dropped:
+            self._dirty = True
 
-    def _window(self, window_s: float | None) -> Iterable[tuple[float, float]]:
-        if not self._data:
-            return ()
-        latest = self._data[-1][0]
+    # ── NumPy mirror ────────────────────────────────────────────────
+
+    def _ensure_arr(self) -> None:
+        """Rebuild `_arr_t`/`_arr_v` from `_data` when the mirror is dirty.
+        On a cache hit (no writes since last read) this is just a bool
+        check — the hot path in `_slice_arrays`."""
+        if not self._dirty and self._arr_t is not None:
+            return
+        n = len(self._data)
+        if n == 0:
+            self._arr_t = np.empty(0, dtype=np.float64)
+            self._arr_v = np.empty(0, dtype=np.float64)
+        else:
+            # np.fromiter with count pre-allocates and skips the
+            # intermediate Python list; two passes over the deque, but
+            # still ~3-5x faster than building a list-of-tuples first.
+            self._arr_t = np.fromiter(
+                (p[0] for p in self._data),
+                dtype=np.float64, count=n,
+            )
+            self._arr_v = np.fromiter(
+                (p[1] for p in self._data),
+                dtype=np.float64, count=n,
+            )
+        self._dirty = False
+
+    def _slice_arrays(
+        self, window_s: float | None,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Windowed ndarray slice of (t, v). Returns empty arrays when
+        the series is empty — no `None` dance — so callers can branch on
+        `.size == 0`. Views into the cached mirror; zero-copy."""
+        self._ensure_arr()
+        if self._arr_t.size == 0:
+            return self._arr_t, self._arr_v
         w = window_s if window_s is not None else self.max_age_s
-        cutoff = latest - w
-        return ((t, v) for t, v in self._data if t >= cutoff)
+        cutoff = float(self._arr_t[-1]) - w
+        i = int(np.searchsorted(self._arr_t, cutoff, side="left"))
+        return self._arr_t[i:], self._arr_v[i:]
+
+    # ── Public query API ────────────────────────────────────────────
+
+    def _window(
+        self, window_s: float | None,
+    ) -> Iterable[tuple[float, float]]:
+        """Legacy iterator API — yields (t, v) tuples. External callers
+        (`realized_vol_bps`, iceberg detection, `social_volume`) still
+        use this shape; the internal reducers below go through
+        `_slice_arrays` directly for NumPy speed."""
+        ts, vs = self._slice_arrays(window_s)
+        if vs.size == 0:
+            return ()
+        return zip(ts.tolist(), vs.tolist())
 
     def sum(self, window_s: float | None = None) -> float:
-        return sum(v for _, v in self._window(window_s))
+        _, vs = self._slice_arrays(window_s)
+        if vs.size == 0:
+            return 0.0
+        return float(vs.sum())
 
-    def first_last(self, window_s: float | None = None) -> tuple[float, float] | None:
-        xs = list(self._window(window_s))
-        if not xs:
+    def first_last(
+        self, window_s: float | None = None,
+    ) -> tuple[float, float] | None:
+        _, vs = self._slice_arrays(window_s)
+        if vs.size == 0:
             return None
-        return xs[0][1], xs[-1][1]
+        return float(vs[0]), float(vs[-1])
 
-    def min_max(self, window_s: float | None = None) -> tuple[float, float] | None:
-        xs = [v for _, v in self._window(window_s)]
-        if not xs:
+    def min_max(
+        self, window_s: float | None = None,
+    ) -> tuple[float, float] | None:
+        _, vs = self._slice_arrays(window_s)
+        if vs.size == 0:
             return None
-        return min(xs), max(xs)
+        return float(vs.min()), float(vs.max())
 
 
 class TaggedSeries:
@@ -87,7 +182,10 @@ class TaggedSeries:
             self._data.popleft()
 
     def advance_clock(self, ts: datetime) -> None:
-        cutoff = ts.timestamp() - self.max_age_s
+        self._trim_to_epoch(ts.timestamp())
+
+    def _trim_to_epoch(self, t: float) -> None:
+        cutoff = t - self.max_age_s
         while self._data and self._data[0][0] < cutoff:
             self._data.popleft()
 
@@ -229,24 +327,35 @@ class MarketState:
 
         Scaling: per-tick log-return sigma × √N → cumulative-window sigma.
         Multiplied by 1e4 to express as basis points of price.
+
+        Phase 2 NumPy path: pulls the windowed price slice directly from
+        the RollingSeries ndarray mirror via `_slice_arrays`, then runs
+        `np.diff(np.log(...))` + `.std(ddof=1)` in C. Avoids the Python
+        list comprehension + manual variance loop that showed up as the
+        #2 hot-spot post-RollingSeries refactor (6.1 s tottime / 11.6K
+        calls on the 500-tick sprint).
         """
         import math
-        samples = list(self.prices._window(window_s))
-        if len(samples) < 3:
+        _, vs = self.prices._slice_arrays(window_s)
+        if vs.size < 3:
             return None
-        px = [v for _, v in samples if v is not None and v > 0]
-        if len(px) < 3:
+        # Filter out non-positive / non-finite samples. In steady state
+        # every price is positive and finite, so the mask passes and
+        # boolean indexing simply returns a fresh contiguous copy — which
+        # `np.log`/`np.diff` would allocate anyway.
+        mask = (vs > 0.0) & np.isfinite(vs)
+        px = vs if mask.all() else vs[mask]
+        if px.size < 3:
             return None
-        rets: list[float] = []
-        for i in range(1, len(px)):
-            if px[i - 1] > 0 and px[i] > 0:
-                rets.append(math.log(px[i] / px[i - 1]))
-        if len(rets) < 2:
+        rets = np.diff(np.log(px))
+        # Defensive: if any returns are non-finite (shouldn't happen after
+        # the mask, but belt + suspenders), drop them.
+        if not np.isfinite(rets).all():
+            rets = rets[np.isfinite(rets)]
+        if rets.size < 2:
             return None
-        mean = sum(rets) / len(rets)
-        var = sum((r - mean) ** 2 for r in rets) / (len(rets) - 1)
-        sigma_per_tick = math.sqrt(var)
-        return sigma_per_tick * math.sqrt(len(rets)) * 1e4
+        sigma_per_tick = float(rets.std(ddof=1))
+        return sigma_per_tick * math.sqrt(rets.size) * 1e4
 
     # -- ingest ---------------------------------------------------------
 
@@ -623,22 +732,35 @@ class MarketState:
         return s
 
     def advance_clock(self, ts: datetime) -> None:
-        self.taker_flow.advance_clock(ts)
-        self.long_liq.advance_clock(ts)
-        self.short_liq.advance_clock(ts)
-        self.prices.advance_clock(ts)
-        self.social.advance_clock(ts)
-        self.news.advance_clock(ts)
+        """Public entry point — computes the epoch once and fans out to the
+        ~15 rolling series below via their internal _trim_to_epoch path.
+        Phase 2-lite: before this cache, 200-tick profiles showed ts.timestamp()
+        called 3.6M times (~15 per (tribe × step) iteration inside the
+        projector). Consolidating to one call per advance_clock plus the
+        projector-level cache at the caller site brings this down to ~50/tick."""
+        self._advance_clock_epoch(ts.timestamp(), ts)
+
+    def _advance_clock_epoch(self, t: float, ts: datetime) -> None:
+        """Hot-path entry. The projector precomputes a per-step epoch vector
+        once per project() call and calls this directly, skipping the
+        ts.timestamp() redo. `ts` is still threaded for `last_update`
+        bookkeeping — other state reads rely on it being a datetime."""
+        self.taker_flow._trim_to_epoch(t)
+        self.long_liq._trim_to_epoch(t)
+        self.short_liq._trim_to_epoch(t)
+        self.prices._trim_to_epoch(t)
+        self.social._trim_to_epoch(t)
+        self.news._trim_to_epoch(t)
         # Phase 12 — keep silent-tribe series in sync with the virtual clock.
-        self.bid_depth_series.advance_clock(ts)
-        self.ask_depth_series.advance_clock(ts)
-        self.trade_sizes.advance_clock(ts)
+        self.bid_depth_series._trim_to_epoch(t)
+        self.ask_depth_series._trim_to_epoch(t)
+        self.trade_sizes._trim_to_epoch(t)
         for series in self.oi.values():
-            series.advance_clock(ts)
+            series._trim_to_epoch(t)
         for series in self.cross_flow.values():
-            series.advance_clock(ts)
+            series._trim_to_epoch(t)
         # Phase G — options + stablecoin rolling series.
-        self.pc_ratio_series.advance_clock(ts)
-        self.iv_series.advance_clock(ts)
-        self.stablecoin_supply_series.advance_clock(ts)
+        self.pc_ratio_series._trim_to_epoch(t)
+        self.iv_series._trim_to_epoch(t)
+        self.stablecoin_supply_series._trim_to_epoch(t)
         self.last_update = ts

@@ -23,9 +23,7 @@ import math
 from dataclasses import dataclass
 from pathlib import Path
 
-import orjson
-
-
+from ..core import serde
 @dataclass(slots=True)
 class VariantFitness:
     variant_id: str
@@ -47,8 +45,8 @@ def _iter_close_events(ledger_dir: Path):
                 if not line:
                     continue
                 try:
-                    rec = orjson.loads(line)
-                except orjson.JSONDecodeError:
+                    rec = serde.loads(line)
+                except serde.JSONDecodeError:
                     continue
                 if rec.get("event") == "close":
                     yield rec

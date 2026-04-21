@@ -26,7 +26,7 @@ import asyncio
 import math
 from datetime import datetime, timezone
 
-import orjson
+from ..core import serde
 import websockets
 from loguru import logger
 
@@ -67,7 +67,7 @@ class BybitPublicWS:
                     close_timeout=5,
                     max_size=2**20,
                 ) as ws:
-                    await ws.send(orjson.dumps(
+                    await ws.send(serde.dumps(
                         {"op": "subscribe", "args": [self._topic]}
                     ).decode())
                     backoff = 1.0
@@ -95,7 +95,7 @@ class BybitPublicWS:
         try:
             while True:
                 await asyncio.sleep(20)
-                await ws.send(orjson.dumps({"op": "ping"}).decode())
+                await ws.send(serde.dumps({"op": "ping"}).decode())
         except asyncio.CancelledError:
             return
         except Exception:
@@ -103,8 +103,8 @@ class BybitPublicWS:
 
     async def _handle_raw(self, raw: str | bytes) -> None:
         try:
-            msg = orjson.loads(raw)
-        except orjson.JSONDecodeError:
+            msg = serde.loads(raw)
+        except serde.JSONDecodeError:
             return
         if msg.get("topic") != self._topic:
             return

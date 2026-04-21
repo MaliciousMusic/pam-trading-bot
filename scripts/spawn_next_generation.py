@@ -33,7 +33,7 @@ import argparse
 import sys
 from pathlib import Path
 
-import orjson
+from src.core import serde
 from loguru import logger
 
 from src.core.config import CONFIG_DIR, PROJECT_ROOT
@@ -61,7 +61,7 @@ def _collect_fitness(week_manifest: Path) -> list:
     cumulative curve is well-defined.
     """
     week_root = _resolve_week_root(week_manifest)
-    raw = orjson.loads(week_manifest.read_bytes())
+    raw = serde.loads(week_manifest.read_bytes())
     variants = [v["variant_id"] for v in raw["variants"]]
     out = []
     for variant_id in variants:
@@ -78,7 +78,7 @@ def _collect_fitness(week_manifest: Path) -> list:
             manifest = v_dir / "manifest.json"
             if not manifest.exists():
                 continue
-            m = orjson.loads(manifest.read_bytes())
+            m = serde.loads(manifest.read_bytes())
             if first_day is None:
                 first_day = m
             last_day = m
@@ -194,7 +194,7 @@ def main() -> None:
         sys.exit(1)
 
     # Resolve each parent's source directory.
-    raw = orjson.loads(args.week_manifest.read_bytes())
+    raw = serde.loads(args.week_manifest.read_bytes())
     week_root = _resolve_week_root(args.week_manifest)
     parent_dirs: list[Path] = []
     for vf in parents:
@@ -206,7 +206,7 @@ def main() -> None:
                 run_path = week_root / Path(run_id).name
             mp = run_path / "variants" / vf.variant_id / "manifest.json"
             if mp.exists():
-                m = orjson.loads(mp.read_bytes())
+                m = serde.loads(mp.read_bytes())
                 td = m.get("tribes_dir")
                 if td and Path(td).exists():
                     parent_dirs.append(Path(td))

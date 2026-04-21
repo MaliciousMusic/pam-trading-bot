@@ -15,7 +15,7 @@ import tempfile
 from datetime import date
 from pathlib import Path
 
-import orjson
+from src.core import serde
 from loguru import logger
 logger.remove()
 logger.add(sys.stderr, level="WARNING")
@@ -60,8 +60,8 @@ def _write_fixtures(tmp: Path, days: list[str]) -> tuple[dict[str, Path], dict[s
     for d in days:
         bp = tmp / f"bars_{d}.json"
         fp = tmp / f"funding_{d}.json"
-        bp.write_bytes(orjson.dumps(_make_bars()))
-        fp.write_bytes(orjson.dumps(_make_funding()))
+        bp.write_bytes(serde.dumps(_make_bars()))
+        fp.write_bytes(serde.dumps(_make_funding()))
         bar_paths[d] = bp
         fund_paths[d] = fp
     return bar_paths, fund_paths
@@ -109,7 +109,7 @@ async def test_equity_carryover() -> None:
         # week_manifest.json exists
         manifest_path = Path(result.week_manifest_path)
         assert manifest_path.exists(), "week_manifest.json not written"
-        wm = orjson.loads(manifest_path.read_bytes())
+        wm = serde.loads(manifest_path.read_bytes())
         assert wm["n_days"] == 2
         assert wm["all_ok"] is True
 
@@ -160,7 +160,7 @@ async def test_multi_variant_week() -> None:
             )
 
         # week_manifest has both days and both variants
-        wm = orjson.loads(Path(result.week_manifest_path).read_bytes())
+        wm = serde.loads(Path(result.week_manifest_path).read_bytes())
         assert len(wm["days"]) == 2
         for d in wm["days"]:
             assert len(d["variants"]) == 2
