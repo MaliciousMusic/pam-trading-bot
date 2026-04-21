@@ -9,13 +9,18 @@ Bars are converted to `bar_to_trade_events()` batches; funding-rate rows
 become `funding_to_event()` events interleaved at their true timestamp.
 Each funding event carries `mark_price_hint` = the most recent trade
 price, so `MarketState.last_mark_price` updates coherently on ingest.
+
+Phase G3 — `synth_book` opt-in. When True, `bar_to_book_events()` emits
+proxy `kind="book"` events interleaved with the trade stream so replay
+exercises microstructure_prober and the depth-aware projector. Default
+is False to preserve existing byte-identical replay baselines.
 """
 from __future__ import annotations
 
 from typing import Iterable, Iterator
 
 from ..core.types import Event
-from .bar_to_events import bar_to_trade_events, funding_to_event
+from .bar_to_events import bar_to_book_events, bar_to_trade_events, funding_to_event
 
 
 def build_event_stream(
@@ -24,6 +29,7 @@ def build_event_stream(
     *,
     synth_rate: int,
     symbol: str = "BTCUSDT",
+    synth_book: bool = False,
 ) -> Iterator[Event]:
     """Yield synthesized events in chronological order.
 
@@ -32,24 +38,40 @@ def build_event_stream(
     trade price (None until the first trade fires, which only happens if
     funding predates the bar range — rare; ingest handles None by leaving
     last_mark_price untouched).
+
+    When `synth_book=True`, proxy depth events from `bar_to_book_events()`
+    are merged into the timeline as well. They share the bar's open_time
+    span with trades; merging is chronological via timestamp.
     """
     funding_list = sorted(funding, key=lambda r: r["funding_time_ms"])
     f_idx = 0
     last_price: float | None = None
 
     for bar in bars:
-        for trade in bar_to_trade_events(bar, synth_rate, symbol=symbol):
-            trade_ms = int(trade.ts.timestamp() * 1000)
+        trades = bar_to_trade_events(bar, synth_rate, symbol=symbol)
+        books = bar_to_book_events(bar, symbol=symbol) if synth_book else []
+        # Merge trades and books in chronological order within the bar.
+        # Both are already time-sorted individually. For ties (same ms),
+        # emit the book event first so MarketState has depth before the
+        # trade at that instant — that's the physical ordering on a live
+        # WS (depth snapshot updates between trade prints).
+        combined = sorted(
+            [(ev.ts, 0, ev) for ev in books] + [(ev.ts, 1, ev) for ev in trades],
+            key=lambda x: (x[0], x[1]),
+        )
+        for _, _, ev in combined:
+            ev_ms = int(ev.ts.timestamp() * 1000)
             while (f_idx < len(funding_list)
-                   and funding_list[f_idx]["funding_time_ms"] <= trade_ms):
+                   and funding_list[f_idx]["funding_time_ms"] <= ev_ms):
                 yield funding_to_event(
                     funding_list[f_idx],
                     symbol=symbol,
                     mark_price_hint=last_price,
                 )
                 f_idx += 1
-            yield trade
-            last_price = trade.payload["price"]
+            yield ev
+            if ev.kind == "trade":
+                last_price = ev.payload["price"]
 
     while f_idx < len(funding_list):
         yield funding_to_event(

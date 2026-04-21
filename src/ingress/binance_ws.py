@@ -212,9 +212,13 @@ class BinancePerpsWS:
             return
         data = msg.get("data") or msg
         stream_name = msg.get("stream", "")
-        # Partial book-depth streams have no `e` field in the inner payload,
-        # so we route on the stream name.
-        if "@depth" in stream_name and not data.get("e"):
+        # Route all @depth streams through the book normalizer.
+        # Historically we also checked `not data.get("e")` because Binance
+        # SPOT partial-depth has no event-type field. Futures partial-depth
+        # (@depth20@100ms here) *does* carry `"e": "depthUpdate"`, so that
+        # guard silently dropped every single frame. The normalizer already
+        # handles both payload shapes (bids/asks or b/a).
+        if "@depth" in stream_name:
             try:
                 ev = _normalize_book_depth(data, stream_name)
             except (KeyError, TypeError, ValueError) as e:

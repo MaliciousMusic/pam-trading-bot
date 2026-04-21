@@ -159,7 +159,7 @@ def analyze(path: Path, redundancy_threshold: float = DEFAULT_REDUNDANCY) -> Non
     print("-- activity rate (fraction of ticks with a non-abstain vote) --")
     for t in sorted(tribe_ids):
         rate = activity_count[t] / max(1, min_len)
-        flag = "" if rate >= 0.05 else "  ← rarely votes, correlations may be noisy"
+        flag = "" if rate >= 0.05 else "  <- rarely votes, correlations may be noisy"
         print(f"  {t:<36}  {rate*100:>5.1f}%{flag}")
 
     print("\n-- pairwise Pearson correlation --")

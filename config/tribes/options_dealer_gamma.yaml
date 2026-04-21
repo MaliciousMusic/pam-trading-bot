@@ -44,12 +44,21 @@ strategy:
     # Realized-vol window used to classify gamma regime. Below low_vol_bps we
     # assume long-gamma (dealers mean-revert via delta hedging). Above
     # high_vol_bps we assume short-gamma (dealers amplify moves).
+    #
+    # Phase G1 — relaxed pin_band and vol gates. Previously pin_band=150 bps
+    # required spot within ~$100 of the OI-weighted strike; live observations
+    # showed dev_bps = -1006 bps (strike far above spot) routinely, so pin
+    # mode never fired. Widening to 1200 bps admits realistic skews. Also
+    # tightened the low/high vol thresholds so pin+amplify modes see each
+    # other less rarely (the dead zone between them was where most ticks
+    # landed). Goal: same Contrarian-Inversion logic as put_call_fader -- we
+    # want a signed vote most ticks, calibrator sorts signal from noise.
     vol_window_s: 900
-    low_vol_bps: 25.0
-    high_vol_bps: 80.0
+    low_vol_bps: 40.0
+    high_vol_bps: 60.0
     # Pin trigger — price must be within pin_band_bps of the OI-weighted
     # strike for the gamma-pin reversal to fire.
-    pin_band_bps: 150.0
+    pin_band_bps: 1200.0
     # Recent flow window used in the amplify branch (short-gamma regime).
     flow_window_s: 300
     flow_ref_usd: 2500000

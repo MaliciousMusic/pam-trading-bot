@@ -390,3 +390,12 @@ replay:
     - synth_600
   watch_default_speed: 10        # × real-time; user can pick 1/10/25/50/100
   parallel_day_fetches: 2        # kline fetcher politeness cap
+  # Phase G3 — proxy book-depth synthesis.
+  # When true, `bar_to_book_events()` emits coarse `kind="book"` events so
+  # microstructure_prober + the depth-aware projector have a training
+  # signal even in backtest. Spread & depth derive from bar HL / volume;
+  # this is strictly a fidelity fallback — whenever real L2 data is
+  # available the flag should stay OFF. Default false to preserve
+  # existing byte-identical replay baselines; runs with this on produce
+  # a DIFFERENT SHA (new input channel, not a determinism regression).
+  synth_book: false

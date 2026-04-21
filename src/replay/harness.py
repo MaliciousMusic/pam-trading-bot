@@ -251,6 +251,7 @@ async def run_sprint(
     starting_equity_usd: float | None = None,
     tribes_dir: Path | None = None,
     max_ticks: int | None = None,
+    synth_book: bool | None = None,
 ) -> SprintResult:
     """Run one sprint-mode replay of `day` at the given `synth_rate`.
 
@@ -259,13 +260,22 @@ async def run_sprint(
       - manifest.json     (inputs for reproducibility)
       - ledger/           (executor's per-trade audit)
 
-    Same `(day, seed, synth_rate)` → byte-identical `decisions.jsonl`.
-    That's the phase-2 exit criterion.
+    Same `(day, seed, synth_rate, synth_book)` → byte-identical
+    `decisions.jsonl`. That's the phase-2 exit criterion, now parameterized
+    on the G3 book-proxy switch.
 
     `max_ticks`, if provided, caps the sprint at that many ticks. Used by
-    the fast-lane determinism gate; does not affect full-day capture runs."""
+    the fast-lane determinism gate; does not affect full-day capture runs.
+
+    `synth_book`, if None, falls back to `settings.replay.synth_book` (default
+    False). Pass True explicitly to enable the proxy depth stream; the SHA
+    of the resulting decisions.jsonl will differ from a synth_book=False run
+    on the same day/seed because MarketState gains a new input channel."""
     cfg = settings()
     repl = cfg.get("replay", {}) or {}
+    effective_synth_book = bool(
+        synth_book if synth_book is not None else repl.get("synth_book", False)
+    )
 
     if run_id is None:
         run_id = f"sprint_{day.isoformat()}_{datetime.utcnow().strftime('%H%M%S')}"
@@ -308,7 +318,11 @@ async def run_sprint(
             log_writer=writer,
             max_ticks=max_ticks,
         )
-        events = build_event_stream(bars, funding, synth_rate=synth_rate, symbol=symbol)
+        events = build_event_stream(
+            bars, funding,
+            synth_rate=synth_rate, symbol=symbol,
+            synth_book=effective_synth_book,
+        )
         summary = engine.run(events)
 
     result = SprintResult(
@@ -335,6 +349,7 @@ async def run_sprint(
         "symbol": symbol,
         "seed": seed,
         "synth_rate": synth_rate,
+        "synth_book": effective_synth_book,
         "tick_seconds": int(cfg["clock"]["tick_seconds"]),
         "bars": len(bars),
         "funding_events": len(funding),
@@ -369,6 +384,7 @@ async def run_watch(
     cache_root: Path | None = None,
     bars: list[dict] | None = None,
     funding: list[dict] | None = None,
+    synth_book: bool | None = None,
 ) -> None:
     """Run a watch-mode replay, broadcasting each tick to `broadcaster`.
 
@@ -380,6 +396,9 @@ async def run_watch(
 
     cfg = settings()
     repl = cfg.get("replay", {}) or {}
+    effective_synth_book = bool(
+        synth_book if synth_book is not None else repl.get("synth_book", False)
+    )
     if run_id is None:
         run_id = f"watch_{day.isoformat()}_{datetime.utcnow().strftime('%H%M%S')}"
 
@@ -409,5 +428,9 @@ async def run_watch(
         run_id=run_id, day=day.isoformat(),
         speed=speed, total_ticks_est=total_ticks_est,
     )
-    events = build_event_stream(bars, funding, synth_rate=synth_rate, symbol=symbol)
+    events = build_event_stream(
+        bars, funding,
+        synth_rate=synth_rate, symbol=symbol,
+        synth_book=effective_synth_book,
+    )
     await engine.run(events)

@@ -40,8 +40,16 @@ strategy:
   params:
     # Pc_ratio tail thresholds. Below `lo` = euphoria (fade → SELL), above
     # `hi` = fear (fade → BUY). Between them the tribe idles.
-    pc_ratio_lo: 0.60
-    pc_ratio_hi: 1.30
+    #
+    # Phase G1 — narrowed the neutral band from [0.60, 1.30] to [0.85, 1.05]
+    # so moderate skews (not just extremes) produce a signed vote. Goal is
+    # Contrarian Inversion: a tribe that votes often and sometimes wrong is
+    # strictly more useful than a tribe that abstains — the Calibrator can
+    # only learn to invert signals it actually sees. Pre-fix, live pc=0.70
+    # sat in the dead zone and the tribe never voted; with the new band,
+    # 0.70 is below `lo` and produces a SELL (fade the mild euphoria).
+    pc_ratio_lo: 0.85
+    pc_ratio_hi: 1.05
     # Reference pc-ratio DELTA over a short window — a sudden spike in the
     # fear/greed direction boosts conviction (captures regime shifts, not
     # just static extremes).
