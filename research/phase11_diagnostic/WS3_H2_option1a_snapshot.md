@@ -31,8 +31,14 @@
 
 **H2 intervention verdict:** Option 1a produces a measurable,
 signed-correct magnitude signal where signed-median produced only
-clamp artifacts. Proceed to conviction_boost relocation (R2) as
-planned. Do not adjust `MIN_GAIN` in this commit.
+clamp artifacts. **Direction of bias is the opposite of what the
+pre-audit framing assumed** — see §6 Plan Update. R2 sequencing
+re-examined in §7.
+
+**Reviewer addendum (2026-04-22):** The determinism PASS on this
+commit is a false-positive because `SprintEngine` does not wire the
+calibrator (`harness.py:66`). Live-feedback attribution and a wired
+determinism check are prerequisites before R2 lands — see §7 ordering.
 
 ## 1. Per-day end-state (3-day panel + all-continuous)
 
@@ -170,33 +176,103 @@ samples produce `r/p ≈ 0`, which the median absorbs without pulling
 the point estimate far. The spawned task investigates the projector
 path.
 
-## 6. Next step
+## 6. Plan Update — direction of H2 bias is reversed
 
-Per R3 (attribution discipline) and the reviewer's order-of-operations
-"Step 3. Pause. Report findings before Step 3", this report completes
-Step 2. **Pausing for review before beginning the `conviction_boost`
-relocation.**
+**What this overturns.** The original H2 framing assumed the calibrator
+was seeing inflated predictions and clumsily trying to shrink them —
+`last_correction=0.25` read as "realized magnitude is only 25 % of
+predicted." Post-fix data overturns that reading. The correct-direction
+median is **above 1.0 on 3 of 4 days** (0.69 / 2.04 / 2.47 / 1.47);
+the council's magnitude predictions are systematically **too small**,
+and the signed-median code was reinforcing that shortage by floor-
+clamping gain. Predictions aren't "too big to trust" — they're "too
+small to act on," and the pre-fix calibrator was quietly pushing them
+further in the wrong direction. This reversal is the operative finding
+from H2 and should be read before H1/H3 scoping.
 
-Open questions / checkpoints for the reviewer:
+**Downstream implication for H1.** The original H1 framing was
+"confidence formula compounds three sub-1 factors on top of inflated
+emove, producing a cap near 0.25 regardless of underlying signal." With
+the sign reversed — emove is deflated, not inflated — that mechanism
+can't be the story. The 0.25 confidence cap must come from elsewhere:
+formula conservatism (e.g. `signal_quality × directional` likely
+lands in `[0.3, 0.5]` independent of magnitude), tribe correlation
+collapsing apparent agreement (H3's territory), or both. H1 and H3
+remain in scope; the assumption that their inputs are over-sized
+should be dropped from their hypothesis statements before measurement.
 
-- **Q1:** Is the correction distribution enough to unblock R2, or do
-  you want the calibrator wired into `SprintEngine` first so the
-  attribution can run through a full replay-loop (the true feedback
-  measurement) before moving on? `harness.py:66` has the `# No
-  auditor / calibrator / kernel_calibrator in phase 2` TODO; wiring
-  it is a small, self-contained change.
-- **Q2:** The 04-21 projector divergence is flagged as a separate
-  task. Do you want to drop 04-21 from the WS3 acceptance-bar panel
-  until it's audited, or keep all 4 days?
-- **Q3:** Option 1a's expected gain landing zone (§3 table) lands
-  mostly in [5, 20]. This is below the current MAX_GAIN=40 ceiling
-  but well above the old MIN_GAIN=1.0 stuck position. Any appetite
-  to narrow the gain clamp now (e.g. `[2.0, 25.0]`) as a belt-
-  and-braces guard against the next clamp artifact, or leave the
-  bounds alone until a real binding event is observed?
+**Implication for R2.** Relocating `conviction_boost` out of the
+projector is still architecturally correct — it's the asymmetric
+mixed-sign multiplier that pollutes calibrator fits — but its expected
+lift on directional hit @ 20 s shrinks. First-order impact is now
+"cleaner magnitude calibration," not "restore a suppressed signal."
+Sequencing proposal in §7.
+
+## 7. Sequencing — post-review plan
+
+**Reviewer resolutions (2026-04-22).**
+
+| # | Question | Decision |
+|:--|:--|:--|
+| Q1 | Wire calibrator into `SprintEngine` before R2? | **Yes.** The current determinism PASS is a false-positive; `harness.py:66` leaves the calibrator out of the sprint, so the refit path was never exercised. Wire it, re-run determinism, then re-run attribution with live feedback. If determinism breaks, it means the calibrator has a non-deterministic refit path and that is the blocker — fix before any WS3 H-measurement. |
+| Q2 | Drop 04-21 from acceptance panel? | **No — reclassify.** Acceptance panel is the 3 clean days (04-18, 04-19, 04-20). 04-21 still runs in the H-measurement harness but is **reported separately as diagnostic only** with a "numerical anomaly under investigation" flag, pending the spawned divergence-audit. Post-audit it either joins acceptance or is permanently excluded based on root cause. |
+| Q3 | Narrow `[MIN_GAIN, MAX_GAIN]` clamp? | **No — add telemetry instead.** Current `[1.0, 40.0]` is informative (the floor is what surfaced the directional-contamination bug). Add a warning log when correction is clamped by either bound, including the pre-clamp value, for live visibility without behaviour change. Reconsider narrowing only after several days of live post-fix operation show a bounded distribution. |
+
+**Accepted order of operations.**
+
+1. **[this commit]** `docs(research): WS3 H2 Option 1a snapshot — plan
+   update + sequencing` — §6 Plan Update + §7 Sequencing amendment.
+2. **[reviewer — local]** Start the spawned "Investigate 2026-04-21
+   projector divergence" chip. Output goes to
+   `research/phase11_diagnostic/proj_divergence_20260421_audit.md`.
+3. **[next commit]** `chore(projector): log when calibrator correction
+   hits a clamp` — small telemetry-only change in
+   `src/projector/kernel_calibrator.py`, no behaviour modification.
+   Logs both the `correction` clamp `[0.25, 4.0]` and the gain clamp
+   `[MIN_GAIN, MAX_GAIN]`. Carries Q3 forward.
+4. **[next commit]** `feat(replay): wire kernel calibrator in sprint
+   harness + determinism verification` — SprintEngine instantiates
+   the calibrator, pushes resolved anchors on each tick, reads
+   `current_gain()` before projecting the next one. Determinism gate
+   must PASS post-wiring under the same day+seed inputs. If it does
+   not, that's a blocker and gets worked before step 5.
+5. Re-run `scripts/ws3_h2_option1a_snapshot.py` against the
+   live-feedback sprint output on all 4 days (acceptance panel
+   reported as 3-day, 04-21 reported separately per Q2). Commit the
+   new snapshot as `docs(research): WS3 H2 live-feedback attribution
+   delta`. Report offline-vs-live delta.
+6. **Pause.** Report live-vs-offline delta and confirm revised R2
+   sequencing before starting the `conviction_boost` relocation.
+
+**R2 sequencing — revised proposal.** After step 5 lands, R2 still
+goes next in WS3 before H1/H3 measurement begins, but on
+*measurement-hygiene* grounds rather than expected directional-hit
+lift. Rationale:
+
+- The unidirectional `[1.0, 1.5]` conviction_boost inflates predicted
+  magnitude only. Under Option 1a the calibrator is already filtering
+  out the worst artifact (wrong-direction samples), but the remaining
+  correct-direction ratios are still depressed by up to 1.5× on any
+  tick where conviction_boost binds. That makes every calibration
+  reading harder to interpret and every downstream H-measurement
+  less trustworthy than it needs to be.
+- Expected quantitative effect: correct-direction median corrections
+  rise by roughly 10–25 % after R2 (empirical conviction_boost
+  distribution is concentrated in `[1.0, 1.3]`, not always at the
+  1.5 ceiling). Gain-landing-zone estimates in §3 get a
+  proportional uplift. First-order effect on directional hit: small.
+- Alternative the reviewer may prefer: run R2 and H1's first
+  measurement **in parallel** — they touch different modules
+  (projector vs `DecisionEngine`/conf formula diagnostic), so
+  commits don't collide; R2 hygiene and H1 measurement land in the
+  same sprint. This would compress WS3 timeline but adds one extra
+  review loop.
+- **Decision deferred to the reviewer**, to be confirmed at the
+  step-5 pause after live-feedback attribution data is in hand.
 
 ---
 
-*Written after Option 1a commit `564c050`; determinism gate
-PASS (sha256=a9049de23892632e…); conviction_boost relocation not
-started.*
+*Written after Option 1a commit `564c050`; offline determinism gate
+PASSed (sha256=a9049de23892632e…) but acknowledged as false-positive
+pending `SprintEngine` wiring. R2 (`conviction_boost` relocation) not
+started and re-scoped per §6 Plan Update.*
