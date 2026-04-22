@@ -1,6 +1,6 @@
 """WS3 H2 Option 1a — attribution snapshot.
 
-Reads `data/forecasts/YYYY-MM-DD.jsonl` resolved-anchor records and
+Reads `<forecasts-root>/YYYY-MM-DD.jsonl` resolved-anchor records and
 simulates KernelCalibrator's fit under both the pre-fix (signed-ratio
 median) and post-fix (correct-direction median) behaviors, using the
 same trailing-window, min-samples, and clamps as the production class.
@@ -19,6 +19,12 @@ Output answers three attribution questions:
 Usage:
     PYTHONPATH=. python -m scripts.ws3_h2_option1a_snapshot \
         --days 2026-04-18 2026-04-19 2026-04-20 2026-04-21
+
+    # Live-feedback variant (Step 4 of reviewer's post-fix order): point
+    # at sprint-produced anchors where the calibrator was active during
+    # the run, so expected_move_bps already reflects gain updates.
+    PYTHONPATH=. python -m scripts.ws3_h2_option1a_snapshot \
+        --forecasts-root /path/to/sprint_outputs/forecasts
 
 Markdown snapshot written to
 `research/phase11_diagnostic/_ws3_h2_snapshots/option1a_<timestamp>.md`.
@@ -192,21 +198,44 @@ def main() -> int:
         / "phase11_diagnostic"
         / "_ws3_h2_snapshots",
     )
+    ap.add_argument(
+        "--forecasts-root",
+        type=Path,
+        default=PROJECT_ROOT / "data" / "forecasts",
+        help="Directory containing <day>.jsonl resolved-anchor files. "
+        "Default = data/forecasts (live production path). Override with "
+        "a sprint run's forecasts/ dir (or a symlink farm aggregating "
+        "multiple sprints) to replay against anchors produced under a "
+        "live calibrator loop — the Step 4 live-feedback attribution.",
+    )
+    ap.add_argument(
+        "--tag",
+        default="",
+        help="Optional tag embedded into the snapshot filename and "
+        "title line (e.g. 'live-feedback' vs the default production "
+        "offline replay). Helps keep side-by-side snapshots separate "
+        "in _ws3_h2_snapshots/.",
+    )
     args = ap.parse_args()
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    out_path = args.out_dir / f"option1a_{ts}.md"
+    tag_suffix = f"_{args.tag}" if args.tag else ""
+    out_path = args.out_dir / f"option1a{tag_suffix}_{ts}.md"
+    tag_title = f" [{args.tag}]" if args.tag else ""
 
     lines: list[str] = []
-    lines.append(f"# WS3 H2 Option 1a — attribution snapshot ({ts})\n")
+    lines.append(
+        f"# WS3 H2 Option 1a — attribution snapshot{tag_title} ({ts})\n"
+    )
     lines.append(
         f"- initial_gain={args.initial_gain}, window={WINDOW}, "
         f"min_samples={MIN_SAMPLES}, halflife={HALFLIFE}\n"
         f"- min_pred_bps={MIN_PRED_BPS}, correction clamp "
         f"[{CORRECTION_CLAMP_LO}, {CORRECTION_CLAMP_HI}], "
         f"gain clamp [{MIN_GAIN}, {MAX_GAIN}]\n"
-        f"- label_filter={args.label_filter or 'ALL'}\n\n"
+        f"- label_filter={args.label_filter or 'ALL'}\n"
+        f"- forecasts_root={args.forecasts_root}\n\n"
     )
 
     lines.append("## Per-day end-state\n\n")
@@ -225,7 +254,7 @@ def main() -> int:
 
     all_records: list[dict] = []
     for day in args.days:
-        path = PROJECT_ROOT / "data" / "forecasts" / f"{day}.jsonl"
+        path = args.forecasts_root / f"{day}.jsonl"
         recs = list(_iter_records(path))
         if args.label_filter:
             recs = [r for r in recs if r.get("label") == args.label_filter]
