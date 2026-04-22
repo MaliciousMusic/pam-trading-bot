@@ -185,6 +185,7 @@ class DecisionEngine:
                 getattr(forecast, "conviction_boost", 1.0) or 1.0
             ),
             realized_vol_bps=getattr(forecast, "realized_vol_bps", None),
+            steps_bps=getattr(forecast, "steps_bps", None),
         )
 
     def _peak_favorable_seconds(self, forecast: Forecast, side: Side) -> int:

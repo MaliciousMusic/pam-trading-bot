@@ -214,3 +214,7 @@ class TradeIntent(Struct):
     # rail at entry. Defaults keep older callers working.
     conviction_boost: float = 1.0
     realized_vol_bps: float | None = None
+    # WS1 §8 instrumentation — forecast shape curve stamped at decision time
+    # so `peak_favorable_s` can be recomputed from the disk ledger (open_rec
+    # records the list verbatim). None when projector didn't emit steps_bps.
+    steps_bps: list[float] | None = None

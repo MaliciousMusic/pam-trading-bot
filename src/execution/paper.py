@@ -196,6 +196,13 @@ class PaperExecutor(Executor):
         # if one had a longer draw.
         self._pending_fills: list[PendingFill] = []
 
+        # WS1 §8 — regime label stashed each tick via set_regime_label()
+        # so every close path (black-swan, session halt, council flip,
+        # max-hold backstop, manual unwind) can stamp the regime it closed
+        # INTO on the ledger without threading a kwarg through five call
+        # sites. Engines set this once at the top of the tick.
+        self._current_regime_label: str | None = None
+
     # -- Executor interface ---------------------------------------------
 
     @property
@@ -209,6 +216,16 @@ class PaperExecutor(Executor):
     @property
     def positions(self) -> list[Position]:
         return self._positions
+
+    def set_regime_label(self, label) -> None:
+        """Stash the current tick's regime label. Every close path reads
+        from `self._current_regime_label` so the ledger's close events
+        carry the regime the position closed INTO. Accepts RegimeLabel
+        enum or bare string; stored as string. Called by every engine
+        at the top of the tick, right after regime classification."""
+        self._current_regime_label = (
+            label.value if hasattr(label, "value") else label
+        )
 
     # Phase 10 — black-swan hook exposed for the engine to call each tick
     # BEFORE forecast-driven exits so a detonating move doesn't let the
@@ -979,6 +996,12 @@ class PaperExecutor(Executor):
             "open_positions": len(self._positions),
             "size_usd_requested": requested_size, "capacity_clipped": clipped,
             "capacity_note": clip_note,
+            # WS1 §8 — stamp the forecast shape so auditors can recompute
+            # peak_favorable_s off-disk without re-running the projector,
+            # and stamp the regime the entry was taken IN.
+            "peak_favorable_s": intent.peak_favorable_s,
+            "steps_bps": intent.steps_bps,
+            "regime_label": self._current_regime_label,
         }
         # Phase 10-Harden: stamp deferred-fill diagnostics when this open
         # came through the latency-spike queue. `drift_bps` is signed
@@ -1088,6 +1111,10 @@ class PaperExecutor(Executor):
             "total_slip_usd": total_slip_usd, "total_fee_usd": total_fee_usd,
             "intended_bps": intended_bps, "realized_bps": realized_bps,
             "frictionless_equity_usd": self._frictionless_equity,
+            # WS1 §8 — regime the position closed INTO, so WS1-style
+            # attribution joins (regime × close-reason) can be done from
+            # the ledger alone. Stashed by set_regime_label() at tick top.
+            "regime_label": self._current_regime_label,
         })
 
     def _log(self, rec: dict[str, Any]) -> None:

@@ -285,6 +285,11 @@ class TradingEngine:
                 float(self.tick_seconds),
             )
 
+        # WS1 §8 — stash current regime on the executor so every close path
+        # (black-swan, halt, flip, max-hold, manual) stamps it on the ledger.
+        if hasattr(self.executor, "set_regime_label"):
+            self.executor.set_regime_label(regime_label_now)
+
         # 2b) Phase 10 — black-swan detonation stop. Runs BEFORE forecast-
         #     driven exits because a 5σ move can outpace the projector's
         #     reaction; if this fires, every position is already closed by

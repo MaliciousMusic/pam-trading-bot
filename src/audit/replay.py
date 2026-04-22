@@ -154,6 +154,10 @@ class ReplayEngine:
                 self.state.last_funding_rate or 0.0,
                 float(self.tick_seconds),
             )
+        # WS1 §8 — stash current regime on the executor so every close path
+        # stamps it on the ledger.
+        if hasattr(self.executor, "set_regime_label"):
+            self.executor.set_regime_label(regime_label)
         self.executor.evaluate_exits(
             ts, self.state.last_price, forecast, regime_label=regime_label,
         )

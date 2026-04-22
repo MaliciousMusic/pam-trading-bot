@@ -151,6 +151,12 @@ class SprintEngine:
                 float(self.tick_seconds),
             )
 
+        # WS1 §8 — stash current regime on the executor so every close path
+        # (session halt, council flip, max-hold backstop, manual unwind)
+        # stamps it on the ledger.
+        if hasattr(self.executor, "set_regime_label"):
+            self.executor.set_regime_label(regime_label)
+
         # Phase 10-Harden — drain latency-spiked pending opens before
         # evaluate_exits, so a fill that landed this tick participates in
         # the rest of the tick's pipeline (log row, exit evaluation on
