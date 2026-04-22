@@ -30,6 +30,7 @@ from ..execution.ledger import Ledger
 from ..execution.harden import HardenConfig
 from ..execution.paper import PaperExecutor
 from ..projector.chess import ChessProjector
+from ..projector.kernel_calibrator import KernelCalibrator
 from ..regime.classifier import RegimeClassifier
 from ..tribes.loader import load_all
 from ..tribes.market_state import MarketState
@@ -62,9 +63,20 @@ class SprintEngine:
     tribes→council→decision stack and writes a per-tick log row.
 
     Mirrors live engine tick logic (regime-aware exits, funding accrual)
-    except for the UI broadcaster and the async machinery. No auditor /
-    calibrator / kernel_calibrator in phase 2 — they ship in a later
-    phase when the summary report needs them for skill-shift metrics.
+    except for the UI broadcaster and the async machinery.
+
+    Optional observers wired for WS3 diagnostics:
+      - `auditor` (WS1 §8, landed in commit 2fab101) resolves anchors
+        into `<run_dir>/forecasts/<day>.jsonl`.
+      - `kernel_calibrator` (WS3 H2 this commit) fits the projector's
+        `bps_per_unit_pressure` live via Option 1a correct-direction
+        median. With both wired the sprint mirrors the TradingEngine
+        calibrator feedback loop — enabling live-feedback attribution
+        that the offline `ws3_h2_option1a_snapshot.py` could only
+        approximate.
+
+    The tribe `calibrator` (TribeCalibrator) is still absent in sprint —
+    it ships when the summary report needs per-tribe skill-shift metrics.
     """
 
     def __init__(
@@ -79,6 +91,7 @@ class SprintEngine:
         log_writer: DecisionLogWriter,
         max_ticks: int | None = None,
         auditor: ForecastAuditor | None = None,
+        kernel_calibrator: KernelCalibrator | None = None,
     ) -> None:
         self.tribes = tribes
         self.state = state
@@ -101,6 +114,15 @@ class SprintEngine:
         # dir). Does NOT feed the projector's sigma — keeps decisions.jsonl
         # byte-identical whether the auditor is wired or not.
         self.auditor = auditor
+        # WS3 H2 — optional KernelCalibrator that fits
+        # `projector.bps_per_unit_pressure` live from resolved anchors.
+        # Requires `auditor` to be wired (the refit consumes the auditor's
+        # just-matured `Resolved` records). When set, every refit-step
+        # mutates the projector's gain; decisions.jsonl is NOT byte-
+        # identical with vs without the calibrator. Determinism across two
+        # runs *with the calibrator active on the same inputs* remains
+        # the contract — enforced by scripts/verify_determinism.py.
+        self.kernel_calibrator = kernel_calibrator
         # Anchor specs mirror TradingEngine's: 1-based step index into the
         # projector's per-step forecast. Filter unreachable anchors up front
         # so the auditor only sees horizons the projector actually produces.
@@ -209,17 +231,28 @@ class SprintEngine:
         # sprint-based WS1 reruns have disk-level anchor data without
         # needing the pre-Phase-2.5 historical forecasts file. Writes to
         # <run_dir>/forecasts/<day>.jsonl per run, so two determinism runs
-        # write to distinct paths. Does NOT feed the projector's sigma —
-        # decisions.jsonl stays byte-identical with/without the auditor.
+        # write to distinct paths.
+        #
+        # WS3 H2 — when the kernel calibrator is also wired, the same
+        # just-resolved anchors fit `bps_per_unit_pressure` via Option 1a.
+        # The refreshed gain lands on the projector here so the NEXT
+        # tick's forecast uses it. Mirrors `TradingEngine._on_tick`
+        # lines 408-427 exactly so sprint and live produce the same
+        # gain-trajectory under the same inputs.
         if self.auditor is not None:
             predictions = self._compute_predictions(forecast)
             if predictions:
-                self.auditor.record_tick(
+                resolved_now = self.auditor.record_tick(
                     ts, self.state.last_price, predictions,
                     forecast_conf=forecast.confidence,
                     forecast_emove_bps=forecast.expected_move_bps,
                     net_pressure=agg.net_pressure,
                 )
+                if self.kernel_calibrator is not None and resolved_now:
+                    self.kernel_calibrator.apply_resolved(resolved_now)
+                    self.projector.bps_per_unit_pressure = (
+                        self.kernel_calibrator.current_gain()
+                    )
 
         if hasattr(self.executor, "apply_funding"):
             self.executor.apply_funding(
@@ -411,6 +444,26 @@ async def run_sprint(
     forecasts_dir.mkdir(parents=True, exist_ok=True)
     auditor = ForecastAuditor(directory=forecasts_dir)
 
+    # WS3 H2 — per-run KernelCalibrator. Same per-run directory pattern
+    # as the auditor so two determinism runs cannot race on the JSON
+    # state file. Starts cold (empty dir → `_load` no-ops), so each
+    # sprint's gain trajectory is a function of inputs only — not of
+    # whatever the live production calibrator persisted last. The
+    # `projector_calibration` yaml block configures halflife / window /
+    # min_samples, matching the live TradingEngine setup.
+    calibration_dir = run_dir / "calibration"
+    calibration_dir.mkdir(parents=True, exist_ok=True)
+    pc_cfg = cfg.get("projector_calibration", {}) or {}
+    kernel_calibrator = KernelCalibrator(
+        initial_gain=float(cfg["projector"]["bps_per_unit_pressure"]),
+        directory=calibration_dir,
+        halflife_resolved=int(pc_cfg.get("halflife_resolved", 300)),
+        halflife_resolved_s=pc_cfg.get("halflife_resolved_s"),
+        min_samples=int(pc_cfg.get("min_samples", 50)),
+        window=int(pc_cfg.get("window", 2000)),
+        apply=bool(pc_cfg.get("apply", True)),
+    )
+
     with DecisionLogWriter(decisions_path) as writer:
         engine = SprintEngine(
             tribes=tribes, state=state, projector=projector,
@@ -420,6 +473,7 @@ async def run_sprint(
             log_writer=writer,
             max_ticks=max_ticks,
             auditor=auditor,
+            kernel_calibrator=kernel_calibrator,
         )
         events = build_event_stream(
             bars, funding,
