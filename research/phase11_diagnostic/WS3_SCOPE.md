@@ -590,10 +590,24 @@ intervention worked" from "the measurement was wrong."
 
 **Rules:**
 
+- **Audit-before-tune is standard procedure.** Every H opens with a
+  structural path audit (as H2 did under Decision D2) before any
+  intervention is proposed. H2's audit caught two bugs where we
+  expected one; the same pattern applies to H1 and H3. The H-audit
+  is a separate artifact (`WS3_H{i}_path_audit.md`) with verdict
+  `{bug-found, suspected, clean}` and a pause for review before
+  any mechanism change.
 - At most one intervention commit ships per hypothesis without a
   full determinism-gate re-run and a fresh sprint metric check against
   WS1 baseline. We do **not** stack H1 + H2 + H3 changes in a single
   sprint; attribution becomes impossible.
+- **Attribution discipline for interacting fixes within a single H.**
+  When an H requires multiple related commits (e.g. H2's calibrator
+  fix + `conviction_boost` relocation), separate them. Sequence:
+  commit A → replay day → snapshot → commit B → replay day → snapshot.
+  2000-sample rolling windows contaminate attribution if bundled.
+  500-tick sprints are acceptable for per-commit attribution; full
+  days reserved for final validation.
 - "hit@20s" is **aggregate across all regimes** on the 3-day tape
   panel, not An-0 alone, not `trend_up` alone (Decisions D3, D5).
 - If any single H lifts aggregate to ≥ 50 % without clearing 52 %,

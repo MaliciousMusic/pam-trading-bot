@@ -2,7 +2,8 @@
 
 **Branch:** `feat/tensor-engine`
 **Last updated:** 2026-04-22
-**Status:** WS3 scope agreed; next action is H2 Phase 0 path audit.
+**Status:** H2 Phase 0 audit landed (2 bugs found); implementing calibrator
+Option 1a next.
 
 ## 0. North star
 
@@ -182,15 +183,53 @@ PYTHONPATH=. python -m scripts.verify_determinism \
 WS3 reproduction commands are listed in `WS3_SCOPE.md` Appendix; those
 scripts do not yet exist.
 
-## 8. Immediate next action
+## 8. H2 audit outcome
 
-**H2 Phase 0 path audit.** Produces `WS3_H2_path_audit.md` with the
-trace-table findings and a verdict of {bug-found, suspected, clean}.
-Paused for review after the audit report lands, before any H2
-intervention ships. No mechanism changes in the audit commit —
-instrumentation + analysis only.
+Verdict: **suspected-bug, two candidates** (see
+`WS3_H2_path_audit.md`). Floor-change intervention (§4.4 Options
+A/B/C) is shelved pending fixes.
+
+1. **Calibrator fit target is a signed ratio, not a magnitude.**
+   `kernel_calibrator.py:130` takes median of signed `r/p`, which
+   conflates directional accuracy with magnitude bias. With WS1's
+   44.5 % directional hit, the raw median sits near zero and the
+   `max(0.25, …)` clamp floors it to 0.25 — the on-disk
+   `last_correction=0.25` is a clamp artifact, not a measurement.
+2. **`conviction_boost` is a unidirectional inflator.**
+   `chess.py:769-770` multiplies consensus `steps_bps` by a
+   `[1.0, 1.5]` boost on the prediction side; realized-side market
+   move is raw. Unidirectional inflation up to 1.5× that the
+   calibrator cannot disentangle.
+
+Reviewer resolutions (2026-04-22):
+
+- **R1 — Fit target = Option 1a** (drop wrong-direction samples);
+  log correct-direction ratio distribution + dropped-sample fraction.
+- **R2 — Move `conviction_boost` to `DecisionEngine` as a sizing
+  amplifier**; verify Path-Integrity Cap interaction intentionally.
+- **R3 — Separate commits with attribution discipline:** commit A →
+  replay → snapshot → commit B → replay → snapshot. No bundling.
+- **R4 — Defer H1 reordering** until post-H2 snapshot; note folded
+  into `WS3_H2_path_audit.md §7`.
+
+## 9. Standing rule — audit before tune
+
+Every remaining hypothesis (H1, H3) opens with a structural path
+audit before any intervention. Artifact: `WS3_H{i}_path_audit.md`.
+Verdict `{bug-found, suspected, clean}`. Pause for review before
+mechanism changes. H2 caught two bugs where we expected one — make
+this the default.
+
+## 10. Immediate next action
+
+**Implement calibrator Option 1a.** Edit
+`src/projector/kernel_calibrator.py` to drop wrong-direction samples
+from the fit, add the two diagnostic quantities to `snapshot()` /
+logging, commit as a feat. Run attribution sprint (500-tick or
+full-day, depending on cost). Pause for review before the
+`conviction_boost` relocation (Step 3 / R2).
 
 ---
 
-*PLAN last revised 2026-04-22 post-review. Next revision after the H2
-path audit report is filed.*
+*PLAN last revised 2026-04-22 post-audit. Next revision after the
+Option 1a attribution sprint lands.*
