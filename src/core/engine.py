@@ -87,14 +87,34 @@ class TradingEngine:
         # +tick_seconds into the future). Used by the UI to stamp a colored
         # dot on the price chart at every tick — gives an auditable trail of
         # what the council expected vs what happened.
-        # Horizons all fit within projector_steps × tick_seconds (≤ 10min at
-        # defaults). Anchors beyond that were previously silently dropped.
-        self._anchor_specs = [
+        # WS1 §8 — Filter anchors whose step_index would overshoot the
+        # projector's actual forward length (`projector.steps`). At
+        # `tick_seconds=1, projector_steps=250`, the old list included
+        # ("5m", 300) and ("10m", 600), both silently dropped at resolution
+        # time; now we drop them at construction with a visible warn so the
+        # UI and ForecastAuditor only ever see anchors the projector can
+        # actually produce.
+        proj_steps = int(getattr(projector, "steps", 0) or 0)
+        raw_anchor_specs = [
             ("15s",  1),
             ("1m",   max(1, 60  // max(tick_seconds, 1))),
             ("5m",   max(1, 300 // max(tick_seconds, 1))),
             ("10m",  max(1, 600 // max(tick_seconds, 1))),
         ]
+        self._anchor_specs: list[tuple[str, int]] = []
+        dropped: list[tuple[str, int]] = []
+        for label, step_idx in raw_anchor_specs:
+            if proj_steps > 0 and step_idx > proj_steps:
+                dropped.append((label, step_idx))
+                continue
+            self._anchor_specs.append((label, step_idx))
+        if dropped:
+            logger.warning(
+                "[anchors] dropping {} unreachable @ tick_seconds={}, "
+                "projector_steps={} (max reach {}s)",
+                dropped, tick_seconds, proj_steps,
+                proj_steps * max(tick_seconds, 1),
+            )
 
     async def run(self) -> None:
         tasks = [

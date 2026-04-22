@@ -22,6 +22,7 @@ from ..core import serde
 from loguru import logger
 
 from ..aggregator.voting import aggregate_votes
+from ..audit.backscore import ForecastAuditor
 from ..core.config import PROJECT_ROOT, settings
 from ..core.types import Event, Side
 from ..decision.engine import DecisionEngine
@@ -77,6 +78,7 @@ class SprintEngine:
         tick_seconds: int,
         log_writer: DecisionLogWriter,
         max_ticks: int | None = None,
+        auditor: ForecastAuditor | None = None,
     ) -> None:
         self.tribes = tribes
         self.state = state
@@ -94,6 +96,64 @@ class SprintEngine:
         # fast-lane determinism gate in scripts/verify_determinism.py so we
         # don't pay full-day wall-clock for a bit-exact check.
         self.max_ticks = max_ticks
+        # WS1 §8 — optional ForecastAuditor so sprint runs produce resolved
+        # anchor records on disk (data/forecasts/<day>.jsonl under the run
+        # dir). Does NOT feed the projector's sigma — keeps decisions.jsonl
+        # byte-identical whether the auditor is wired or not.
+        self.auditor = auditor
+        # Anchor specs mirror TradingEngine's: 1-based step index into the
+        # projector's per-step forecast. Filter unreachable anchors up front
+        # so the auditor only sees horizons the projector actually produces.
+        proj_steps = int(getattr(projector, "steps", 0) or 0)
+        ts_s = max(self.tick_seconds, 1)
+        raw_specs = [
+            ("15s",  1),
+            ("1m",   max(1, 60  // ts_s)),
+            ("5m",   max(1, 300 // ts_s)),
+            ("10m",  max(1, 600 // ts_s)),
+        ]
+        self._anchor_specs: list[tuple[str, int]] = [
+            (lbl, idx) for lbl, idx in raw_specs
+            if proj_steps == 0 or idx <= proj_steps
+        ]
+        _dropped = [s for s in raw_specs if s not in self._anchor_specs]
+        if _dropped:
+            logger.warning(
+                "[sprint] dropping unreachable anchors {} (tick={}s, "
+                "projector_steps={})",
+                _dropped, ts_s, proj_steps,
+            )
+
+    def _compute_predictions(self, forecast) -> list[dict]:
+        """Per-anchor price prediction from the current forecast. Mirrors
+        `TradingEngine._compute_predictions` verbatim so sprint anchors
+        score against the same formula the live chart uses."""
+        mark = self.state.last_price
+        if mark is None or mark <= 0 or not forecast.steps:
+            return []
+        if forecast.steps_bps:
+            cumulative = list(forecast.steps_bps)
+        else:
+            bps_per_unit = float(getattr(self.projector, "bps_per_unit_pressure", 0.0))
+            bps_per_unit *= float(getattr(self.projector, "regime_multiplier", 1.0))
+            cumulative = []
+            cum = 0.0
+            for s in forecast.steps:
+                cum += float(s.net_pressure) * bps_per_unit
+                cumulative.append(cum)
+        out: list[dict] = []
+        for label, step_idx in self._anchor_specs:
+            if step_idx < 1 or step_idx > len(cumulative):
+                continue
+            bps_at = cumulative[step_idx - 1]
+            out.append({
+                "label": label,
+                "horizon_steps": step_idx,
+                "horizon_seconds": step_idx * self.tick_seconds,
+                "predicted_price": mark * (1.0 + bps_at / 10_000.0),
+                "expected_move_bps": bps_at,
+            })
+        return out
 
     def run(self, events: Iterable[Event]) -> dict:
         last_tick_ts: datetime | None = None
@@ -144,6 +204,22 @@ class SprintEngine:
 
         agg = aggregate_votes(raw_votes, ts)
         forecast = self.projector.project(self.state)
+
+        # WS1 §8 — record this tick's anchors into the ForecastAuditor so
+        # sprint-based WS1 reruns have disk-level anchor data without
+        # needing the pre-Phase-2.5 historical forecasts file. Writes to
+        # <run_dir>/forecasts/<day>.jsonl per run, so two determinism runs
+        # write to distinct paths. Does NOT feed the projector's sigma —
+        # decisions.jsonl stays byte-identical with/without the auditor.
+        if self.auditor is not None:
+            predictions = self._compute_predictions(forecast)
+            if predictions:
+                self.auditor.record_tick(
+                    ts, self.state.last_price, predictions,
+                    forecast_conf=forecast.confidence,
+                    forecast_emove_bps=forecast.expected_move_bps,
+                    net_pressure=agg.net_pressure,
+                )
 
         if hasattr(self.executor, "apply_funding"):
             self.executor.apply_funding(
@@ -329,6 +405,12 @@ async def run_sprint(
     )
     logger.info("[sprint] loaded {} tribes (seed={})", len(tribes), seed)
 
+    # WS1 §8 — per-run ForecastAuditor. Writes under <run_dir>/forecasts/
+    # so parallel variants and two determinism runs never share a file.
+    forecasts_dir = run_dir / "forecasts"
+    forecasts_dir.mkdir(parents=True, exist_ok=True)
+    auditor = ForecastAuditor(directory=forecasts_dir)
+
     with DecisionLogWriter(decisions_path) as writer:
         engine = SprintEngine(
             tribes=tribes, state=state, projector=projector,
@@ -337,6 +419,7 @@ async def run_sprint(
             tick_seconds=int(cfg["clock"]["tick_seconds"]),
             log_writer=writer,
             max_ticks=max_ticks,
+            auditor=auditor,
         )
         events = build_event_stream(
             bars, funding,
