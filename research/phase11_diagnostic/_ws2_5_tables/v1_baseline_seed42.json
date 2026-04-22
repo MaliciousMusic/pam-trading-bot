@@ -1,0 +1,30 @@
+{
+  "variant_id": "v1_baseline",
+  "ticks": 86399,
+  "trades": 236,
+  "wins": 30,
+  "win_rate": 0.1271186440677966,
+  "mean_realized_bps": -10.037018709107349,
+  "median_realized_bps": -10.333367054317048,
+  "stdev_realized_bps": 9.781722207677504,
+  "sharpe_per_trade": -15.763237176828927,
+  "max_drawdown_pct": 4.700193217988155,
+  "start_equity_usd": 50000.0,
+  "end_equity_usd": 47649.90339100592,
+  "equity_delta_usd": -2350.0966089940775,
+  "equity_delta_pct": -4.700193217988155,
+  "regime_time_ticks": {
+    "chop": 51000,
+    "normal": 12126,
+    "trend_up": 12120,
+    "cascade_up": 558,
+    "cascade_down": 263,
+    "trend_down": 10332
+  },
+  "hold_reason_top": [
+    [
+      "council",
+      86163
+    ]
+  ]
+}
