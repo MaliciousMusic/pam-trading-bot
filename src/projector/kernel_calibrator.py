@@ -44,6 +44,12 @@ MIN_PRED_BPS = 0.5
 # to "cascade tape".
 MIN_GAIN = 1.0
 MAX_GAIN = 40.0
+# Correction clamp — trims huge one-sided refits (typically regime-switch
+# artifacts) so the EWMA can catch up without a giant step. Pulled to
+# module scope so the Q3 clamp-binding telemetry + the offline
+# attribution script can reference a single source of truth.
+CORRECTION_CLAMP_LO = 0.25
+CORRECTION_CLAMP_HI = 4.0
 
 
 class KernelCalibrator:
@@ -195,7 +201,24 @@ class KernelCalibrator:
         # regime switch — trim so the EWMA can catch up without a giant
         # step. Post-Option-1a this clamp should rarely bind; when it
         # does, the pre-clamp value is visible in `_last_correct_ratio_p50`.
-        correction = max(0.25, min(4.0, float(correction)))
+        raw_correction = float(correction)
+        correction = max(
+            CORRECTION_CLAMP_LO, min(CORRECTION_CLAMP_HI, raw_correction)
+        )
+        # WS3 Q3 telemetry — surface which bound bit, with the pre-clamp
+        # value, so operators can distinguish "expected regime-switch
+        # clamping" (infrequent, oscillates sides) from "new directional
+        # contamination artifact" (persistent lo-bind, like the pre-
+        # Option-1a signed-median pathology). We do NOT narrow the
+        # bounds yet — see `WS3_H2_option1a_snapshot.md §7 Q3`.
+        if correction != raw_correction:
+            side = "lo" if correction > raw_correction else "hi"
+            logger.warning(
+                "[kernel-cal] correction clamped {} (raw={:.3f} → {:.3f}; "
+                "bounds [{:.2f}, {:.2f}])",
+                side, raw_correction, correction,
+                CORRECTION_CLAMP_LO, CORRECTION_CLAMP_HI,
+            )
         self._last_correction = correction
 
         if self._time_based and now_ts is not None:

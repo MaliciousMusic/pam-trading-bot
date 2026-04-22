@@ -34,20 +34,20 @@ from statistics import median
 
 from src.core.config import PROJECT_ROOT
 from src.projector.kernel_calibrator import (
+    CORRECTION_CLAMP_HI,
+    CORRECTION_CLAMP_LO,
     MAX_GAIN,
     MIN_GAIN,
     MIN_PRED_BPS,
 )
 
 
-# Production defaults (src/projector/kernel_calibrator.py). Kept in
-# sync by convention; a single-source-of-truth move is a future cleanup.
+# Production defaults not yet exposed as module constants in
+# kernel_calibrator.py. Kept in sync by convention — promote if/when
+# they become configurable.
 WINDOW = 2000
 MIN_SAMPLES = 50
 HALFLIFE = 300  # count-based fallback; time-based path not exercised here
-
-CORRECTION_CLAMP_LO = 0.25
-CORRECTION_CLAMP_HI = 4.0
 
 
 def _signed_median_correction(pairs: list[tuple[float, float]]) -> float:
