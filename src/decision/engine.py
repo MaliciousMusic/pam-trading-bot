@@ -131,6 +131,17 @@ class DecisionEngine:
         htf_mult = self._htf_multiplier(ts, state, side)
         crowd_mult = self._crowded_trade_multiplier(forecast, side)
         horizon_mult = self._horizon_multiplier(forecast)
+        # WS3 R2 commit B — Harvest-Mass sizing multiplier. Commit A
+        # removed the projector-side inflation of steps_bps by
+        # conviction_boost; here we read the same signal as a SIZING
+        # accelerator. conv_mult ∈ [1.0, 1.5] (harvest_scale=0.5, cap
+        # by construction): when the council is fading loser-tribe
+        # mass (harvest_mass_ratio high), the trade is sized up by up
+        # to 1.5×. This is the first accelerator in the multiplier
+        # chain — all others are brakes ∈ [floor, 1.0].
+        conv_mult = float(getattr(forecast, "conviction_boost", 1.0) or 1.0)
+        if conv_mult <= 0:
+            conv_mult = 1.0
         # Task 4c — Path-Integrity. If the signal is being carried by tribes
         # the calibrator has pinned to the floor (driver_skill_avg < 0.7),
         # we accept the DIRECTION but refuse to AMPLIFY: cap every
@@ -138,6 +149,8 @@ class DecisionEngine:
         # signal doesn't get leveraged up on the back of unreliable
         # drivers. We still enter — refusing outright would waste the
         # calibrator's downstream scoring loop — but at base size only.
+        # conv_mult is included here because it is an actual accelerator
+        # (> 1.0 possible), unlike the brake-only multipliers above.
         path_integrity_ok = True
         dsa = getattr(forecast, "driver_skill_avg", None)
         if dsa is not None and float(dsa) < 0.7:
@@ -146,10 +159,11 @@ class DecisionEngine:
             crowd_mult = min(crowd_mult, 1.0)
             htf_mult = min(htf_mult, 1.0)
             horizon_mult = min(horizon_mult, 1.0)
-        # Notional = equity × pct × leverage × sigma × agree × htf × crowd × horizon.
+            conv_mult = min(conv_mult, 1.0)
+        # Notional = equity × pct × leverage × sigma × agree × htf × crowd × horizon × conv.
         size_usd = (equity_usd * pct / 100.0 * self.leverage
                     * sigma_mult * agree_mult * htf_mult
-                    * crowd_mult * horizon_mult)
+                    * crowd_mult * horizon_mult * conv_mult)
 
         # WS2.5 — Regime-entry gate. Applied after all multipliers so the
         # reason string still reflects the full sizing chain for audit. Exits
@@ -175,7 +189,7 @@ class DecisionEngine:
                   f"size={pct:.2f}%×{self.leverage:.0f}x({self.size_curve}) "
                   f"σ×{sigma_mult:.2f} agree×{agree_mult:.2f} htf×{htf_mult:.2f} "
                   f"crowd×{crowd_mult:.2f} hz×{horizon_mult:.2f} "
-                  f"drv={dsa_str}{integrity_tag} "
+                  f"conv×{conv_mult:.2f} drv={dsa_str}{integrity_tag} "
                   f"hz={horizon}s")
         return TradeIntent(
             ts=ts, action=action, size_usd=size_usd, price_ref=price,
