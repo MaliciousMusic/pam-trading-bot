@@ -282,6 +282,19 @@ mechanisms, ordered by cheap-to-check:
    15s/1m only; live produces all four. If H1/H3 need 5m/10m anchors
    and the synth book can't serve them, sprint can't regression-test
    those H-validations either.
+5. **Live-specific numerical pathologies.** The 2026-04-21 projector
+   divergence audit
+   ([`proj_divergence_20260421_audit.md`](proj_divergence_20260421_audit.md))
+   documents a live-tape numerical runaway — 69 contaminated anchors
+   reaching 8.86e+300 bps after a 2h 54m tape gap — that sprint
+   produced **zero** instances of (max |emb| 27 bps on 172,736 sprint
+   anchors). Sprint's dense cadence and ~400× weaker aggregate
+   pressure actively suppress the precondition (large post-gap
+   `base_strength` seed) that triggers `retail_dna`'s panic branch.
+   Reinforces §2's operating rule: sprint cannot regression-test
+   numerical pathology, only code-change attribution. Case-study
+   evidence for why live-tape measurement is non-negotiable for
+   H-validation.
 
 **Decision principle for the follow-up:** fix the synth generator
 *only if* a future phase needs sprint-based measurement for H-

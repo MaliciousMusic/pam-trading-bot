@@ -150,10 +150,22 @@ historical D1-D5 scope decisions are preserved as §5.4.
 
 | Chip | State | Note |
 |:-----|:------|:-----|
-| R2 — `conviction_boost` relocation to `DecisionEngine` | ⏸  Queued — pending ceiling + audit | Three landing conditions: (a) A→B attribution run, pause if >3 pp directional delta; (b) both sprint-tape and live-tape attribution reports; (c) blocked until MAX_GAIN ceiling decision confirmed AND 04-21 divergence audit resolved. Framed as **measurement hygiene, not directional fix**; sub-1 pp live-tape directional delta is the expected outcome — a surprise lift reopens the path audit. |
-| MAX_GAIN ceiling decision | ⏸  Pending confirm | Proposed **(ii) — leave ceiling at 40, move WS3 H-measurement to live tape** — see `MEASUREMENT_INFRA.md` §4.1. Rationale: production gain = 1.57 (25× headroom to 40), sprint saturation is a §1.2 pressure-weakness artifact not a calibration issue, lifting ceiling wouldn't diagnose since sprint would saturate 200 too. Awaiting reviewer sign-off. |
-| 2026-04-21 projector divergence audit | 🔍 Chip spawned 2026-04-23 | 73 `10^170`-`10^301` anchors + 19 null-predicted anchors surfaced in the Step 4 live-feedback panel for 04-21. Chip deliverable: `proj_divergence_20260421_audit.md` with arithmetic trace, root cause, sprint reproduction, proposed fix. Blocks 04-21 panel inclusion and R2. |
-| 2026-04-21 panel inclusion | ⏸  Blocked — awaiting audit | 04-18/19/20 run clean; 04-21 kept in panel for diagnostic visibility only until divergence audit returns a verdict. |
+| R2 — `conviction_boost` relocation to `DecisionEngine` | ▶ Ready — gates cleared | Both blockers resolved (MAX_GAIN confirmed `26cb61e`; audit delivered 2026-04-23). Landing sequence per [`WS3_R2_step_A_attribution.md`](WS3_R2_step_A_attribution.md) §4. Framed as **measurement hygiene, not directional fix**; algebraic expectation **0.00 pp** directional delta (boost is a positive scalar on signed pred — cannot flip sign); condition-(a) 3 pp pause trigger serves as a refactor-bug safety rail, not a mechanism-change gate. |
+| MAX_GAIN ceiling decision | ✅ Confirmed 2026-04-23 | Option (ii) — ceiling stays at 40, WS3 H-measurement reads live tape — accepted per [`MEASUREMENT_INFRA.md`](MEASUREMENT_INFRA.md) §4.1 (commit `26cb61e`). §4.1.1 revisit triggers in place (live gain sustained >20 for 72 h, sprint pressure root-caused, or structural projector change invalidating the 1.57 baseline). |
+| 2026-04-21 projector divergence audit | ✅ Delivered 2026-04-23 | Verdict in [`proj_divergence_20260421_audit.md`](proj_divergence_20260421_audit.md): **conjunction root cause** — (1) 2h 54m tape gap 08:44→11:39 UTC, (2) first post-gap `forecast_conf` 0.245 (~27× 04-20's equivalent), (3) `retail_dna` panic branch (`chase = 4·Δ` geometric + `overshoot = 0.0004·state²` quadratic), (4) `mean_reversion_rate = 0.005` too weak to damp the quadratic, (5) `ForecastAuditor` 3600 s sigma window perpetuates contamination. Sprint does **not** reproduce (max \|emb\| 27 bps vs live 8.86e+300). Fix ladder: **A → C → B** (audit §4 attribution discipline), defer D/E. No production code changed. |
+| 2026-04-21 panel inclusion | ⏸  Quarantined 08:44→14:00 UTC | Diagnostic-only until Fix A lands and 04-21 re-replays clean. Quarantine widened past the audit's 13:00 UTC recommendation to absorb one full `ForecastAuditor` sigma window (3600 s) past the last explicit contamination. Re-admit under `rebaseline_date` marker in [`WS3_H2_option1a_snapshot.md`](WS3_H2_option1a_snapshot.md) §5. |
+
+### 5.1.1 Post-R2 fix queue (from 2026-04-21 divergence audit)
+
+| Fix | Scope | State |
+|:----|:------|:------|
+| **A — per-step `step_bps` clamp + counter** | `chess.py:~580`; cap `step_bps` to ±400 bps (5× the largest legitimate single-step observed on 04-18/19/20). Loud counter + pre-clamp value log — clamp must not be silent. Protects against any DNA runaway, not just retail. | ⏸ Queued post-R2 |
+| **C — anchor-enqueue sanity check** | `engine.py::_compute_predictions`; skip anchor if \|emb\| > 2000 bps or non-finite; counter `forecaster.anchor_dropped`. Defense-in-depth behind Fix A. | ⏸ Queued post-Fix-A |
+| **B — retail quadratic → tanh saturator** | `behavioral_dna.py::retail_dna`; replace `0.0004 · state²` overshoot with `40 · tanh(state/400)` saturator; cap `chase` at `min(4·prev_delta, 200)`. Mechanism change — requires full WS3 H2 re-evaluation. | ⏸ Conditional — lands only if Fix A's counter fires on 04-18/19/20 clean days |
+| **D — projector state reset on gap** | Flag-gated ForecastAuditor window truncation + conviction-history warm-start reset + cold-start calibrator for one projection after gap > 300 s. | ⏸ Deferred — re-scope after A+B+C attribute cleanly |
+| **E — strengthen `mean_reversion_rate`** | YAML bump `0.005 → 0.015` or horizon-aware schedule. One-line change but interacts with WS3 H2 consensus fit (the 0.02 → 0.005 drop was motivated). | ⏸ Deferred — WS3 R2 candidate with own attribution sprint |
+
+Attribution discipline (per audit §4): Fix A → re-replay 04-21 → Fix C → re-replay → Fix B (if counter-promoted) → re-replay. One commit per mechanism, determinism gate between each. No bundling.
 
 ### 5.2 Queued — post-R2 (forward map)
 
@@ -266,24 +278,39 @@ this the default.
 
 ## 10. Immediate next action
 
-**Paused — awaiting reviewer confirmation on two items.** R2 does
-not land until both clear:
+**Unblocked — R2 ready to execute.** Both prior gates have cleared:
 
-1. **MAX_GAIN ceiling decision** — proposal (ii) in
-   `MEASUREMENT_INFRA.md` §4.1 (leave at 40, move WS3 to live tape).
-   Waiting on explicit confirm.
-2. **2026-04-21 projector divergence audit** — chip spawned
-   2026-04-23, deliverable `proj_divergence_20260421_audit.md`.
-   Waiting on verdict before admitting 04-21 to the acceptance panel.
+1. **MAX_GAIN ceiling** — ✅ Option (ii) confirmed per
+   [`MEASUREMENT_INFRA.md`](MEASUREMENT_INFRA.md) §4.1 / commit `26cb61e`.
+2. **2026-04-21 projector divergence audit** — ✅ delivered
+   ([`proj_divergence_20260421_audit.md`](proj_divergence_20260421_audit.md)).
+   04-21 quarantined 08:44→14:00 UTC; Fix A queued post-R2 to unblock
+   re-admission.
 
-Default forward step once both clear: implement R2 (`conviction_boost`
-relocation) per §5.1, attribution on sprint **and** live tapes,
-determinism gate between commits A and B, no bundling. After R2
-lands cleanly, default next chip is **Q1 — H1 scope doc**
-(`WS3_H1_SCOPE.md`); no H1 measurement starts without explicit
-go-ahead on the scope.
+**Forward sequence:**
 
-See §5 for the full forward map.
+1. **R2 commit A** — `conviction_boost` removed from `ChessProjector`
+   + four compensating de-boost sites simplified. Attribution per
+   [`WS3_R2_step_A_attribution.md`](WS3_R2_step_A_attribution.md) §4.
+   Algebraic expectation **0.00 pp** directional delta; the condition-(a)
+   3 pp pause trigger is a refactor-bug safety rail, not a
+   mechanism-change gate.
+2. **R2 commit B** — `conviction_boost` read in `DecisionEngine` as a
+   sizing multiplier, Path-Integrity clamp interaction verified.
+3. **Fix A** — per-step `step_bps` clamp + loud counter (audit §4.A).
+4. **Fix C** — anchor-enqueue sanity check (audit §4.C).
+5. **Fix A counter readout** on 04-18/19/20 clean days → decide whether
+   **Fix B** is promoted (mechanism change, requires WS3 H2
+   re-evaluation) or deferred.
+6. **Re-replay 04-21 post-Fix-A**; if clean, re-admit to panel under a
+   `rebaseline_date` marker in
+   [`WS3_H2_option1a_snapshot.md`](WS3_H2_option1a_snapshot.md) §5.
+7. **H1 scope doc (Q1)** — default next chip once R2 + Fix A/C land
+   clean and the 4-day panel is reconstituted.
+
+Attribution discipline throughout: one commit per mechanism change,
+determinism gate between each (`scripts.verify_determinism --day
+2026-04-20`), no bundling. See §5 for the full forward map.
 
 ---
 
