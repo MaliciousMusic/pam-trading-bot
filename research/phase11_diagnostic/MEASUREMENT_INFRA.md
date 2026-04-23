@@ -206,6 +206,35 @@ Reasoning, in order of weight:
    MAX_GAIN=40 gives a 25× headroom against the operating point —
    comfortable; no imminent re-clamp risk.
 
+### 4.1.1 Revisit triggers
+
+This decision is predicated on live gain ≈ 1.57 (25× headroom) and
+on the sprint saturation being a downstream artifact of §1.2 pressure
+weakness. Any of the following invalidates the predicate and requires
+§4.1 to be re-argued from scratch — do not re-apply this reasoning
+mechanically if the ground shifts. Re-open if:
+
+1. **Live gain drifts up.** Persisted `data/calibration/projector_gain.json`
+   sustained above **20.0** for **72+ continuous hours**, measured from
+   the `updated_at` trail. At gain 20 the 25× headroom collapses to 2×
+   and the "ceiling is not binding in production" premise is gone.
+2. **Sprint pressure weakness is root-caused and closed.** Any of the
+   §5 follow-up items (synth trade cadence, depth asymmetry, size
+   distribution, label cadence) lands a fix that restores sprint
+   `net_pressure` to within ~2× of live. At that point the sprint
+   saturation stops being a §1.2 artifact, and option (i)'s
+   "diagnose the unclamped equilibrium" motivation becomes real.
+3. **Structural projector change invalidates the 1,595-anchor baseline.**
+   Any commit that changes the kernel fit target, the ratio definition,
+   the anchor spec, or the label set underneath `KernelCalibrator` means
+   the 1.57 operating point is not comparable across the change. Re-
+   derive the headroom from the post-change production gain before
+   treating §4.1 as still valid.
+
+None of these conditions are expected during the R2 attribution cycle.
+If a future reviewer finds they hold, the decision reopens rather than
+auto-applying.
+
 ### 4.2 What (ii) explicitly defers
 
 - Answering "what is the sprint calibrator's true equilibrium?"
@@ -225,7 +254,11 @@ Reasoning, in order of weight:
 - The correction clamps `[0.25, 4.0]` stay. Telemetry shipped in
   `c81148f` logs when either clamp binds.
 
-**Awaiting reviewer confirmation before R2 begins.**
+**Confirmed by reviewer 2026-04-23.** Option (ii) accepted;
+revisit-trigger paragraph §4.1.1 added in the same review to future-
+proof the decision. R2 attribution proceeds on this footing; the
+MAX_GAIN ceiling stays at 40.0 and WS3 H-measurement reads the live-
+tape archive per §2.
 
 ## 5. Follow-up work (post-Phase-11 scope)
 
