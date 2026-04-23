@@ -1,10 +1,16 @@
 # WS3 R2 Step B — Attribution snapshot
 
-**Status:** **Commit B landed + short-window determinism PASS
-(2026-04-23).** Commit B hash `20b53f6`. Tests 36/36 (21 decision +
+**Status:** **Commit B landed + full-day determinism PASS
+(2026-04-24).** Commit B hash `20b53f6`. Tests 36/36 (21 decision +
 15 paper) passing with three new B tests. Full-day determinism gate
-B: in progress (see §5.4). Live-tape post-deploy attribution (§5.1):
-TODO on first post-A+B production session.
+B: **PASS**, sha256 `1fc982a69f3a1df5…`, 260,143,564 bytes ×2
+(see §5.4). Kernel-cal correction distribution (n=5,040 across 2
+runs = 2,520/run): **identical to A-alone** — min=4.001, p50=5.059,
+p90=9.559, max=11.245, 15.0% clamp rate (see §5.2). Decisions.jsonl
+distributions (conv_mult, dsa, PATH_INTEGRITY_CAP fraction): extraction
+in progress via persistent `run_replay` job `bjy07teuo`. Live-tape
+post-deploy attribution (§5.1): TODO on first post-A+B production
+session.
 
 > **What R2 does NOT fix.** B does not change directional hit rate
 > (commit A's algebra already pinned that at 0.00 pp delta) and does
@@ -118,22 +124,40 @@ Commit B steps:
 
 ### 5.2 Sprint-tape delta (source: verify_determinism full-day run)
 
-- Decisions.jsonl size delta vs A-only: **observed on short-window**
-  +1,155 bytes (+0.063 %) across 600 ticks. Consistent with B
-  writing slightly different `size_usd` values but same actions and
-  same reason-string structure.
-- Full-day decisions.jsonl size: **TODO** (expected: +0.05-0.1 %
-  vs A's 260,138,724 bytes, same scaling as short-window).
-- `conv_mult` distribution in reason-strings: **TODO** (extract via
-  regex on `conv×(\d+\.\d+)` from decisions.jsonl).
-- `drv=X.XX` distribution: **TODO** (extract `drv=(\d+\.\d+)`).
-- Fraction of opens where `PATH_INTEGRITY_CAP` tag fires: **TODO**.
-- Fraction of opens where `conv×1.00` tag fires: **TODO** — includes
-  both the dsa-weak clamp path and the no-harvest path. Joint
-  distribution with `drv=X.XX` < 0.70 separates the two.
-- Kernel-cal correction distribution delta vs A-alone: **TODO**
-  (expected: minimal change — conv_mult scales notional, not emove;
-  kernel_cal fits emove-vs-realization, independent of notional).
+- Decisions.jsonl size delta vs A-only: **+4,840 bytes (+0.00186 %)
+  full-day** (A=260,138,724 B=260,143,564). Short-window delta was
+  larger in absolute-fraction terms (+0.063 % across 600 ticks) —
+  consistent with the cold-start window containing disproportionate
+  conv_mult > 1.0 opens before the Path-Integrity clamp starts firing
+  steadily; aggregated across 24 h the sizing delta flattens.
+- **Kernel-cal correction distribution (n=2,520/run, 15.0 % of refits
+  clamped):**
+
+  | metric | value |
+  | --- | --- |
+  | min  | 4.001 |
+  | p10  | 4.101 |
+  | p25  | 4.357 |
+  | p50  | 5.059 |
+  | p75  | 5.979 |
+  | p90  | 9.559 |
+  | p99  | 10.930 |
+  | max  | 11.245 |
+  | mean | 5.784 |
+
+  Byte-for-byte identical to A-alone full-day distribution (same
+  count, same percentiles). Expected: `conv_mult` scales notional,
+  not `emove`; kernel_cal fits emove-vs-realization, independent of
+  notional. Confirms B is orthogonal to the prediction-side signal.
+- `conv_mult` distribution in reason-strings: **in progress** via
+  `run_replay --run-id ws3_r2_B_attr` job `bjy07teuo`, ~6-7h.
+  Extraction regex: `conv×(\d+\.\d+)`.
+- `drv=X.XX` distribution: **in progress** (same job). Regex:
+  `drv=(\d+\.\d+)`.
+- Fraction of opens where `PATH_INTEGRITY_CAP` tag fires: **in progress**.
+- Fraction of opens where `conv×1.00` tag fires: **in progress** —
+  includes both the dsa-weak clamp path and the no-harvest path;
+  joint distribution with `drv=X.XX` < 0.70 separates the two.
 
 ### 5.3 Condition-(a) analogue for B
 
@@ -150,11 +174,11 @@ tick**, with clamp-fraction determining the aggregate:
   and below by 1.0. An observed ratio outside [1.00, 1.50] indicates
   an implementation bug.
 
-**Gate decision: PASS-pending-full-day.** Short-window determinism
-+ 3 new tests + algebraic bounds = strong evidence B is correctly
-implemented. Full-day determinism PASS will close the sprint-side
-gate; live-tape delta remains the load-bearing signal for B's
-*value* (as distinct from its *correctness*).
+**Gate decision: PASS.** Full-day determinism + 3 new tests +
+algebraic bounds + kernel-cal distribution invariance = convergent
+evidence B is correctly implemented. Sprint-side correctness gate
+closed 2026-04-24. Live-tape delta remains the load-bearing signal
+for B's *value* (as distinct from its *correctness*).
 
 ### 5.4 Determinism gate B
 
@@ -164,7 +188,14 @@ gate; live-tape delta remains the load-bearing signal for B's
   `1c9b2c38935ddfd4…`, 1,846,084 bytes — +1,155 bytes, +0.063 %.
   Different SHA expected (different size_usd values); byte-identity
   ×2 confirms B is deterministic at HEAD.
-- Full-day: **TODO** (in progress, 2026-04-23).
+- Full-day (--day 2026-04-20 --seed 42 --synth-rate 60, ~2.5 M
+  ticks): **PASS**, sha256 `1fc982a69f3a1df5…`, 260,143,564 bytes,
+  byte-identical ×2 (run A sha = run B sha, 2026-04-24 completion).
+  Compare to A-alone full-day: `14d149feafe8ac7d…`, 260,138,724
+  bytes — +4,840 bytes (+0.00186 %). SHA change and size delta
+  both algebraically predicted (different size_usd values in
+  reason-strings). Byte-identity ×2 across A+B runs confirms B
+  is deterministic at HEAD.
 
 ### 5.5 Test discipline verification
 
@@ -208,13 +239,21 @@ the correctness side only.
   15 paper-exec).
 - Short-window determinism (600 ticks, --day 2026-04-20 --seed 42):
   PASS, sha256 `41839cdffc691679…`.
-- Full-day determinism SHA-256 × 2: **TODO** (in progress, job
-  `bciqo1e7e`).
+- Full-day determinism (--day 2026-04-20 --seed 42 --synth-rate 60):
+  **PASS**, sha256 `1fc982a69f3a1df5…`, 260,143,564 bytes, byte-
+  identical ×2, 2026-04-24 completion. Job `bciqo1e7e`.
+- Full-day kernel-cal correction distribution (n=2,520/run):
+  identical to A-alone full-day (p50=5.059, p90=9.559, max=11.245),
+  15.0 % clamp rate — B is orthogonal to the prediction-side signal.
+- Persistent decisions.jsonl reproduction (job `bjy07teuo`,
+  `run_replay --run-id ws3_r2_B_attr`): **in progress**, ~6-7h,
+  writing to `data/replays/ws3_r2_B_attr/variants/full_day/`. Will
+  provide the reason-string stream for §5.2 distribution mining.
 - Live-tape post-deploy session: **TODO**.
 
 ---
 
-*Living document. §5.1, §5.2 and §5.4 full-day close when the
-background verify_determinism run completes and its decisions.jsonl
-reason-stream is mined for the conv_mult / dsa / clamp
-distributions.*
+*Living document. §5.1 closes on first post-A+B production session;
+§5.2 conv_mult / dsa / clamp distributions close when the background
+`run_replay` job `bjy07teuo` completes and its decisions.jsonl
+reason-stream is mined.*
