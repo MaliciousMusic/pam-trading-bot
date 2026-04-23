@@ -1,9 +1,13 @@
 # Phase 11 Diagnostic — PLAN
 
 **Branch:** `feat/tensor-engine`
-**Last updated:** 2026-04-22
-**Status:** H2 Phase 0 audit landed (2 bugs found); implementing calibrator
-Option 1a next.
+**Last updated:** 2026-04-23
+**Status:** WS3 H2 Option 1a attribution + live-feedback cycle complete;
+measurement infrastructure documented (`MEASUREMENT_INFRA.md`). R2
+(`conviction_boost` relocation) is queued behind a `MAX_GAIN` ceiling
+decision and the spawned 2026-04-21 divergence audit. See §5 Master
+checklist for the forward map — the §1 workstream table below is an
+archival index as of 2026-04-22.
 
 ## 0. North star
 
@@ -135,10 +139,49 @@ decision-engine confidence question). After WS3 ships, revisit whether
 a separate WS2 remains, or whether the remaining scope is already
 absorbed into WS3 Option A/B/C.
 
-## 5. Reviewer decisions (2026-04-22)
+## 5. Master checklist — forward map
 
-Open questions from the scope draft were answered in the same review
-session. Recorded here for traceability; full rationale in
+Phase 11 is the current phase. §1's 7-workstream index is archival
+(as-of 2026-04-22). This section is the **forward map**: what's in
+flight, what's queued after R2 lands, and what's deferred. The
+historical D1-D5 scope decisions are preserved as §5.4.
+
+### 5.1 Active chips (in flight)
+
+| Chip | State | Note |
+|:-----|:------|:-----|
+| R2 — `conviction_boost` relocation to `DecisionEngine` | ⏸  Queued — pending ceiling + audit | Three landing conditions: (a) A→B attribution run, pause if >3 pp directional delta; (b) both sprint-tape and live-tape attribution reports; (c) blocked until MAX_GAIN ceiling decision confirmed AND 04-21 divergence audit resolved. Framed as **measurement hygiene, not directional fix**; sub-1 pp live-tape directional delta is the expected outcome — a surprise lift reopens the path audit. |
+| MAX_GAIN ceiling decision | ⏸  Pending confirm | Proposed **(ii) — leave ceiling at 40, move WS3 H-measurement to live tape** — see `MEASUREMENT_INFRA.md` §4.1. Rationale: production gain = 1.57 (25× headroom to 40), sprint saturation is a §1.2 pressure-weakness artifact not a calibration issue, lifting ceiling wouldn't diagnose since sprint would saturate 200 too. Awaiting reviewer sign-off. |
+| 2026-04-21 projector divergence audit | 🔍 Chip spawned 2026-04-23 | 73 `10^170`-`10^301` anchors + 19 null-predicted anchors surfaced in the Step 4 live-feedback panel for 04-21. Chip deliverable: `proj_divergence_20260421_audit.md` with arithmetic trace, root cause, sprint reproduction, proposed fix. Blocks 04-21 panel inclusion and R2. |
+| 2026-04-21 panel inclusion | ⏸  Blocked — awaiting audit | 04-18/19/20 run clean; 04-21 kept in panel for diagnostic visibility only until divergence audit returns a verdict. |
+
+### 5.2 Queued — post-R2 (forward map)
+
+Phase 11 reopens the research backlog once R2 lands cleanly. No new
+chips until R2 closes. Order is not fixed; H1 opens first by default
+(D1 causal ordering).
+
+| # | Workstream | Scope sketch | Gate |
+|:--|:-----------|:-------------|:-----|
+| Q1 | **H1 — confidence-formula compounding** | Measure whether `signal_quality × directional × diversity_mult` structurally caps confidence < 0.25 regardless of the underlying signal. Scope doc first (`WS3_H1_SCOPE.md`), options A/B/C per §3. | Scope-first; requires explicit go-ahead after scope review. |
+| Q2 | **H3 — tribe correlation / N_eff** | Measure effective rank of 24-tribe vote matrix; diversity_mult inflation quantified. | Opens after H1 converges or nulls. |
+| Q3 | **WS2 — executor parity audit** | Shadow-vs-main executor fill/slippage/queue behaviour diff. Deferred since WS1; revisit scope vs. what WS3 absorbed. | Post-H1/H3. |
+| Q4 | **WS4 — regime classifier hysteresis** | WS2.5 exposed regime sensitivity; classifier stability across 5-60 s horizons is a raised-priority follow-up. | Post-H1/H3. |
+| Q5 | **WS5 — harvest boost ablation** | Remove the harvest-tribe amplification path; measure delta. | Post-H1/H3. |
+| Q6 | **WS3b — original WS3 warmup / persistence** | Weakness #4 from the original WS3 scope (persistence-weighted anchor horizons, warmup behaviour) reinstated as its own chip. | Post-H1/H3. |
+| Q7 | **WS7 — L2 microstructure data feed** | H4 escalation: only if H1 A/B/C + H3 each null against the 52 % bar. Paid-data conversation per `project_budget_constraint.md`. | Conditional — H1/H3 nulls. |
+| Q8 | **Phase 11 Retrospective** | Consolidate findings → phase close doc; recommend next phase. | Terminal. |
+
+### 5.3 Deferred chips
+
+None currently. Scope-discipline rule: "worth looking at later"
+observations land here as one-liners with a rationale; they do not
+interrupt the active sequence.
+
+### 5.4 Scope decisions (2026-04-22, historical)
+
+Open questions from the WS3 scope draft, answered in review on
+2026-04-22. Preserved for traceability; full rationale in
 `WS3_SCOPE.md` §0.
 
 | # | Decision |
@@ -148,6 +191,7 @@ session. Recorded here for traceability; full rationale in
 | D3 | **Acceptance = aggregate directional hit ≥ 52 % @ 20 s** across 3-day tape panel. Not PnL. Do not raise the bar beyond 52 % (N=236 doesn't support tighter claims). |
 | D4 | **H4 escalation is condition-based:** H2 validated AND H1 A/B/C each fail AND H3 fails. Any single H lifting to 50-52 % pauses on that H for option-swap iteration. |
 | D5 | **Multi-day harness from day one.** Every H-measurement runs across (04-18, -19, -20, -21). WS2.5 v1-vs-v2 re-runs ride the same panel as a standalone section of whichever H ships first. |
+| D6 (2026-04-23) | **WS3 H-measurement reads live-tape archive, not sprint.** Sprint microstructure produces ~400× weaker net_pressure than live BTCUSDT; acceptance numbers must come from `data/forecasts/<day>.jsonl`. Sprint reserved for determinism / regression / code-change attribution. See `MEASUREMENT_INFRA.md` §2. |
 
 ## 6. What's deliberately not happening
 
@@ -222,14 +266,26 @@ this the default.
 
 ## 10. Immediate next action
 
-**Implement calibrator Option 1a.** Edit
-`src/projector/kernel_calibrator.py` to drop wrong-direction samples
-from the fit, add the two diagnostic quantities to `snapshot()` /
-logging, commit as a feat. Run attribution sprint (500-tick or
-full-day, depending on cost). Pause for review before the
-`conviction_boost` relocation (Step 3 / R2).
+**Paused — awaiting reviewer confirmation on two items.** R2 does
+not land until both clear:
+
+1. **MAX_GAIN ceiling decision** — proposal (ii) in
+   `MEASUREMENT_INFRA.md` §4.1 (leave at 40, move WS3 to live tape).
+   Waiting on explicit confirm.
+2. **2026-04-21 projector divergence audit** — chip spawned
+   2026-04-23, deliverable `proj_divergence_20260421_audit.md`.
+   Waiting on verdict before admitting 04-21 to the acceptance panel.
+
+Default forward step once both clear: implement R2 (`conviction_boost`
+relocation) per §5.1, attribution on sprint **and** live tapes,
+determinism gate between commits A and B, no bundling. After R2
+lands cleanly, default next chip is **Q1 — H1 scope doc**
+(`WS3_H1_SCOPE.md`); no H1 measurement starts without explicit
+go-ahead on the scope.
+
+See §5 for the full forward map.
 
 ---
 
-*PLAN last revised 2026-04-22 post-audit. Next revision after the
-Option 1a attribution sprint lands.*
+*PLAN last revised 2026-04-23 post-MEASUREMENT_INFRA. Next revision
+after R2 lands (sprint + live attribution).*
