@@ -192,25 +192,16 @@ class DecisionEngine:
         """Seconds from entry at which the projected curve peaks in the
         trade's favor. For a long, the argmax of steps_bps; for a short, the
         argmin. Returns 0 when the curve is missing or the peak is at step 0
-        (nothing to scalp to).
-
-        Task 3 — divide the curve by the harvest conviction_boost before
-        the argmax so the peak timing reflects the alpha window of the
-        un-boosted council forecast. Uniform scaling doesn't shift argmax
-        today, but the explicit de-boost protects against any future
-        horizon-dependent boost shape and keeps holding-time grounded in
-        the raw consensus path."""
+        (nothing to scalp to). The curve is the raw consensus path —
+        `conviction_boost` is no longer multiplied into the projector
+        output, so no de-boost is needed here."""
         curve = getattr(forecast, "steps_bps", None)
         if not curve:
             return 0
-        boost = float(getattr(forecast, "conviction_boost", 1.0) or 1.0)
-        if boost <= 0:
-            boost = 1.0
-        raw_curve = [b / boost for b in curve] if boost != 1.0 else curve
         if side is Side.BUY:
-            idx = max(range(len(raw_curve)), key=lambda i: raw_curve[i])
+            idx = max(range(len(curve)), key=lambda i: curve[i])
         else:
-            idx = min(range(len(raw_curve)), key=lambda i: raw_curve[i])
+            idx = min(range(len(curve)), key=lambda i: curve[i])
         if idx <= 0:
             return 0
         # steps are 1-indexed in time: step i is (i+1)*tick_seconds from entry.

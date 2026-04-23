@@ -761,13 +761,12 @@ class ChessProjector:
                 den += wv
             steps_bps.append(num / den if den > 0 else 0.0)
 
-        # Apply the Harvest Mass Boost to the cumulative path. Multiplying
-        # the cumulative series is equivalent to multiplying each forward
-        # step (expected_move_bps is a kernel-weighted sum of step deltas),
-        # so the boost propagates cleanly into step_bps_list and
-        # expected_move_bps below without changing the *shape* of the path.
-        if conviction_boost != 1.0:
-            steps_bps = [b * conviction_boost for b in steps_bps]
+        # `conviction_boost` is computed above and stamped on the Forecast
+        # below so DecisionEngine can read it as a sizing multiplier (with
+        # Path-Integrity clamp). It is no longer multiplied into the
+        # projected path: that double-counted the harvest signal once on the
+        # prediction side and again on the sizing side, and forced four
+        # downstream sites to divide it back out before consuming the curve.
 
         # Record this tick's frame for future ledger-based weight updates.
         self._ledger.append({

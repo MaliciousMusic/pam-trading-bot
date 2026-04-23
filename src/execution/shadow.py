@@ -499,20 +499,18 @@ class TribeShadowLedger:
                         True, False,
                     )
 
-        # Layer 2b — forecast-target TP. Mirror of PaperExecutor Task 1:
-        # divide out the harvest conviction_boost stamped at entry so the
-        # target reflects the raw council forecast, not the predatory
-        # 1.5× inflation. The sanity rail at _open_position (Task 2) has
+        # Layer 2b — forecast-target TP. Mirror of PaperExecutor: the
+        # projector no longer multiplies `expected_move_bps` by
+        # `conviction_boost`, so the stamped value is already the raw
+        # consensus target. The sanity rail at _open_position (Task 2) has
         # already bounded p.expected_move_bps against realized vol.
         if self.forecast_tp_factor > 0.0 and p.expected_move_bps != 0.0:
-            boost = p.conviction_boost if p.conviction_boost > 0 else 1.0
-            raw_move = p.expected_move_bps / boost
-            target = abs(raw_move) * p.confidence * self.forecast_tp_factor
+            target = abs(p.expected_move_bps) * p.confidence * self.forecast_tp_factor
             target = max(target, self.forecast_tp_min_bps)
             if target >= rt_fees_bps and unreal_bps >= target:
                 return (
                     f"forecast TP unreal={unreal_bps:+.1f}bps target={target:.1f}bps "
-                    f"raw={raw_move:+.1f} (boost×{boost:.2f})",
+                    f"emove={p.expected_move_bps:+.1f}",
                     True, False,
                 )
 

@@ -271,12 +271,13 @@ def test_htf_stale_score_treated_as_no_signal():
     assert i.size_usd == pytest.approx(i0.size_usd, rel=1e-6)
 
 
-# -------------- Peak-favorable: conviction-boost de-boost (C2 linkage) ----
+# -------------- Peak-favorable: argmax of raw consensus curve -------------
 
-def test_peak_favorable_uses_deboosted_curve():
-    """The stamped peak-favorable step should be argmax of the RAW curve,
-    not the boosted one. Uniform scaling doesn't shift argmax today but the
-    contract matters for future horizon-dependent boost shapes."""
+def test_peak_favorable_argmax_of_raw_curve():
+    """The stamped peak-favorable step is the argmax of `steps_bps` (long)
+    or argmin (short). The curve is the raw consensus path — the projector
+    no longer multiplies it by conviction_boost, so the stamped boost value
+    is irrelevant to peak timing."""
     from src.core.types import Forecast
     ts = datetime(2026, 4, 20, 12, 0, 0, tzinfo=timezone.utc)
     step = Aggregate(ts=ts, net_pressure=0.1, buy_mass=1.0, sell_mass=0.0,

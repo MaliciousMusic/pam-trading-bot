@@ -476,24 +476,16 @@ class PaperExecutor(Executor):
         # realized forecast into a clean profit-take instead of letting the
         # ratchet give half of it back on the way down.
         #
-        # Task 1 (de-couple conviction from distance): divide the stamped
-        # expected_move_bps by the harvest conviction_boost recorded at
-        # entry. The boost inflates the projected path by up to 1.5× when
-        # loser-tribe mass is being harvested; using the boosted value as
-        # a TP target pushes the take-profit 50% farther than the council's
-        # unbiased prediction, which shows up as round-trip trades and
-        # inflated time-in-trade. The raw (de-boosted) move is the target
-        # basis; the sanity rail stamped at entry (Task 2) separately
+        # `expected_move_bps` is the raw consensus path: the projector no
+        # longer multiplies it by `conviction_boost`, so no de-boost is
+        # needed here. The sanity rail stamped at entry (Task 2) separately
         # bounds this against realized vol.
         if self.forecast_tp_factor > 0.0 and p.expected_move_bps != 0.0:
-            boost = p.conviction_boost if p.conviction_boost > 0 else 1.0
-            raw_move = p.expected_move_bps / boost
-            target = abs(raw_move) * p.confidence * self.forecast_tp_factor
+            target = abs(p.expected_move_bps) * p.confidence * self.forecast_tp_factor
             target = max(target, self.forecast_tp_min_bps)
             if target >= rt_fees_bps and unreal_bps >= target:
                 return (f"forecast target hit unreal={unreal_bps:+.1f}bps "
-                        f"target={target:.1f}bps raw={raw_move:+.1f} "
-                        f"(boost×{boost:.2f})")
+                        f"target={target:.1f}bps emove={p.expected_move_bps:+.1f}")
 
         # Layer 2c — shape-aware exit. The decision engine stamped each
         # position with the step at which the forecast peaked in its favor;
