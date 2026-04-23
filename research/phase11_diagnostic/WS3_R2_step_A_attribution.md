@@ -178,18 +178,41 @@ before execution.
   shrinks by the mean boost factor, ~15-25 %, across all signs
   symmetrically).
 - Option 1a calibrator state on live tape:
-  - `last_gain`: **TODO** (expected: ~`1.57 × median_boost` after
-    fit window, since the calibrator was previously fitting on
-    post-boost predictions and now fits on raw).
-  - `last_correction`: **TODO** (expected: shifts, should no longer
-    sit near clamp boundaries).
+  - `last_gain`: **TODO** (expected steady state: `pre-A_gain ×
+    median_boost` ≈ `1.57 × ~1.2` ≈ `1.9`, since the calibrator was
+    previously fitting on post-boost predictions and now fits on raw.
+    Note: this is the *equilibrium* requirement — see §5.2 on the
+    cold-start transient that overshoots it).
+  - `last_correction`: **TODO** (expected: post-convergence, should
+    no longer sit near clamp boundaries; cold-start may still clamp
+    hi until history buffer fills).
   - `last_dropped_fraction` / `last_correct_ratio_p50`: **TODO**.
+  - **Full-day correction distribution** (not just a snapshot):
+    histogram of per-tick `raw_correction` values, fraction of ticks
+    at hi-clamp, fraction at lo-clamp, time-to-equilibrium if it
+    converges. Snapshot the state at end-of-day in addition.
 
 ### 5.2 Sprint-tape delta (source: Step 4 live-feedback driver)
 
 - Per-day calibrator saturation behavior: **TODO** (expected: still
   saturates `MAX_GAIN=40.0` per MEASUREMENT_INFRA.md §4.1 — sprint
   pressure weakness dominates, not the boost removal).
+- **Cold-start transient under A** (observed, short-window 600 ticks
+  on 2026-04-20): `raw_correction` stream clamped hi at 4.00 with
+  requested values 9.5-10.0. Post-A, the calibrator starts cold
+  (gain=1.0) and sees realization-vs-raw-emove, so the first-pass
+  fit asks for ~10× more gain; the [0.25, 4.00] per-tick clamp caps
+  the step size, so gain walks up at factor-of-4-per-fit toward its
+  equilibrium. Interpretation: the 9.5-10 is the cold-start overshoot
+  of a calibrator-of-a-calibrator (MAX_GAIN on one axis, per-tick
+  correction clamp on the other), not the steady-state requirement,
+  which is ~1.5-2× per §5.1.
+- **Full-day correction distribution**: **TODO**. The relevant
+  question is whether the calibrator settles (correction histogram
+  peaks near 1.0, gain stabilizes below MAX_GAIN) or pins (correction
+  stays at hi-clamp, gain pins MAX_GAIN=40). Both outcomes are
+  acceptable for commit A's algebraic-invariance verdict, but have
+  different implications for commit B — see §5.6.
 - Sprint-vs-live magnitude channel delta: **TODO**.
 
 ### 5.3 Condition-(a) gate check
@@ -203,25 +226,63 @@ before execution.
 
 - `scripts.verify_determinism --day 2026-04-20 --seed 42`
   full-day: **TODO** (SHA-256 byte-identical across two runs).
+- Short-window (600 ticks, same day/seed): **PASS**, sha256
+  `1c9b2c38935ddfd4…` byte-identical (2026-04-23 run).
 
 ### 5.5 Test discipline verification
 
 - Test numerical expected values unchanged through the refactor:
-  **TODO** (commit A constraint per refinement 2, 2026-04-23 review).
-  Any expected-value move flagged here as a "suspicious behavioral
-  change" header blocking commit A.
+  **PASS** (commit A constraint per refinement 2, 2026-04-23 review).
+  Two retargeted tests — peak-favorable argmax-of-raw-curve
+  (peak_favorable_s == 240) and forecast-TP invariant-under-boost-
+  stamp (target == 24 bps, exit fires at +28 bps unreal) — keep their
+  expected assertions unchanged. 33/33 pass on
+  `tests/test_decision_engine.py` + `tests/test_paper_executor.py`.
+
+### 5.6 Measurement-architecture implication for commit B
+
+Commit B (conviction_boost read as DecisionEngine sizing multiplier
+with Path-Integrity clamp) needs a clean signal on whether the boost,
+used as a sizing lever, improves expected-outcome-per-trade. That
+signal lives in two channels:
+
+- **Sprint-side**: per-trade PnL on replayed panel days as a function
+  of `conviction_boost × path_integrity_clamp`. Load-bearing only if
+  the sprint calibrator is NOT ceiling-pinned: a pinned gain
+  saturates magnitudes and compresses per-trade PnL variance, so the
+  boost-sizing signal gets drowned in noise regardless of whether
+  boost-as-sizing is a real primitive.
+- **Live-tape**: per-trade PnL in production where the calibrator has
+  settled at its post-A equilibrium. Load-bearing regardless of
+  sprint behavior, but slower to accumulate (needs multiple sessions
+  post-B deployment).
+
+**Conditional framing**: if §5.2's full-day correction distribution
+shows the sprint calibrator pinned at MAX_GAIN post-A, treat the
+sprint-side B measurement as structurally noisy and rely on live-tape
+for B's acceptance verdict. Do not interpret a null sprint-side B
+result as "boost-as-sizing doesn't work" in that regime — it may just
+mean sprint lacks the magnitude headroom to show a differential. This
+is consistent with MEASUREMENT_INFRA.md §5 item 5 (live-specific
+numerical pathologies) and the D6 sprint-vs-live operating rule.
 
 ## 6. Provenance
 
 - R2 plan reviewed + refined: 2026-04-23 session.
 - Pre-commit draft written: 2026-04-23.
+- Commit A landed: 2026-04-23, hash `fd400e8`, 6 files, +39/−56.
+- pytest on touched modules: 33/33 passed (`tests/test_decision_engine.py`
+  + `tests/test_paper_executor.py`).
+- Short-window determinism gate (600 ticks, --day 2026-04-20 --seed 42):
+  PASS, sha256 `1c9b2c38935ddfd4…` byte-identical across both runs
+  (1,846,084 bytes each).
 - Refinement sources: §1-3 frozen per 2026-04-23 review; §5 template
   per R2 landing-sequence plan.
 - Archive scan inputs: `data/forecasts/{2026-04-18,2026-04-19,
   2026-04-20}.jsonl`.
-- Commit A hash: **TODO**.
+- Full-day determinism SHA-256 × 2: **TODO** (in progress, ~6-7h
+  wall-clock per baseline).
 - Commit A replay run ID: **TODO**.
-- Determinism SHA-256 × 2: **TODO**.
 
 ---
 
