@@ -26,6 +26,12 @@ archive/*/audit/
 # Raw cProfile dumps — per-machine, regenerable via profile_sprint.py.
 data/perf/
 
+# WS3 H2 Step 4 sprint-produced resolved-anchor tape. Each day's file is
+# ~75 MB; regenerable via scripts/ws3_h2_step4_live_attribution.py against
+# the committed BTCUSDT_<day> fixtures. The per-day projector_gain.json
+# summary files are tiny and DO get committed for provenance.
+research/phase11_diagnostic/_ws3_h2_step4_forecasts/*.jsonl
+
 
 # IDE
 .idea/
