@@ -40,6 +40,18 @@ commit is a false-positive because `SprintEngine` does not wire the
 calibrator (`harness.py:66`). Live-feedback attribution and a wired
 determinism check are prerequisites before R2 lands — see §7 ordering.
 
+**Addendum #2 (2026-04-23) — Step 4 complete.** Calibrator now wired
+into the sprint harness (feat `686164b`); full-day determinism on
+2026-04-20 PASSes under live feedback (sha256=14d149feafe8ac7d…,
+260 MB per run). Live-feedback attribution landed in `docs(research)`
+commit `2a1bf26`; raw snapshot at
+`research/phase11_diagnostic/_ws3_h2_snapshots/option1a_live-feedback_20260423T055545Z.md`.
+Key delta: correct-direction p50 is *larger* under live feedback than
+offline (1.69 / 3.90 / 3.27 / 4.28 vs 0.69 / 2.04 / 2.47 / 1.47),
+and gain pins to the `MAX_GAIN=40.0` ceiling on every panel day.
+New §8 covers the delta and the sprint-microstructure-vs-live
+caveat. R2 sequencing refined in §7.
+
 ## 1. Per-day end-state (3-day panel + all-continuous)
 
 Offline replay over `data/forecasts/<day>.jsonl`. Parameters match
@@ -220,29 +232,26 @@ Sequencing proposal in §7.
 
 **Accepted order of operations.**
 
-1. **[this commit]** `docs(research): WS3 H2 Option 1a snapshot — plan
-   update + sequencing` — §6 Plan Update + §7 Sequencing amendment.
-2. **[reviewer — local]** Start the spawned "Investigate 2026-04-21
-   projector divergence" chip. Output goes to
+1. ✅ `docs(research): WS3 H2 Option 1a snapshot — plan update +
+   sequencing` (`de9d1e6`) — §6 Plan Update + §7 Sequencing.
+2. **[reviewer — local]** Spawned chip "Investigate 2026-04-21
+   projector divergence." Output goes to
    `research/phase11_diagnostic/proj_divergence_20260421_audit.md`.
-3. **[next commit]** `chore(projector): log when calibrator correction
-   hits a clamp` — small telemetry-only change in
-   `src/projector/kernel_calibrator.py`, no behaviour modification.
-   Logs both the `correction` clamp `[0.25, 4.0]` and the gain clamp
-   `[MIN_GAIN, MAX_GAIN]`. Carries Q3 forward.
-4. **[next commit]** `feat(replay): wire kernel calibrator in sprint
-   harness + determinism verification` — SprintEngine instantiates
-   the calibrator, pushes resolved anchors on each tick, reads
-   `current_gain()` before projecting the next one. Determinism gate
-   must PASS post-wiring under the same day+seed inputs. If it does
-   not, that's a blocker and gets worked before step 5.
-5. Re-run `scripts/ws3_h2_option1a_snapshot.py` against the
-   live-feedback sprint output on all 4 days (acceptance panel
-   reported as 3-day, 04-21 reported separately per Q2). Commit the
-   new snapshot as `docs(research): WS3 H2 live-feedback attribution
-   delta`. Report offline-vs-live delta.
-6. **Pause.** Report live-vs-offline delta and confirm revised R2
-   sequencing before starting the `conviction_boost` relocation.
+3. ✅ `chore(projector): log when calibrator correction hits a clamp`
+   (`c81148f`) — telemetry-only, no behaviour change.
+4. ✅ `feat(replay): wire kernel calibrator in sprint harness +
+   determinism verification` (`686164b`) — SprintEngine accepts
+   a `KernelCalibrator`, refreshes projector gain on each resolved
+   tick. Full-day determinism PASS on 2026-04-20, sha256=
+   14d149feafe8ac7d… (260,138,724 bytes per run; two runs
+   byte-identical).
+5. ✅ Re-ran attribution under live feedback via
+   `scripts/ws3_h2_step4_live_attribution.py`; snapshot +
+   per-day gain JSONs + fixtures landed in `docs(research)`
+   commit `2a1bf26`. Delta table and caveat in §8.
+6. **← current pause.** Report live-vs-offline delta and confirm
+   revised R2 sequencing before starting the `conviction_boost`
+   relocation.
 
 **R2 sequencing — revised proposal.** After step 5 lands, R2 still
 goes next in WS3 before H1/H3 measurement begins, but on
@@ -268,11 +277,138 @@ lift. Rationale:
   same sprint. This would compress WS3 timeline but adds one extra
   review loop.
 - **Decision deferred to the reviewer**, to be confirmed at the
-  step-5 pause after live-feedback attribution data is in hand.
+  step-5 pause after live-feedback attribution data is in hand —
+  see §8.
+
+## 8. Live-feedback attribution (Step 4 completion)
+
+SprintEngine now constructs a `KernelCalibrator` per run (at
+`<run_dir>/calibration/projector_gain.json`, mirroring the auditor's
+per-run forecasts dir) and feeds it every resolved anchor. The
+projector's `bps_per_unit_pressure` is refreshed before each
+subsequent tick. Full-day determinism on 2026-04-20 PASSes byte-
+identically under this loop (sha256=14d149feafe8ac7d…, 260 MB per
+run × 2). The wiring unblocks a proper offline-vs-live comparison
+of Option 1a's fit target.
+
+### 8.1 Per-day delta (offline → live-feedback)
+
+Offline column re-stated from §1 (raw file `option1a_20260422T160057Z.md`).
+Live column from `option1a_live-feedback_20260423T055545Z.md`, produced
+by sprint runs against committed `BTCUSDT_<day>` fixtures.
+
+| day | corr p50 offline | corr p50 live | Δ p50 | gain(opt1a) offline → live |
+|:--|--:|--:|--:|:--|
+| 2026-04-18 | 0.692 | **1.687** | +0.99 | 15.24 → 40.00 (ceiling) |
+| 2026-04-19 | 2.036 | **3.898** | +1.86 | 37.03 → 40.00 (ceiling) |
+| 2026-04-20 | 2.470 | **3.268** | +0.80 | 40.00 → 40.00 (pinned) |
+| 2026-04-21 | 1.466 | **4.275** | +2.81 | 37.07 → 40.00 (ceiling) |
+| **panel (3d accept)** | 1.7 med | **3.0 med** | +1.3 | ceiling every day |
+
+Direction of move: corrections all grew under live feedback. Gain
+pinned at `MAX_GAIN=40.0` on all 4 days, with end-of-day raw
+corrections still clamped hi at 4.0× (per-day `projector_gain.json`
+dump). In plain reading: **the live loop pushed gain to the ceiling
+and the calibrator is still asking for 4× more.**
+
+### 8.2 Sprint tape vs live tape — the dominant caveat
+
+The offline snapshot read from `data/forecasts/<day>.jsonl`, written
+by the **live TradingEngine** with its persisted gain (1.57 on
+2026-04-21). The live-feedback snapshot read from **sprint-produced
+anchors**, where the calibrator walked gain from 8.0 up to the 40.0
+ceiling in the first ~2,000 resolved ticks and stayed there. Raw-data
+deltas reveal the tapes are not the same population:
+
+| metric | offline (live tape) | live-feedback (sprint tape) | ratio |
+|:--|--:|--:|--:|
+| `|expected_move_bps|` median | 0.143 | **0.009** | 16× smaller |
+| `|expected_move_bps|` p90 | 3.540 | **0.335** | 10.6× smaller |
+| `|realized_move_bps|` median | 1.704 | **0.392** | 4.4× smaller |
+| `|realized_move_bps|` p90 | 8.446 | **6.478** | 1.3× smaller |
+| anchors total | 61,290 | 686,263 | 11× more |
+| anchors kept (≥ MIN_PRED_BPS) | 20,367 (33 %) | 34,888 (5 %) | |
+| label mix | 15s / 1m / 5m / 10m | 15s / 1m only | sprint projector horizon limit |
+
+The sprint's synthetic order book + synth trade stream produces
+pressure signals materially weaker than the Binance BTCUSDT tape —
+net_pressure back-solved from emove/gain is ~400× smaller per tick
+in sprint at gain=40 than live at gain=1.57. The calibrator's
+response is textbook: push gain as high as possible to close the
+prediction-vs-realized magnitude gap; when the ceiling binds, the
+residual surfaces as persistent 4× raw corrections.
+
+### 8.3 Three clean readings that fall out of 8.1 + 8.2
+
+1. **Direction of bias is the same on both tapes and both reviews.**
+   Corrections > 1.0 on 3 of 4 days offline, all 4 days live.
+   §6 Plan Update's "predictions are systematically too small"
+   finding is confirmed on the bigger, live-feedback-converged
+   dataset.
+2. **The 40.0 `MAX_GAIN` ceiling is not an acceptance gate on sprint
+   tapes.** Every panel day saturates it. Whether it binds on live
+   production depends on whether the production pressure signal is
+   closer to live-tape magnitudes (0.091 median) or sprint-tape
+   magnitudes (0.0002). The persisted production gain of 1.57 implies
+   live data is closer to the offline-tape dynamics, consistent with
+   the 1.57 ≫ MIN_GAIN gap. A sprint-only H-measurement would
+   miscalibrate the ceiling question; H2 acceptance must be measured
+   on either live-tape replays (the existing offline path) or on a
+   higher-fidelity sprint synth-book.
+3. **Absolute magnitude of the deflation is tape-dependent but the
+   sign isn't.** Live-tape says predictions are 0.5×–2.5× too small;
+   sprint-tape says they are 2×–4× too small. Either way, the correct
+   intervention is "let gain grow" and the pre-fix signed-median
+   clamp at 0.25 was actively moving the projector in the wrong
+   direction.
+
+### 8.4 Implications for R2
+
+The §7 revised R2 sequencing held that `conviction_boost` relocation
+is measurement-hygiene, not directional-lift. The live-feedback
+numbers sharpen that reading in two ways:
+
+- **Measurement hygiene is more urgent, not less.** The asymmetric
+  `[1.0, 1.5]` boost adds up-to-1.5× inflation to predictions, which
+  in live-tape terms shifts a true correction of 2.0 down to a
+  reported 1.33. With the calibrator now surfacing "real" corrections
+  in the 3-4× range on sprint tapes, a 1.5× inflation artifact on top
+  is genuinely noisy. R2 is a prerequisite for trusting any H1/H3
+  measurement that depends on the magnitude channel.
+- **Quantitative lift on directional hit remains small.** R2 does
+  not move the direction-hit tape; it moves the magnitude one. The
+  §7 estimate of "correct-direction median corrections rise by
+  roughly 10–25 % after R2" stands — refined, given the sprint-tape
+  correction distribution sits 2-3× above the live-tape one, that
+  translates to ~0.3–1.0 absolute units on the p50 depending on day.
+
+**Revised R2 recommendation (decision point for the reviewer).** R2
+(conviction_boost relocation) stays next in WS3, but the commit
+message should anchor on "measurement hygiene unblocks H1/H3
+magnitude measurement" rather than any standalone directional-hit
+target. D3 (directional-hit @ 20s, 52 % panel average) should be
+expected to shift by **less than 1 percentage point** as a direct
+consequence of R2, and the WS3 acceptance gate language for R2
+should say so explicitly to avoid reading R2 as a standalone fix.
+
+**Open question back to the reviewer (not pre-decided):** Does the
+sprint-vs-live microstructure delta in 8.2 need its own hypothesis
+slot (call it H4: "sprint synth book under-represents live pressure
+by O(100×); sprint-based H-measurement under-detects magnitude
+mechanisms")? Or is the correct answer to simply continue H2/H1/H3
+measurement against the live-tape forecasts archive and treat the
+sprint harness as a determinism/regression tool only? A H4 slot
+would add measurement surface but also adds a dependency on
+synth-book replacement work that may not be in Phase 11's scope. The
+determinism-gate-only interpretation is cheaper and bounds the
+scope of WS3 cleanly.
 
 ---
 
 *Written after Option 1a commit `564c050`; offline determinism gate
 PASSed (sha256=a9049de23892632e…) but acknowledged as false-positive
-pending `SprintEngine` wiring. R2 (`conviction_boost` relocation) not
-started and re-scoped per §6 Plan Update.*
+pending `SprintEngine` wiring. Wiring landed `686164b`; determinism
+re-PASSes (sha256=14d149feafe8ac7d…). Live-feedback attribution in
+`2a1bf26`. R2 (`conviction_boost` relocation) not started; sequencing
+confirmed in §7/§8 and awaiting reviewer sign-off at the step-6
+pause.*
