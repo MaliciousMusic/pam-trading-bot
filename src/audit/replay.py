@@ -154,12 +154,17 @@ class ReplayEngine:
                 self.state.last_funding_rate or 0.0,
                 float(self.tick_seconds),
             )
+        # WS1 §8 — stash current regime on the executor so every close path
+        # stamps it on the ledger.
+        if hasattr(self.executor, "set_regime_label"):
+            self.executor.set_regime_label(regime_label)
         self.executor.evaluate_exits(
             ts, self.state.last_price, forecast, regime_label=regime_label,
         )
         self.executor.mark_to_market(ts, self.state.last_price)
         intent = self.decision.decide(
             ts, forecast, self.state, equity_usd=self.executor.equity_usd,
+            regime_label=regime_label,
         )
         if intent.action != "hold":
             self.executor.execute(intent, self.state)

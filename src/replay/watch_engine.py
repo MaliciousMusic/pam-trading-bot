@@ -194,6 +194,10 @@ class WatchEngine:
                 self.state.last_funding_rate or 0.0,
                 float(self.tick_seconds),
             )
+        # WS1 §8 — stash current regime on the executor so every close path
+        # stamps it on the ledger.
+        if hasattr(self.executor, "set_regime_label"):
+            self.executor.set_regime_label(regime.label)
         # Phase 10 — black-swan detonation stop (must precede forecast exits
         # because a 5σ move outpaces the projector's reaction window).
         if hasattr(self.executor, "check_black_swan"):
@@ -205,6 +209,7 @@ class WatchEngine:
 
         intent = self.decision.decide(
             ts, forecast, self.state, equity_usd=self.executor.equity_usd,
+            regime_label=regime.label,
         )
         if intent.action != "hold":
             self.executor.execute(intent, self.state)

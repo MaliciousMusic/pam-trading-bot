@@ -1,0 +1,34 @@
+{
+  "variant_id": "v2_trend_only",
+  "ticks": 86399,
+  "trades": 138,
+  "wins": 27,
+  "win_rate": 0.1956521739130435,
+  "mean_realized_bps": -7.957842089139037,
+  "median_realized_bps": -9.67958190281734,
+  "stdev_realized_bps": 9.955465369121951,
+  "sharpe_per_trade": -9.390166527814461,
+  "max_drawdown_pct": 2.1872576981198946,
+  "start_equity_usd": 50000.0,
+  "end_equity_usd": 48906.37115094005,
+  "equity_delta_usd": -1093.6288490599472,
+  "equity_delta_pct": -2.1872576981198946,
+  "regime_time_ticks": {
+    "chop": 51000,
+    "normal": 12126,
+    "trend_up": 12120,
+    "cascade_up": 558,
+    "cascade_down": 263,
+    "trend_down": 10332
+  },
+  "hold_reason_top": [
+    [
+      "council",
+      86163
+    ],
+    [
+      "regime gated",
+      98
+    ]
+  ]
+}

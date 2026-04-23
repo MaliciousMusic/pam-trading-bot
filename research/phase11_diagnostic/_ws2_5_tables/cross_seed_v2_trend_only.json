@@ -1,0 +1,188 @@
+{
+  "rows": [
+    {
+      "variant_id": "v2_trend_only@seed42",
+      "ticks": 86399,
+      "trades": 138,
+      "wins": 27,
+      "win_rate": 0.1956521739130435,
+      "mean_realized_bps": -7.957842089139037,
+      "median_realized_bps": -9.67958190281734,
+      "stdev_realized_bps": 9.955465369121951,
+      "sharpe_per_trade": -9.390166527814461,
+      "max_drawdown_pct": 2.1872576981198946,
+      "start_equity_usd": 50000.0,
+      "end_equity_usd": 48906.37115094005,
+      "equity_delta_usd": -1093.6288490599472,
+      "equity_delta_pct": -2.1872576981198946,
+      "regime_time_ticks": {
+        "chop": 51000,
+        "normal": 12126,
+        "trend_up": 12120,
+        "cascade_up": 558,
+        "cascade_down": 263,
+        "trend_down": 10332
+      },
+      "hold_reason_top": [
+        [
+          "council",
+          86163
+        ],
+        [
+          "regime gated",
+          98
+        ]
+      ],
+      "seed": 42
+    },
+    {
+      "variant_id": "v2_trend_only@seed123",
+      "ticks": 86399,
+      "trades": 113,
+      "wins": 19,
+      "win_rate": 0.168141592920354,
+      "mean_realized_bps": -8.432247762377783,
+      "median_realized_bps": -9.99975475870601,
+      "stdev_realized_bps": 9.735518038090266,
+      "sharpe_per_trade": -9.207113878530128,
+      "max_drawdown_pct": 1.838712230475867,
+      "start_equity_usd": 50000.0,
+      "end_equity_usd": 49080.64388476207,
+      "equity_delta_usd": -919.3561152379334,
+      "equity_delta_pct": -1.838712230475867,
+      "regime_time_ticks": {
+        "chop": 51000,
+        "normal": 12126,
+        "trend_up": 12120,
+        "cascade_up": 558,
+        "cascade_down": 263,
+        "trend_down": 10332
+      },
+      "hold_reason_top": [
+        [
+          "council",
+          86195
+        ],
+        [
+          "regime gated",
+          91
+        ]
+      ],
+      "seed": 123
+    },
+    {
+      "variant_id": "v2_trend_only@seed777",
+      "ticks": 86399,
+      "trades": 153,
+      "wins": 23,
+      "win_rate": 0.1503267973856209,
+      "mean_realized_bps": -8.235399971274013,
+      "median_realized_bps": -9.9279263179028,
+      "stdev_realized_bps": 9.196187761707913,
+      "sharpe_per_trade": -11.077010875797477,
+      "max_drawdown_pct": 2.6464000372827723,
+      "start_equity_usd": 50000.0,
+      "end_equity_usd": 48676.799981358614,
+      "equity_delta_usd": -1323.2000186413861,
+      "equity_delta_pct": -2.6464000372827723,
+      "regime_time_ticks": {
+        "chop": 51000,
+        "normal": 12126,
+        "trend_up": 12120,
+        "cascade_up": 558,
+        "cascade_down": 263,
+        "trend_down": 10332
+      },
+      "hold_reason_top": [
+        [
+          "council",
+          86161
+        ],
+        [
+          "regime gated",
+          85
+        ]
+      ],
+      "seed": 777
+    },
+    {
+      "variant_id": "v2_trend_only@seed2024",
+      "ticks": 86399,
+      "trades": 139,
+      "wins": 24,
+      "win_rate": 0.17266187050359713,
+      "mean_realized_bps": -8.107873894581125,
+      "median_realized_bps": -9.961928256942615,
+      "stdev_realized_bps": 9.86553919943778,
+      "sharpe_per_trade": -9.689325794390864,
+      "max_drawdown_pct": 2.4346295607322244,
+      "start_equity_usd": 50000.0,
+      "end_equity_usd": 48782.68521963389,
+      "equity_delta_usd": -1217.3147803661122,
+      "equity_delta_pct": -2.4346295607322244,
+      "regime_time_ticks": {
+        "chop": 51000,
+        "normal": 12126,
+        "trend_up": 12120,
+        "cascade_up": 558,
+        "cascade_down": 263,
+        "trend_down": 10332
+      },
+      "hold_reason_top": [
+        [
+          "council",
+          86163
+        ],
+        [
+          "regime gated",
+          97
+        ]
+      ],
+      "seed": 2024
+    }
+  ],
+  "rollup": {
+    "trades": {
+      "mean": 135.75,
+      "std": 14.411367041332339,
+      "min": 113.0,
+      "max": 153.0
+    },
+    "win_rate": {
+      "mean": 0.17169560868065387,
+      "std": 0.016156328511077362,
+      "min": 0.1503267973856209,
+      "max": 0.1956521739130435
+    },
+    "mean_realized_bps": {
+      "mean": -8.18334092934299,
+      "std": 0.17407595730546951,
+      "min": -8.432247762377783,
+      "max": -7.957842089139037
+    },
+    "sharpe_per_trade": {
+      "mean": -9.840904269133233,
+      "std": 0.7341304972064229,
+      "min": -11.077010875797477,
+      "max": -9.207113878530128
+    },
+    "max_drawdown_pct": {
+      "mean": 2.2767498816526897,
+      "std": 0.30060483420330103,
+      "min": 1.838712230475867,
+      "max": 2.6464000372827723
+    },
+    "equity_delta_usd": {
+      "mean": -1138.3749408263448,
+      "std": 150.30241710165055,
+      "min": -1323.2000186413861,
+      "max": -919.3561152379334
+    },
+    "equity_delta_pct": {
+      "mean": -2.2767498816526897,
+      "std": 0.30060483420330103,
+      "min": -2.6464000372827723,
+      "max": -1.838712230475867
+    }
+  }
+}

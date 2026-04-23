@@ -44,6 +44,12 @@ MIN_PRED_BPS = 0.5
 # to "cascade tape".
 MIN_GAIN = 1.0
 MAX_GAIN = 40.0
+# Correction clamp — trims huge one-sided refits (typically regime-switch
+# artifacts) so the EWMA can catch up without a giant step. Pulled to
+# module scope so the Q3 clamp-binding telemetry + the offline
+# attribution script can reference a single source of truth.
+CORRECTION_CLAMP_LO = 0.25
+CORRECTION_CLAMP_HI = 4.0
 
 
 class KernelCalibrator:
@@ -100,6 +106,18 @@ class KernelCalibrator:
         self._n_seen: int = 0
         self._last_correction: float = 1.0
         self._last_refit_ts: float | None = None
+        # WS3 H2 Option 1a diagnostics. `last_dropped_fraction` is the
+        # share of non-zero pairs in the window whose (predicted, realized)
+        # signs disagreed at the most recent refit — this doubles as a
+        # cross-check on the ForecastAuditor's directional-hit rate (they
+        # should match within the MIN_PRED_BPS filter). The quartile
+        # triple describes the *correct-direction* ratio distribution the
+        # fit target actually saw, so operators can see magnitude bias
+        # independently of the clamp at `correction`.
+        self._last_dropped_fraction: float = 0.0
+        self._last_correct_ratio_p25: float = 1.0
+        self._last_correct_ratio_p50: float = 1.0
+        self._last_correct_ratio_p75: float = 1.0
         self._load()
 
     # --- ingest -------------------------------------------------------
@@ -124,11 +142,46 @@ class KernelCalibrator:
 
         Phase 2.5: when `halflife_resolved_s` is set, `alpha` comes from the
         wallclock gap between refits so the smoothing speed stays
-        independent of tick cadence."""
+        independent of tick cadence.
+
+        WS3 H2 Option 1a: the fit target is computed over the
+        **correct-direction** subset only. A signed-ratio median
+        conflates directional accuracy with magnitude bias — when the
+        council's hit rate is near 50 %, the raw median sits near zero
+        and the clamp at `max(0.25, …)` silently pins the gain at
+        `MIN_GAIN`, producing a fit target that is a clamp artifact
+        rather than a measurement (see
+        `research/phase11_diagnostic/WS3_H2_path_audit.md §4`). The
+        calibrator fits *scale*; direction is the job of
+        `TribeCalibrator` and the conf formula. Dropping wrong-direction
+        samples keeps the scale fit on the metric it's actually
+        measuring, and surfaces the dropped fraction as a diagnostic
+        that cross-checks the auditor's directional-hit rate."""
         if not self._pairs:
             return
-        ratios = [r / p for p, r in self._pairs if p != 0]
+        # Non-zero predicted pairs gate the denominator. Zero-predicted
+        # pairs were already filtered upstream via `MIN_PRED_BPS`, but
+        # keep the guard defensive in case that threshold drops in a
+        # later experiment.
+        nonzero_pairs = [(p, r) for p, r in self._pairs if p != 0]
+        total_nonzero = len(nonzero_pairs)
+        if total_nonzero == 0:
+            return
+        # Option 1a filter. `(p > 0) == (r > 0)` is true when predicted
+        # and realized moves share a sign. Zero-realized rows (r == 0)
+        # collapse to `False == (p > 0)` which agrees only when p <= 0;
+        # at p > 0 they drop out, at p < 0 they pass. Both cases
+        # contribute a ratio of 0 to the correct-direction distribution,
+        # which is harmless (a true flat realized means our magnitude
+        # prediction was wrong by 100 %, and pulling the median toward 0
+        # from above is the correct direction for the fit).
+        ratios = [r / p for p, r in nonzero_pairs if (p > 0) == (r > 0)]
+        self._last_dropped_fraction = 1.0 - len(ratios) / total_nonzero
         if not ratios:
+            # Pathological: no correct-direction samples in window. Leave
+            # the gain untouched — the calibrator has no information to
+            # update on.
+            self._last_correction = 1.0
             return
         ratios.sort()
         mid = len(ratios) // 2
@@ -136,9 +189,36 @@ class KernelCalibrator:
             ratios[mid] if len(ratios) % 2 == 1
             else 0.5 * (ratios[mid - 1] + ratios[mid])
         )
+        # Quartile diagnostics over the correct-direction subset so
+        # operators can read magnitude bias independently of the clamp
+        # below. Guard against tiny windows where p25/p75 indexing would
+        # collapse onto the same element as the median.
+        n = len(ratios)
+        self._last_correct_ratio_p25 = ratios[max(0, n // 4)]
+        self._last_correct_ratio_p50 = correction
+        self._last_correct_ratio_p75 = ratios[min(n - 1, (3 * n) // 4)]
         # Huge one-sided corrections usually mean the window straddled a
-        # regime switch — trim so the EWMA can catch up without a giant step.
-        correction = max(0.25, min(4.0, float(correction)))
+        # regime switch — trim so the EWMA can catch up without a giant
+        # step. Post-Option-1a this clamp should rarely bind; when it
+        # does, the pre-clamp value is visible in `_last_correct_ratio_p50`.
+        raw_correction = float(correction)
+        correction = max(
+            CORRECTION_CLAMP_LO, min(CORRECTION_CLAMP_HI, raw_correction)
+        )
+        # WS3 Q3 telemetry — surface which bound bit, with the pre-clamp
+        # value, so operators can distinguish "expected regime-switch
+        # clamping" (infrequent, oscillates sides) from "new directional
+        # contamination artifact" (persistent lo-bind, like the pre-
+        # Option-1a signed-median pathology). We do NOT narrow the
+        # bounds yet — see `WS3_H2_option1a_snapshot.md §7 Q3`.
+        if correction != raw_correction:
+            side = "lo" if correction > raw_correction else "hi"
+            logger.warning(
+                "[kernel-cal] correction clamped {} (raw={:.3f} → {:.3f}; "
+                "bounds [{:.2f}, {:.2f}])",
+                side, raw_correction, correction,
+                CORRECTION_CLAMP_LO, CORRECTION_CLAMP_HI,
+            )
         self._last_correction = correction
 
         if self._time_based and now_ts is not None:
@@ -175,6 +255,14 @@ class KernelCalibrator:
             "time_based": self._time_based,
             "min_gain": MIN_GAIN,
             "max_gain": MAX_GAIN,
+            # WS3 H2 Option 1a diagnostics. `dropped_fraction` cross-checks
+            # the ForecastAuditor's directional-hit rate — they should
+            # match within the MIN_PRED_BPS filter. The correct-direction
+            # quartile triple shows magnitude bias pre-clamp.
+            "last_dropped_fraction": self._last_dropped_fraction,
+            "last_correct_ratio_p25": self._last_correct_ratio_p25,
+            "last_correct_ratio_p50": self._last_correct_ratio_p50,
+            "last_correct_ratio_p75": self._last_correct_ratio_p75,
         }
 
     # --- persistence --------------------------------------------------
@@ -186,6 +274,13 @@ class KernelCalibrator:
             "n": self._n_seen,
             "last_correction": self._last_correction,
             "last_refit_ts": self._last_refit_ts,
+            # WS3 H2 Option 1a — persist the dropped fraction so a
+            # restart continues to report a meaningful diagnostic number
+            # before the first post-restart refit runs. The quartile
+            # triple is not persisted (it gets recomputed on first refit
+            # and operators reading the disk file don't need pre-refit
+            # values).
+            "last_dropped_fraction": self._last_dropped_fraction,
         }
         try:
             self._path.write_bytes(serde.dumps_indent(payload))
@@ -210,5 +305,11 @@ class KernelCalibrator:
         last_refit = data.get("last_refit_ts")
         if isinstance(last_refit, (int, float)):
             self._last_refit_ts = float(last_refit)
-        logger.info("[kernel-cal] resumed gain={:.2f} from {} samples",
-                    self._gain, self._n_seen)
+        dropped = data.get("last_dropped_fraction")
+        if isinstance(dropped, (int, float)):
+            self._last_dropped_fraction = float(dropped)
+        logger.info(
+            "[kernel-cal] resumed gain={:.2f} from {} samples "
+            "(last dropped-fraction={:.2%})",
+            self._gain, self._n_seen, self._last_dropped_fraction,
+        )
