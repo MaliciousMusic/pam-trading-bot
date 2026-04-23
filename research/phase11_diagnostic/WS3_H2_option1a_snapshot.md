@@ -5,6 +5,14 @@
 **Reproduce:** `PYTHONPATH=. python -m scripts.ws3_h2_option1a_snapshot --days 2026-04-18 2026-04-19 2026-04-20 2026-04-21`
 **Raw output:** `research/phase11_diagnostic/_ws3_h2_snapshots/option1a_20260422T160057Z.md`
 
+> **Tape-source note (added 2026-04-23).** §§1-7 read the live-tape
+> forecasts archive (`data/forecasts/<day>.jsonl`); no
+> `MEASUREMENT_INFRA.md` caveat applies. §8 reads sprint-produced
+> anchors from the Step 4 live-feedback driver and is explicitly
+> caveated in §8.2. Going forward, WS3 H-measurement against live
+> tape is the Phase 11 operating rule per `MEASUREMENT_INFRA.md`
+> §2.
+
 ## 0. TL;DR
 
 - **Pre-fix is a clamp artifact, confirmed.** Signed-median correction

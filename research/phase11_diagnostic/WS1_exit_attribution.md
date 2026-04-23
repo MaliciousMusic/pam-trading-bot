@@ -2,6 +2,17 @@
 
 **Phase 11 Diagnostic · Load-bearing master measurement**
 
+> **Measurement caveat (added 2026-04-23).** Findings in this artifact
+> derived from the `SprintEngine` replay harness, not the live-tape
+> forecasts archive. Per `MEASUREMENT_INFRA.md`, the sprint
+> microstructure produces ~400× weaker per-tick net_pressure than the
+> live Binance BTCUSDT tape, and magnitude-channel transfer to
+> production is not quantitatively validated. Directional findings
+> (44.5 % @ 20 s, regime-conditional signs) and relative A/B deltas
+> remain informative; absolute bps-magnitude numbers (−10.04 realized,
+> per-horizon MAE) should be re-measured against
+> `data/forecasts/<day>.jsonl` before they set acceptance gates.
+
 | Item          | Value                                                           |
 |:--------------|:----------------------------------------------------------------|
 | An-0 day      | 2026-04-20                                                      |

@@ -5,6 +5,19 @@
 **Gate implementation commit:** `5b2faac feat(decision): WS2.5 regime-entry gate`
 **Tape:** `data/events/2026-04-20.jsonl` (synth_rate=60, tick_seconds=1, 86 399 ticks)
 
+> **Measurement caveat (added 2026-04-23).** Findings in this artifact
+> derived from the `SprintEngine` replay harness, not the live-tape
+> forecasts archive. Per `MEASUREMENT_INFRA.md`, the sprint
+> microstructure produces ~400× weaker per-tick net_pressure than the
+> live Binance BTCUSDT tape, and magnitude-channel transfer to
+> production is not quantitatively validated. The cross-seed control
+> (§6) bounds RNG variance within the sprint tape; it does not
+> establish sprint→live transfer. Directional findings (trend-only
+> regime's +2.08 bps improvement sign, cascade's harm) and relative
+> A/B variant deltas remain informative; absolute bps-magnitude
+> numbers should be re-measured against `data/forecasts/<day>.jsonl`
+> before they set acceptance gates.
+
 ## 1. Summary
 
 On day 2026-04-20 the trend-only gate (v2) roughly halves daily equity
