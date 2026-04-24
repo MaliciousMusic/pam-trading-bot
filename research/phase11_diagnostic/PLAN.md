@@ -150,8 +150,9 @@ historical D1-D5 scope decisions are preserved as §5.4.
 
 | Chip | State | Note |
 |:-----|:------|:-----|
-| H1 Phase 1 — decomposition measurement | ▶ Active — data-accumulation-gated | Analyzer script + tests landed 2026-04-24 ([`scripts/ws3_h1_decomp_analyze.py`](../../scripts/ws3_h1_decomp_analyze.py), [`tests/test_ws3_h1_decomp_analyze.py`](../../tests/test_ws3_h1_decomp_analyze.py)). Measurement blocked on ≥3 consecutive post-I1 days of live tape per §3.2 / D5. I1 landed 2026-04-24 13:40; earliest Phase 1 run therefore 2026-04-27 (04-24 partial + 04-25 + 04-26 close). Pre-I1 archives (04-18 → 04-21) lack decomposition fields and are un-backfillable. |
-| 2026-04-21 panel inclusion | ⏸  Quarantined 08:44→14:00 UTC | Diagnostic-only until Fix A lands and 04-21 re-replays clean. Quarantine widened past the audit's 13:00 UTC recommendation to absorb one full `ForecastAuditor` sigma window (3600 s) past the last explicit contamination. Re-admit under `rebaseline_date` marker in [`WS3_H2_option1a_snapshot.md`](WS3_H2_option1a_snapshot.md) §5. |
+| H1 Phase 1 — decomposition measurement | ▶ Active — data-accumulation-gated | Analyzer script + tests landed 2026-04-24 ([`scripts/ws3_h1_decomp_analyze.py`](../../scripts/ws3_h1_decomp_analyze.py), [`tests/test_ws3_h1_decomp_analyze.py`](../../tests/test_ws3_h1_decomp_analyze.py)). Measurement blocked on ≥3 consecutive post-I1 days of live tape per §3.2 / D5. **Data clock reset 2026-04-24 evening** by Bybit venue swap (see §5.1.2); earliest Phase 1 run now ≥ 2026-04-28. Pre-I1 archives (04-18 → 04-21) are un-backfillable and additionally venue-obsolete under the amendment. |
+| Venue swap — Bybit primary ingest | ▶ Active — ingress port in flight | Binance futures WS silently geo-blocked from this host 2026-04-22 → present (TLS OK, zero frames). Switched primary venue to Bybit BTCUSDT linear perps (`wss://stream.bybit.com/v5/public/linear`). See §5.1.2 for full amendment and panel-invalidation consequences. |
+| 2026-04-21 panel inclusion | ⏸  Quarantined 08:44→14:00 UTC | **Superseded by §5.1.2 venue amendment** — full 04-18 → 04-21 panel now venue-obsolete regardless of Fix A state. Quarantine retained for reference until Fix A scope is rewritten against the Bybit panel. |
 
 ### 5.1.0 Recently closed (2026-04-23 → 2026-04-24)
 
@@ -171,6 +172,30 @@ historical D1-D5 scope decisions are preserved as §5.4.
 - **WS4 regime-hysteresis audit** ([`WS4_regime_hysteresis_audit.md`](WS4_regime_hysteresis_audit.md)) — 1,268 regime transitions / 16,811 sprint ticks (75.4/1000); 54% of runs ≤5 ticks; `chop↔normal` 43% of all transitions. Not an H1 blocker; Schmitt-threshold intervention scoped for post-H1.
 - **WS2 executor parity audit** ([`WS2_executor_parity_audit.md`](WS2_executor_parity_audit.md)) — reframes PLAN Q3: there is no "shadow executor", only PaperExecutor + per-tribe TribeShadowLedger. Six asymmetry classes documented (depth-blind fill, no Harden overlay, no book-depth cap, no black-swan detector, no funding accrual, fee defaults 2.0 vs 5.0 bps). Dormant in sprint (no calibrator consumers); live-only impact. Recommend I3 adds `realized_bps_paper_model` alongside `shadow.realized_bps`.
 - **WS3b warmup/persistence audit** ([`WS3b_warmup_persistence_audit.md`](WS3b_warmup_persistence_audit.md)) — "Weakness #4" of PLAN:183 reinterpreted from PLAN's parenthetical (the original weakness list is absent from the committed scope doc). Persistence-weighted anchor horizons: capability gap, not broken impl — anchor specs fixed `(label, step_idx)`, no regime label on `PendingAnchor`/`Resolved`, no dwell weighting. Warmup: KernelCalibrator `min_samples=50` + immediate hi-clamp saturation on sprint (confirmed live by PID 1462 gate log). Four recommendations, priority-ordered; no protected surfaces touched.
+
+### 5.1.2 Scope amendment — Bybit venue swap (2026-04-24 evening)
+
+**Trigger.** Attempt to launch `scripts.run_bot` on 2026-04-24 ~18:24 UTC found Binance USD-M futures WS (`wss://fstream.binance.com/stream`) silently unresponsive: TLS handshake completes, WebSocket upgrade succeeds, subscription is accepted, zero application frames arrive over 3+ minutes on aggTrade / markPrice / depth. Minimal isolated probe reproduces (see commit log / session transcript). Binance **SPOT** WS from the same host delivers frames immediately, confirming a futures-specific block rather than a local network failure. No VPN available.
+
+**Amendment.** Primary live ingest venue changes from Binance BTCUSDT USD-M perpetuals to **Bybit BTCUSDT linear perpetuals** (`wss://stream.bybit.com/v5/public/linear`). Probe confirms tickers + orderbook frames flow within seconds. Bybit public WS remains free-tier (`project_budget_constraint.md` respected).
+
+**Consequences.**
+
+1. **Panel invalidation.** The 2026-04-18 → 2026-04-21 Binance perps live-tape archive (`data/forecasts/2026-04-{18,19,20,21}.jsonl`) is no longer the measurement reference for H1 / H3 / any downstream hypothesis. Different venue ⇒ different microstructure (tick size, maker/taker density, funding rate schedule, liquidation cadence). The four archives are retained on disk for code-change regression reference but are out-of-scope for any new acceptance measurement.
+2. **D5 clock reset to zero.** The "≥ 3 consecutive days" multi-day panel rule (D5) now counts from the first full post-swap Bybit day. Earliest Phase 1 run shifts from 2026-04-27 to **≥ 2026-04-28** (04-24 evening partial + 04-25 + 04-26 full + 04-27 partial; strict ≥ 3 full days wants 04-25/26/27 close → run 04-28 morning).
+3. **D6 rule still holds.** Live-tape-only for H-measurement; sprint remains reserved for determinism gates. The "400× weaker pressure" claim in `MEASUREMENT_INFRA.md` §2 was calibrated against Binance perps; the ratio versus Bybit is unmeasured but plausibly similar (both are the same asset class at the same cadence). Revisit when first Bybit day is in.
+4. **Determinism gate unaffected.** `verify_determinism --day YYYY-MM-DD` reads cached Binance klines for synth-tick generation and writes to a temp dir; it never hits live WS. Existing gate artifacts (full-day PASS at `3e2c3b6`) remain authoritative for the instrumentation surface.
+5. **Intervention options A/B/C (scope §4) stay valid.** They are formula-level changes to `signal_quality / directional_score / diversity_mult` arithmetic, venue-agnostic. Post-intervention determinism gate + re-measurement ride the Bybit panel instead of the Binance panel.
+6. **Fix queue (§5.1.1) scope-rewrite required.** Fix A ("per-step `step_bps` clamp") was sized (±400 bps) against observed Binance 04-18/19/20 maxima. The clamp threshold is re-derivable from any venue's first full day; no mechanism change — just a one-line threshold re-fit once 04-25 Bybit data lands. Fix C is venue-agnostic as written.
+7. **Parallel audits (§5.1.0 roll-up) unaffected.** Q3/Q5/Q6 I3-plumbing recommendations and Q4 Schmitt-threshold scope all operate on the live-tape regardless of venue. Schema-side additions in I3 carry forward.
+
+**Risks acknowledged.**
+
+- Bybit BTCUSDT has different funding cadence (8h vs 8h — aligned) but different fee structure and rebate ladder. Paper-executor fee defaults (2.0 bps in current config per WS2 audit) may need revisit when real execution is considered; measurement-only pipeline is unaffected.
+- Liquidation feed on Bybit (`liquidation.<symbol>` channel) carries different message shape than Binance `forceOrder`; the primary ingress will normalize, but the `liquidation_hunter` tribe's rate calibration was done on Binance volume. Re-check once first Bybit day lands.
+- Bybit tick price-size is 0.10 (same as Binance on BTCUSDT USD-M), but orderbook depth resolution is 50 levels (`orderbook.50.BTCUSDT`) versus Binance's 20. Depth-aware projector kernel normalization (in `_normalize_book_depth`) is top-of-book + 5-bps window → resolution difference is absorbed before it reaches the kernel.
+
+**No scope docs edited.** This amendment lives in PLAN only; `WS3_SCOPE.md` D5/D6 and `WS3_H1_SCOPE.md` §3 remain as written. The live-tape rule is unchanged; only the venue is. Consider a scope-doc revision only if a second venue swap is considered, or if measurement finds Bybit microstructure materially changes intervention ordering.
 
 ### 5.1.1 Post-R2 fix queue (from 2026-04-21 divergence audit)
 
@@ -322,11 +347,13 @@ backfill opportunity.
 
 **Forward sequence:**
 
-1. **Live tape accrues ≥ 3 post-I1 days** (2026-04-24 tail, 04-25,
-   04-26). No action required from this workstream during accrual;
-   parallel paths (H3 scope prep, Fix A rescope, I3 planning) may
-   proceed.
-2. **H1 Phase 1 measurement** (earliest 2026-04-27) —
+1. **Live tape accrues ≥ 3 post-I1 days on Bybit** (2026-04-24 evening
+   partial + 04-25 / 04-26 / 04-27 full). Clock reset by §5.1.2
+   venue swap; Binance 04-18/19/20/21 panel is venue-obsolete and
+   does not count. No action required from this workstream during
+   accrual; parallel paths (H3 scope prep, Fix A rescope, I3 planning)
+   may proceed.
+2. **H1 Phase 1 measurement** (earliest 2026-04-28) —
    `python -m scripts.ws3_h1_decomp_analyze --days 2026-04-24
    2026-04-25 2026-04-26`. Produces per-field distributions,
    horizon-stratified tables, multiplicative sanity cross-check,
@@ -352,5 +379,6 @@ change, determinism gate between each (`scripts.verify_determinism
 
 ---
 
-*PLAN last revised 2026-04-24 post-H1.I1 + parallel-audit cohort.
-Next revision after H1 Phase 1 snapshot lands.*
+*PLAN last revised 2026-04-24 post-H1.I1 + parallel-audit cohort +
+Bybit venue swap (§5.1.2). Next revision after H1 Phase 1 snapshot
+lands on the Bybit panel.*
