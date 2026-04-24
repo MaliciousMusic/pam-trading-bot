@@ -54,6 +54,15 @@ class PendingAnchor:
     # offline P4/H5 analyzer to consume.
     abs_activity_bps: float | None = None
     step_bps_signflips: int | None = None
+    # WS3 I3.a — harvest-path live-tape measurement surface. Mirrors three
+    # Forecast fields for per-anchor join in offline Q5 analysis. None on
+    # pre-I3 Forecast objects (unit-test fixtures, sprint-without-
+    # calibrator runs). `path_integrity_ok` is None when
+    # `forecast.driver_skill_avg` is None (vacuous pass — the gate at
+    # `decision/engine.py:154` doesn't fire), else bool(dsa >= 0.7).
+    conviction_boost: float | None = None
+    harvest_mass_ratio: float | None = None
+    path_integrity_ok: bool | None = None
 
 
 @dataclass(slots=True)
@@ -83,6 +92,10 @@ class Resolved:
     # WS3 H5.I1 — cumulative-path attractor mirror.
     abs_activity_bps: float | None = None
     step_bps_signflips: int | None = None
+    # WS3 I3.a — harvest-path mirror from PendingAnchor.
+    conviction_boost: float | None = None
+    harvest_mass_ratio: float | None = None
+    path_integrity_ok: bool | None = None
 
 
 class ForecastAuditor:
@@ -124,6 +137,9 @@ class ForecastAuditor:
         diversity_mult: float | None = None,
         abs_activity_bps: float | None = None,
         step_bps_signflips: int | None = None,
+        conviction_boost: float | None = None,
+        harvest_mass_ratio: float | None = None,
+        path_integrity_ok: bool | None = None,
     ) -> list[Resolved]:
         """Resolve any matured anchors against `price`, then enqueue the
         new anchors from this tick. Returns the list of records just
@@ -141,7 +157,10 @@ class ForecastAuditor:
                       diversity_score=diversity_score,
                       diversity_mult=diversity_mult,
                       abs_activity_bps=abs_activity_bps,
-                      step_bps_signflips=step_bps_signflips)
+                      step_bps_signflips=step_bps_signflips,
+                      conviction_boost=conviction_boost,
+                      harvest_mass_ratio=harvest_mass_ratio,
+                      path_integrity_ok=path_integrity_ok)
         return resolved_now
 
     def _enqueue(
@@ -160,6 +179,9 @@ class ForecastAuditor:
         diversity_mult: float | None = None,
         abs_activity_bps: float | None = None,
         step_bps_signflips: int | None = None,
+        conviction_boost: float | None = None,
+        harvest_mass_ratio: float | None = None,
+        path_integrity_ok: bool | None = None,
     ) -> None:
         for p in predictions:
             horizon = int(p.get("horizon_seconds", 0))
@@ -186,6 +208,9 @@ class ForecastAuditor:
                 diversity_mult=diversity_mult,
                 abs_activity_bps=abs_activity_bps,
                 step_bps_signflips=step_bps_signflips,
+                conviction_boost=conviction_boost,
+                harvest_mass_ratio=harvest_mass_ratio,
+                path_integrity_ok=path_integrity_ok,
             )
             self._pending.append(anchor)
 
@@ -235,6 +260,9 @@ class ForecastAuditor:
                 diversity_mult=a.diversity_mult,
                 abs_activity_bps=a.abs_activity_bps,
                 step_bps_signflips=a.step_bps_signflips,
+                conviction_boost=a.conviction_boost,
+                harvest_mass_ratio=a.harvest_mass_ratio,
+                path_integrity_ok=a.path_integrity_ok,
             )
             out.append(rec)
             self._resolved.append(rec)
@@ -274,6 +302,12 @@ class ForecastAuditor:
             # archives; the downstream analyzer filters on non-null.
             "abs_activity_bps": rec.abs_activity_bps,
             "step_bps_signflips": rec.step_bps_signflips,
+            # WS3 I3.a — harvest-path live-tape measurement surface. None
+            # on pre-I3 archives / sprint-without-calibrator runs. Q5's
+            # offline analyzer joins on these three fields.
+            "conviction_boost": rec.conviction_boost,
+            "harvest_mass_ratio": rec.harvest_mass_ratio,
+            "path_integrity_ok": rec.path_integrity_ok,
         }
         line = serde.dumps(payload) + b"\n"
         with path.open("ab") as f:
