@@ -252,6 +252,8 @@ class SprintEngine:
                     base_conf=forecast.base_conf,
                     diversity_score=forecast.diversity_score,
                     diversity_mult=forecast.diversity_mult,
+                    abs_activity_bps=forecast.abs_activity_bps,
+                    step_bps_signflips=forecast.step_bps_signflips,
                 )
                 if self.kernel_calibrator is not None and resolved_now:
                     self.kernel_calibrator.apply_resolved(resolved_now)

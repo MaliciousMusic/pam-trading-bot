@@ -49,6 +49,11 @@ class PendingAnchor:
     base_conf: float | None = None
     diversity_score: float | None = None
     diversity_mult: float | None = None
+    # WS3 H5.I1 — cumulative-path attractor. Same mirror convention as
+    # H1.I1: both optional, copied tick-to-resolved-to-jsonl for the
+    # offline P4/H5 analyzer to consume.
+    abs_activity_bps: float | None = None
+    step_bps_signflips: int | None = None
 
 
 @dataclass(slots=True)
@@ -75,6 +80,9 @@ class Resolved:
     base_conf: float | None = None
     diversity_score: float | None = None
     diversity_mult: float | None = None
+    # WS3 H5.I1 — cumulative-path attractor mirror.
+    abs_activity_bps: float | None = None
+    step_bps_signflips: int | None = None
 
 
 class ForecastAuditor:
@@ -114,6 +122,8 @@ class ForecastAuditor:
         base_conf: float | None = None,
         diversity_score: float | None = None,
         diversity_mult: float | None = None,
+        abs_activity_bps: float | None = None,
+        step_bps_signflips: int | None = None,
     ) -> list[Resolved]:
         """Resolve any matured anchors against `price`, then enqueue the
         new anchors from this tick. Returns the list of records just
@@ -129,7 +139,9 @@ class ForecastAuditor:
                       directional_score=directional_score,
                       base_conf=base_conf,
                       diversity_score=diversity_score,
-                      diversity_mult=diversity_mult)
+                      diversity_mult=diversity_mult,
+                      abs_activity_bps=abs_activity_bps,
+                      step_bps_signflips=step_bps_signflips)
         return resolved_now
 
     def _enqueue(
@@ -146,6 +158,8 @@ class ForecastAuditor:
         base_conf: float | None = None,
         diversity_score: float | None = None,
         diversity_mult: float | None = None,
+        abs_activity_bps: float | None = None,
+        step_bps_signflips: int | None = None,
     ) -> None:
         for p in predictions:
             horizon = int(p.get("horizon_seconds", 0))
@@ -170,6 +184,8 @@ class ForecastAuditor:
                 base_conf=base_conf,
                 diversity_score=diversity_score,
                 diversity_mult=diversity_mult,
+                abs_activity_bps=abs_activity_bps,
+                step_bps_signflips=step_bps_signflips,
             )
             self._pending.append(anchor)
 
@@ -217,6 +233,8 @@ class ForecastAuditor:
                 base_conf=a.base_conf,
                 diversity_score=a.diversity_score,
                 diversity_mult=a.diversity_mult,
+                abs_activity_bps=a.abs_activity_bps,
+                step_bps_signflips=a.step_bps_signflips,
             )
             out.append(rec)
             self._resolved.append(rec)
@@ -252,6 +270,10 @@ class ForecastAuditor:
             "base_conf": rec.base_conf,
             "diversity_score": rec.diversity_score,
             "diversity_mult": rec.diversity_mult,
+            # WS3 H5.I1 — cumulative-path attractor. None on pre-H5.I1
+            # archives; the downstream analyzer filters on non-null.
+            "abs_activity_bps": rec.abs_activity_bps,
+            "step_bps_signflips": rec.step_bps_signflips,
         }
         line = serde.dumps(payload) + b"\n"
         with path.open("ab") as f:

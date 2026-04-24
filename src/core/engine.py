@@ -416,6 +416,8 @@ class TradingEngine:
                 base_conf=forecast.base_conf,
                 diversity_score=forecast.diversity_score,
                 diversity_mult=forecast.diversity_mult,
+                abs_activity_bps=forecast.abs_activity_bps,
+                step_bps_signflips=forecast.step_bps_signflips,
             )
             backscore_snapshot = self.auditor.snapshot()
             # Phase G loop: feed freshly resolved anchors to the skill

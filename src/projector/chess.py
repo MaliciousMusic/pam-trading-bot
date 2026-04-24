@@ -804,6 +804,14 @@ class ChessProjector:
         abs_activity = sum(abs(b) * w for b, w in zip(step_bps_list, kernel))
         directional = abs(expected_move_bps) / abs_activity if abs_activity > 0 else 0.0
         base_conf = max(0.0, min(1.0, signal_quality * directional))
+        # WS3 H5.I1 — sign-flip count across consecutive entries of the
+        # per-step increment curve. Under the pure-alternation attractor
+        # (`step_bps_list ≈ [+X, −X, +X, −X, …]`) this lands at n_steps−1;
+        # under a clean trending curve, at 0. Zero-entries don't count as
+        # a flip (a*b == 0.0 fails the strict < 0 test).
+        step_bps_signflips = sum(
+            1 for a, b in zip(step_bps_list, step_bps_list[1:]) if a * b < 0.0
+        )
 
         # Phase 1b — Council entropy / diversity score. Compute once the
         # consensus direction is known, then scale confidence by it: a high
@@ -897,6 +905,8 @@ class ChessProjector:
             directional_score=directional,
             base_conf=base_conf,
             diversity_mult=diversity_mult,
+            abs_activity_bps=abs_activity,
+            step_bps_signflips=step_bps_signflips,
         )
 
     # -- Phase 1a: redundancy / cross-correlation ------------------------

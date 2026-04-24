@@ -162,6 +162,18 @@ class Forecast(Struct):
     directional_score: float | None = None  # = |emove| / abs_activity, the ratio at chess.py:798
     base_conf: float | None = None           # = signal_quality * directional_score, pre-clip
     diversity_mult: float | None = None      # = 0.6 + 0.4 * diversity_score
+    # WS3 H5.I1 — cumulative-path attractor instrumentation. Both optional,
+    # None when the projector pre-dates H5.I1 (unit-test fixtures / replayed
+    # older Forecast payloads).
+    #   abs_activity_bps  = Σ |step_bps_i| · decay_i  (denominator of
+    #                       directional_score; persisted to diagnose the
+    #                       1/99 attractor seen in live tape).
+    #   step_bps_signflips = #(consecutive sign flips in step_bps_list).
+    #                        Upper bound n_steps − 1. Pure alternation
+    #                        (P4 suspected-bug pattern) → n_steps − 1.
+    #                        Clean trend → 0.
+    abs_activity_bps: float | None = None
+    step_bps_signflips: int | None = None
 
 
 class Position(Struct):
