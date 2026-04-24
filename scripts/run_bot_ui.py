@@ -205,6 +205,7 @@ async def main() -> None:
         exit_strategy=cfg.get("exit_strategy", {}) or {},
         risk_cfg=cfg.get("risk", {}) or {},
         decision_cfg=cfg.get("decision", {}) or {},
+        paper_exec=executor,
     )
     tribe_scorer = None
     if shadow_ledgers:

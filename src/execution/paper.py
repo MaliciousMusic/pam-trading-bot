@@ -737,6 +737,42 @@ class PaperExecutor(Executor):
         self._harden.slip_fills_n += 1
         return mark * (1 + sign * total_bps / 10_000.0), total_bps
 
+    def _fill_price_deterministic(
+        self, mark: float, taker_side: Side, size_usd: float = 0.0,
+        state: "MarketState | None" = None,
+    ) -> tuple[float, float]:
+        """Fill-price using the pre-Harden path only — half-spread plus
+        depth-shaded slippage, NO sqrt overlay, NO adversarial-fill layer.
+
+        Used by `TribeShadowLedger` for WS3 I3.c / Q3 executor-parity
+        measurement: records what PaperExecutor's pure fill model would
+        have priced a given close at, so the offline analyzer can diff
+        against shadow's own simpler `_fill_price` and quantify the
+        executor-bias component of measured-vs-forecast PnL drift.
+
+        Bit-identity with `_fill_price` when `self._harden_cfg.enabled=False`
+        (both layers collapse to no-ops on the Gentle path).
+        """
+        sign = 1 if taker_side is Side.BUY else -1
+        side_depth = None
+        if state is not None:
+            side_depth = (state.ask_depth_5bps_usd if taker_side is Side.BUY
+                          else state.bid_depth_5bps_usd)
+        depth_bps = 0.0
+        if side_depth and side_depth > 0 and size_usd > 0:
+            depth_bps = 5.0 * size_usd / float(side_depth)
+        else:
+            depth_bps = self.slippage_bps
+            if self.slippage_size_k > 0 and size_usd > 0:
+                depth_bps *= 1.0 + self.slippage_size_k * (
+                    size_usd / self.slippage_ref_notional_usd
+                )
+        total_bps = min(
+            self.slippage_cap_bps,
+            self.half_spread_bps + depth_bps,
+        )
+        return mark * (1 + sign * total_bps / 10_000.0), total_bps
+
     def _fee(self, notional_usd: float) -> float:
         return notional_usd * self.fee_rate_bps / 10_000.0
 
