@@ -76,14 +76,21 @@ _TRIBE_CATEGORY: dict[str, str] = {
     "retail_degen_leveraged": "retail",
     "retail_app_newbie": "retail",
     "copy_trader": "retail",
+    "stablecoin_flow_buyer": "retail",  # on-ramp flow primarily retail-driven
     "ta_day_trader": "ta",
     "swing_trend_follower": "ta",
+    "cta_systematic_trend": "ta",
     "liquidation_hunter": "event",
     "news_fader": "event",
+    "news_scalper": "event",
+    "capitulation_buyer": "event",  # reacts to liquidation/flush tape
     "options_hedger_proxy": "hedger",
+    "options_dealer_gamma": "hedger",  # dealer gamma/delta hedging
     "leverage_cycle": "hedger",
+    "put_call_fader": "hedger",  # fades skew, hedger-adjacent
     "microstructure_prober": "microstructure",
     "mev_frontrunner": "mev",
+    "cascade_amplifier": "mev",  # amplifies in-progress liquidation cascades
     "passive_whale_twap": "whale",
 }
 # Rows: regime label (see regime.classifier.RegimeLabel).
@@ -998,7 +1005,7 @@ class ChessProjector:
         so the decision engine can detect crowded trades."""
         category_mass: dict[str, dict[str, float]] = {}
         for tid, (v, _signed, _strength) in initial_votes.items():
-            cat = _TRIBE_CATEGORY.get(tid, "ta")
+            cat = _TRIBE_CATEGORY[tid]
             pw = pool_w.get(tid, 0.0)
             bucket = category_mass.setdefault(cat, {"buy": 0.0, "sell": 0.0})
             bucket["buy"] += pw * v.buy_frac
