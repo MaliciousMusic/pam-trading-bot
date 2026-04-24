@@ -1,13 +1,15 @@
 # Phase 11 Diagnostic — PLAN
 
 **Branch:** `feat/tensor-engine`
-**Last updated:** 2026-04-23
-**Status:** WS3 H2 Option 1a attribution + live-feedback cycle complete;
-measurement infrastructure documented (`MEASUREMENT_INFRA.md`). R2
-(`conviction_boost` relocation) is queued behind a `MAX_GAIN` ceiling
-decision and the spawned 2026-04-21 divergence audit. See §5 Master
-checklist for the forward map — the §1 workstream table below is an
-archival index as of 2026-04-22.
+**Last updated:** 2026-04-25
+**Status:** H3 Phase 0 complete (P6 fix landed, P4 escalated to H5); H5
+Phase 0 audit + H5.A saturation clamp landed; H6 Phase 0 audit + H6.A
+DNA recursion-input clamp landed; **H6.B Phase 0 audit** (2026-04-25)
+identifies a second door (scale × DNA-output) with fix queued per audit
+§7 (Option B — `DEPTH_SCALE_MAX = 5`). H1 Phase 1 measurement remains
+data-accumulation-gated; D5 clock is currently not running (see §5.1.3).
+See §5 Master checklist for the forward map — the §1 workstream table
+below is an archival index as of 2026-04-22.
 
 ## 0. North star
 
@@ -150,11 +152,12 @@ historical D1-D5 scope decisions are preserved as §5.4.
 
 | Chip | State | Note |
 |:-----|:------|:-----|
-| H1 Phase 1 — decomposition measurement | ▶ Active — data-accumulation-gated | Analyzer script + tests landed 2026-04-24 ([`scripts/ws3_h1_decomp_analyze.py`](../../scripts/ws3_h1_decomp_analyze.py), [`tests/test_ws3_h1_decomp_analyze.py`](../../tests/test_ws3_h1_decomp_analyze.py)). Measurement blocked on ≥3 consecutive post-I1 days of live tape per §3.2 / D5. **Data clock reset 2026-04-24 evening** by Bybit venue swap (see §5.1.2); earliest Phase 1 run now ≥ 2026-04-28. Pre-I1 archives (04-18 → 04-21) are un-backfillable and additionally venue-obsolete under the amendment. |
-| Venue swap — Bybit primary ingest | ▶ Active — ingress port in flight | Binance futures WS silently geo-blocked from this host 2026-04-22 → present (TLS OK, zero frames). Switched primary venue to Bybit BTCUSDT linear perps (`wss://stream.bybit.com/v5/public/linear`). See §5.1.2 for full amendment and panel-invalidation consequences. |
+| **H6.B fix — depth-scale cap** | ▶ Active — queued for next session | Single-line fix in [`src/projector/chess.py`](../../src/projector/chess.py) per [`WS3_H6B_phase0_audit.md`](WS3_H6B_phase0_audit.md) §7 Option B: `scale = min(scale, DEPTH_SCALE_MAX=5)` on line 628. Blocks D5 clock restart — steady-state `saturation_hit` was 100 % after H6.A alone (door #1 only); door #2 (scale × DNA-output) is the current dominant mechanism. Fix box estimated 1 h 50 (see audit §7 + §10). No code touched tonight per cadre. |
+| H1 Phase 1 — decomposition measurement | ⏸  Blocked behind H6.B fix + new D5 anchor | Analyzer script + tests landed 2026-04-24 ([`scripts/ws3_h1_decomp_analyze.py`](../../scripts/ws3_h1_decomp_analyze.py), [`tests/test_ws3_h1_decomp_analyze.py`](../../tests/test_ws3_h1_decomp_analyze.py)). D5 clock is not currently running (see §5.1.3); earliest Phase 1 run requires H6.B landed + 3 consecutive full days of post-fix Bybit tape. Pre-I1 + pre-H5.A archives do not count. |
+| Venue swap — Bybit primary ingest | ▶ Shipped | Binance futures WS silently geo-blocked from this host 2026-04-22 → present (TLS OK, zero frames). Switched primary venue to Bybit BTCUSDT linear perps (`wss://stream.bybit.com/v5/public/linear`); commit `a9a220c`. See §5.1.2 for full amendment and panel-invalidation consequences. |
 | 2026-04-21 panel inclusion | ⏸  Quarantined 08:44→14:00 UTC | **Superseded by §5.1.2 venue amendment** — full 04-18 → 04-21 panel now venue-obsolete regardless of Fix A state. Quarantine retained for reference until Fix A scope is rewritten against the Bybit panel. |
 
-### 5.1.0 Recently closed (2026-04-23 → 2026-04-24)
+### 5.1.0 Recently closed (2026-04-23 → 2026-04-25)
 
 | Chip | Closed | Commit(s) | Note |
 |:-----|:------:|:----------|:-----|
@@ -165,6 +168,18 @@ historical D1-D5 scope decisions are preserved as §5.4.
 | WS3 H1 Phase 0 — structural audit | 2026-04-24 | `827040e` | CLEAN verdict ([`WS3_H1_path_audit.md`](WS3_H1_path_audit.md)); I1 unblocked. |
 | WS3 H1.I1 — instrumentation | 2026-04-24 | `3e2c3b6`, docs `42c79a0` | Five-field decomposition plumbed through auditor; full-day determinism PASS (sha256 `1fc982a69f3a1df5…`). |
 | Parallel-audit cohort (WS5/WS4/WS2/WS3b) | 2026-04-24 | `c46670a` `9bd1d86` `cb512fc` `05e3b05` | Ran read-only while the H1.I1 full-day gate was in flight, per `WS3_H1_SCOPE.md` §11. Docs-only; zero code change; gate result authoritative. See cohort roll-up below. |
+| WS3 H3 Phase 0 — council-redundancy path audit | 2026-04-24 | `484d9d5` | P6 bug-found (`_TRIBE_CATEGORY` missed 20/24 tribes — only 4 mapped); P4 attractor escalated to H5; P8 resolved. See [`WS3_H3_path_audit.md`](WS3_H3_path_audit.md). |
+| WS3 P6 fix — tribe-category mapping | 2026-04-24 | `84f50ed` | `_TRIBE_CATEGORY` now covers all 24 loaded tribes; one-line dict fix + tests. |
+| WS3 I3 — live-tape additive schema | 2026-04-24 | `c0afa04` scope, `fabc5f4` I3.a, `0586a73` I3.b, `2ffe035` I3.c | `conviction_boost` / `harvest_mass_ratio` / `path_integrity_ok` / `regime_label_at_tick` / `realized_bps_paper_model` mirrored onto PendingAnchor / Resolved / ShadowTrade (unblocks WS5/WS4/WS2 live-tape measurement). |
+| WS3 H5 scope | 2026-04-24 | `671dd4e` | Cumulative-path oscillation diagnostic scoped as P4 escalation target. |
+| WS3 H5.I1 — instrumentation | 2026-04-24 | `b1c1f97` | Persist `abs_activity_bps` + `step_bps_signflips` per tick through auditor. |
+| WS3 H5 Phase 0 — audit | 2026-04-24 | `f101800` | **Bug-found.** 1/99 attractor fingerprinted; runaway `step_bps` identified as dominant mechanism. Fix = saturation clamp. See [`WS3_H5_phase0_audit.md`](WS3_H5_phase0_audit.md). |
+| WS3 H5.A — saturation clamp | 2026-04-24 | `f0076bd` | `MAX_STEP_BPS = 500.0` output clamp in [`src/projector/chess.py`](../../src/projector/chess.py) `_apply_saturation_clamp`; forces `saturation_hit = True` + `conf = 0` on breach. Full-day determinism gate PASS. |
+| Pathological baseline — pre-H5.A | 2026-04-24 | `f948e36` | `data/baseline/pathological_2026-04-24_pre-H5A` — 12 011 rows, 4 sha256 anchors, H5 P4 attractor reproduced. Regression reference for any future DNA-path tuning. |
+| WS3 H6 scope | 2026-04-24 | `ff995a3` | DNA-recursion positive-feedback audit scoped as H5.A partial-fix follow-up. |
+| WS3 H6 Phase 0 — audit | 2026-04-24 | `cf97165` | **Bug-found.** Jury/Schur on 2nd-order recurrence: `b = β · scale` exceeds unity on `ta_dna` for any `scale > 1.54`. Two candidate fixes: DNA input clamp (Option C) vs mechanism rewrite. See [`WS3_H6_phase0_audit.md`](WS3_H6_phase0_audit.md). |
+| WS3 H6.A — DNA recursion-input clamp | 2026-04-24 | `6332848` (local; not yet pushed) | `DNA_CTX_CLAMP_BPS = 100.0` applied to `prev_state_bps` / `prev_delta_bps` entering DNAContext ([`src/projector/chess.py:601-603`](../../src/projector/chess.py)); 22 tests in [`tests/projector/test_dna_input_clamp.py`](../../tests/projector/test_dna_input_clamp.py); determinism gate PASS byte-identical. **Closes door #1 only** — 2026-04-25 live 5-min validation showed 100 % steady-state `saturation_hit`, revealing a second door. Commit title ("closes Phase 0 bug-found") is partial; reconciled in PR body. |
+| WS3 H6.B Phase 0 — audit | 2026-04-25 | `e666c05` (local; not yet pushed) | **Bug-found — door #2.** `step_bps = (dna_delta + event_bps) × scale` where `scale ∈ [1, 20]`; post-H6.A-clamp `ta_dna` output ≈ 65 bps → breaches `MAX_STEP_BPS = 500` at `scale > 7.1`. Simple linear inequality, not Jury/Schur. Fix recommendation: Option B — cap `scale` at `DEPTH_SCALE_MAX = 5` ([`chess.py:628`](../../src/projector/chess.py)); worst-case quartile LOW–MEDIUM. §8 scans 3 candidate doors #3 (event_bps / base_strength / consensus) with promotion criteria. See [`WS3_H6B_phase0_audit.md`](WS3_H6B_phase0_audit.md). |
 
 **Parallel-audit cohort roll-up (2026-04-24):**
 
@@ -196,6 +211,37 @@ historical D1-D5 scope decisions are preserved as §5.4.
 - Bybit tick price-size is 0.10 (same as Binance on BTCUSDT USD-M), but orderbook depth resolution is 50 levels (`orderbook.50.BTCUSDT`) versus Binance's 20. Depth-aware projector kernel normalization (in `_normalize_book_depth`) is top-of-book + 5-bps window → resolution difference is absorbed before it reaches the kernel.
 
 **No scope docs edited.** This amendment lives in PLAN only; `WS3_SCOPE.md` D5/D6 and `WS3_H1_SCOPE.md` §3 remain as written. The live-tape rule is unchanged; only the venue is. Consider a scope-doc revision only if a second venue swap is considered, or if measurement finds Bybit microstructure materially changes intervention ordering.
+
+### 5.1.3 D5 clock status (2026-04-25)
+
+**Clock not currently running.** Two successive invalidations since the
+Bybit venue swap mean no accumulation window has been laid down yet:
+
+1. **2026-04-24 evening — venue swap (§5.1.2)** reset the D5 count to
+   zero on the Binance panel.
+2. **2026-04-24/25 — H5.A + H6.A landings** change projector output
+   shape (runaway clamp + DNA-input clamp). Any Bybit tape recorded
+   pre-H5.A is pre-fix and does not count toward a D5 window that
+   measures the post-fix world.
+3. **2026-04-25 — H6.B Phase 0 audit** identifies a third fix (door
+   #2, scale × DNA-output) still pending. Starting a D5 window before
+   H6.B lands would measure a projector that still saturates by
+   construction.
+
+**Restart protocol.** D5 clock begins at the first full Bybit day after
+H6.B fix lands and passes a full-day determinism gate + 5-min live
+validation showing `saturation_hit` steady-state ratio < 10 %. Earliest
+Phase 1 run = fix-day + 3 full Bybit days (04-26 if H6.B lands
+2026-04-26 morning → clock 04-26/27/28, run 04-29).
+
+**Invariants preserved:**
+
+- D5 rule (multi-day panel, ≥ 3 consecutive days) — unchanged.
+- D6 rule (live-tape only for H-measurement) — unchanged.
+- Determinism gate authority — every projector change rides the
+  `verify_determinism.py` gate; pathological baseline
+  (`f948e36`) is the regression reference for any future DNA-path
+  tuning.
 
 ### 5.1.1 Post-R2 fix queue (from 2026-04-21 divergence audit)
 
@@ -330,48 +376,44 @@ this the default.
 
 ## 10. Immediate next action
 
-**H1 Phase 1 is the active chip — data-accumulation-gated.**
+**H6.B fix is the active chip — blocks D5 clock restart.**
 
-Prior gates cleared 2026-04-23 → 2026-04-24 (§5.1.0 closed-chips
-table): MAX_GAIN, 04-21 divergence audit, R2 A/B, H1 Phase 0, H1.I1
-instrumentation, H1.I1 full-day determinism gate. Analyzer script +
-tests landed 2026-04-24 ([`scripts/ws3_h1_decomp_analyze.py`](../../scripts/ws3_h1_decomp_analyze.py)).
+Per [`WS3_H6B_phase0_audit.md`](WS3_H6B_phase0_audit.md) §7, apply
+Option B: cap depth-scale at `DEPTH_SCALE_MAX = 5` on
+[`chess.py:628`](../../src/projector/chess.py). One-line mechanism
+change; worst-case-quartile LOW–MEDIUM. Box estimate 1 h 50
+(audit §7 + §10): ~30 min implementation + tests, ~40 min determinism
+gate + pathological replay, ~30 min live 5-min validation,
+~10 min handoff updates.
 
-**Blocker on running the measurement today:** existing live-tape
-archives (04-18 → 04-21) predate I1 and do **not** carry the
-decomposition fields. Backfill is impossible per
-[`WS3_H1_SCOPE.md`](WS3_H1_SCOPE.md) §3.1. Forward clock starts at
-I1 landing (2026-04-24 13:40). No 04-22 / 04-23 data exists under
-`data/` — those days were not recorded, so there is no hidden
-backfill opportunity.
+**Acceptance (all four):**
 
-**Forward sequence:**
+1. `tests/projector/test_dna_input_clamp.py` + new scale-cap tests green.
+2. `verify_determinism --day 2026-04-20` byte-identical across two runs.
+3. Pathological baseline replay (`data/baseline/pathological_2026-04-24_pre-H5A`) — `saturation_hit` ratio drops by ≥ 50 % vs. pre-fix baseline.
+4. Live 5-min bot restart on Bybit — steady-state `saturation_hit` ratio < 10 % (vs. 100 % after H6.A alone).
 
-1. **Live tape accrues ≥ 3 post-I1 days on Bybit** (2026-04-24 evening
-   partial + 04-25 / 04-26 / 04-27 full). Clock reset by §5.1.2
-   venue swap; Binance 04-18/19/20/21 panel is venue-obsolete and
-   does not count. No action required from this workstream during
-   accrual; parallel paths (H3 scope prep, Fix A rescope, I3 planning)
-   may proceed.
-2. **H1 Phase 1 measurement** (earliest 2026-04-28) —
-   `python -m scripts.ws3_h1_decomp_analyze --days 2026-04-24
-   2026-04-25 2026-04-26`. Produces per-field distributions,
-   horizon-stratified tables, multiplicative sanity cross-check,
-   top-Q subset. JSON artifact lands in
+**Escalations if acceptance fails:**
+
+- If steady-state sat ratio stays > 30 %, STOP and promote one of the
+  §8 candidate doors #3 (event_bps / base_strength / consensus
+  aggregation) per that audit's promotion criteria.
+- If pathological replay fails to converge, re-open H6 audit with
+  full numerical derivation (not just Jury/Schur qualitative bound).
+
+**After H6.B lands:**
+
+1. **D5 clock restart** — first full Bybit day post-H6.B is day 1
+   (§5.1.3 restart protocol). Earliest H1 Phase 1 run = fix-day + 3.
+2. **H1 Phase 1 measurement** —
+   `python -m scripts.ws3_h1_decomp_analyze --days <D+1> <D+2> <D+3>`.
+   Produces per-field distributions, horizon-stratified tables, top-Q
+   subset. JSON artifact lands in
    `research/phase11_diagnostic/_ws3_h1_decomp/`.
-3. **Phase 1 snapshot doc** — `WS3_H1_phase1_snapshot.md` —
-   identifies the binding factor (scope §3.3 expected-if-true
-   signatures) and selects intervention A/B/C per scope §4.
-4. **Intervention commit (one of A/B/C)** — one mechanism change,
-   full determinism gate, full live-tape re-measurement across the
-   3-day post-I1 panel. Per scope §4.4 no stacking; ship the
-   strongest option identified by Phase 1, re-measure, re-open for
-   B/C only if the first option nulls against D3.
-5. **H3 opens** if H1 converges OR if H1 nulls (scope §3.4 kill
-   criterion). Q2 per §5.2 forward map.
-6. **Fix A / Fix C / 04-21 re-admission** (§5.1.1) — deferred
-   post-H1 Phase 1; 04-21 quarantine does not block H1 (H1 reads
-   post-I1 days only).
+3. **Phase 1 snapshot** → `WS3_H1_phase1_snapshot.md` identifies
+   binding factor; selects intervention A/B/C per scope §4.
+4. **Intervention commit** — one mechanism, full gate, full re-measure.
+5. **H3 / Fix queue** (§5.2, §5.1.1) — re-sequenced post-H1 snapshot.
 
 **Attribution discipline** throughout: one commit per mechanism
 change, determinism gate between each (`scripts.verify_determinism
@@ -379,6 +421,5 @@ change, determinism gate between each (`scripts.verify_determinism
 
 ---
 
-*PLAN last revised 2026-04-24 post-H1.I1 + parallel-audit cohort +
-Bybit venue swap (§5.1.2). Next revision after H1 Phase 1 snapshot
-lands on the Bybit panel.*
+*PLAN last revised 2026-04-25 post-H6.B Phase 0 audit. Next revision
+after H6.B fix lands on the Bybit panel + D5 clock restarts.*
