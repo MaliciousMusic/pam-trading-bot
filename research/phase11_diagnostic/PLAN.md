@@ -150,39 +150,66 @@ historical D1-D5 scope decisions are preserved as §5.4.
 
 | Chip | State | Note |
 |:-----|:------|:-----|
-| R2 — `conviction_boost` relocation to `DecisionEngine` | ▶ Ready — gates cleared | Both blockers resolved (MAX_GAIN confirmed `26cb61e`; audit delivered 2026-04-23). Landing sequence per [`WS3_R2_step_A_attribution.md`](WS3_R2_step_A_attribution.md) §4. Framed as **measurement hygiene, not directional fix**; algebraic expectation **0.00 pp** directional delta (boost is a positive scalar on signed pred — cannot flip sign); condition-(a) 3 pp pause trigger serves as a refactor-bug safety rail, not a mechanism-change gate. |
-| MAX_GAIN ceiling decision | ✅ Confirmed 2026-04-23 | Option (ii) — ceiling stays at 40, WS3 H-measurement reads live tape — accepted per [`MEASUREMENT_INFRA.md`](MEASUREMENT_INFRA.md) §4.1 (commit `26cb61e`). §4.1.1 revisit triggers in place (live gain sustained >20 for 72 h, sprint pressure root-caused, or structural projector change invalidating the 1.57 baseline). |
-| 2026-04-21 projector divergence audit | ✅ Delivered 2026-04-23 | Verdict in [`proj_divergence_20260421_audit.md`](proj_divergence_20260421_audit.md): **conjunction root cause** — (1) 2h 54m tape gap 08:44→11:39 UTC, (2) first post-gap `forecast_conf` 0.245 (~27× 04-20's equivalent), (3) `retail_dna` panic branch (`chase = 4·Δ` geometric + `overshoot = 0.0004·state²` quadratic), (4) `mean_reversion_rate = 0.005` too weak to damp the quadratic, (5) `ForecastAuditor` 3600 s sigma window perpetuates contamination. Sprint does **not** reproduce (max \|emb\| 27 bps vs live 8.86e+300). Fix ladder: **A → C → B** (audit §4 attribution discipline), defer D/E. No production code changed. |
+| H1 Phase 1 — decomposition measurement | ▶ Active — data-accumulation-gated | Analyzer script + tests landed 2026-04-24 ([`scripts/ws3_h1_decomp_analyze.py`](../../scripts/ws3_h1_decomp_analyze.py), [`tests/test_ws3_h1_decomp_analyze.py`](../../tests/test_ws3_h1_decomp_analyze.py)). Measurement blocked on ≥3 consecutive post-I1 days of live tape per §3.2 / D5. I1 landed 2026-04-24 13:40; earliest Phase 1 run therefore 2026-04-27 (04-24 partial + 04-25 + 04-26 close). Pre-I1 archives (04-18 → 04-21) lack decomposition fields and are un-backfillable. |
 | 2026-04-21 panel inclusion | ⏸  Quarantined 08:44→14:00 UTC | Diagnostic-only until Fix A lands and 04-21 re-replays clean. Quarantine widened past the audit's 13:00 UTC recommendation to absorb one full `ForecastAuditor` sigma window (3600 s) past the last explicit contamination. Re-admit under `rebaseline_date` marker in [`WS3_H2_option1a_snapshot.md`](WS3_H2_option1a_snapshot.md) §5. |
+
+### 5.1.0 Recently closed (2026-04-23 → 2026-04-24)
+
+| Chip | Closed | Commit(s) | Note |
+|:-----|:------:|:----------|:-----|
+| MAX_GAIN ceiling decision | 2026-04-23 | `26cb61e` | Option (ii) accepted; WS3 H-measurement reads live tape. `MEASUREMENT_INFRA.md` §4.1.1 revisit triggers in place. |
+| 2026-04-21 projector divergence audit | 2026-04-23 | [`proj_divergence_20260421_audit.md`](proj_divergence_20260421_audit.md) | Conjunction root cause identified; Fix ladder A→C→B queued in §5.1.1. |
+| R2 commit A — `conviction_boost` drop from projector | 2026-04-23 | `fd400e8` | Measurement-hygiene refactor; 0.00 pp directional delta (algebraic). |
+| R2 commit B — `conviction_boost` as sizing multiplier | 2026-04-24 | `20b53f6`, docs `31b0646` | Full-day determinism PASS; sprint dormant by construction ([`WS3_R2_step_B_attribution.md`](WS3_R2_step_B_attribution.md)). |
+| WS3 H1 Phase 0 — structural audit | 2026-04-24 | `827040e` | CLEAN verdict ([`WS3_H1_path_audit.md`](WS3_H1_path_audit.md)); I1 unblocked. |
+| WS3 H1.I1 — instrumentation | 2026-04-24 | `3e2c3b6`, docs `42c79a0` | Five-field decomposition plumbed through auditor; full-day determinism PASS (sha256 `1fc982a69f3a1df5…`). |
+| Parallel-audit cohort (WS5/WS4/WS2/WS3b) | 2026-04-24 | `c46670a` `9bd1d86` `cb512fc` `05e3b05` | Ran read-only while the H1.I1 full-day gate was in flight, per `WS3_H1_SCOPE.md` §11. Docs-only; zero code change; gate result authoritative. See cohort roll-up below. |
+
+**Parallel-audit cohort roll-up (2026-04-24):**
+
+- **WS5 harvest-path audit** ([`WS5_harvest_path_audit.md`](WS5_harvest_path_audit.md)) — sprint cannot fire the harvest-mass conviction_boost path; `ChessProjector.calibrator is None` in sprint. §2 "400× weaker pressure" framing reduced to categorical, not quantitative. Recommend live-tape measurement once I3 lands (`conviction_boost` + `harvest_mass_ratio` + `path_integrity_ok` plumbed to auditor).
+- **WS4 regime-hysteresis audit** ([`WS4_regime_hysteresis_audit.md`](WS4_regime_hysteresis_audit.md)) — 1,268 regime transitions / 16,811 sprint ticks (75.4/1000); 54% of runs ≤5 ticks; `chop↔normal` 43% of all transitions. Not an H1 blocker; Schmitt-threshold intervention scoped for post-H1.
+- **WS2 executor parity audit** ([`WS2_executor_parity_audit.md`](WS2_executor_parity_audit.md)) — reframes PLAN Q3: there is no "shadow executor", only PaperExecutor + per-tribe TribeShadowLedger. Six asymmetry classes documented (depth-blind fill, no Harden overlay, no book-depth cap, no black-swan detector, no funding accrual, fee defaults 2.0 vs 5.0 bps). Dormant in sprint (no calibrator consumers); live-only impact. Recommend I3 adds `realized_bps_paper_model` alongside `shadow.realized_bps`.
+- **WS3b warmup/persistence audit** ([`WS3b_warmup_persistence_audit.md`](WS3b_warmup_persistence_audit.md)) — "Weakness #4" of PLAN:183 reinterpreted from PLAN's parenthetical (the original weakness list is absent from the committed scope doc). Persistence-weighted anchor horizons: capability gap, not broken impl — anchor specs fixed `(label, step_idx)`, no regime label on `PendingAnchor`/`Resolved`, no dwell weighting. Warmup: KernelCalibrator `min_samples=50` + immediate hi-clamp saturation on sprint (confirmed live by PID 1462 gate log). Four recommendations, priority-ordered; no protected surfaces touched.
 
 ### 5.1.1 Post-R2 fix queue (from 2026-04-21 divergence audit)
 
+R2 closed 2026-04-24 (both commits landed); H1 Phase 0/I1 opened
+immediately as the next chip (per §5.2 Q1). Fix ladder below is
+therefore **deferred post-H1 Phase 1**, not post-R2 — rationale is
+that the 04-21 contamination is already mitigated by panel
+quarantine, and the 4-day panel is reconstituted once Fix A lands.
+H1 Phase 1 runs forward against post-I1 days only (no dependency on
+the pre-I1 panel), so the ladder does not block H1 progress.
+
 | Fix | Scope | State |
 |:----|:------|:------|
-| **A — per-step `step_bps` clamp + counter** | `chess.py:~580`; cap `step_bps` to ±400 bps (5× the largest legitimate single-step observed on 04-18/19/20). Loud counter + pre-clamp value log — clamp must not be silent. Protects against any DNA runaway, not just retail. | ⏸ Queued post-R2 |
-| **C — anchor-enqueue sanity check** | `engine.py::_compute_predictions`; skip anchor if \|emb\| > 2000 bps or non-finite; counter `forecaster.anchor_dropped`. Defense-in-depth behind Fix A. | ⏸ Queued post-Fix-A |
+| **A — per-step `step_bps` clamp + counter** | `chess.py:~580`; cap `step_bps` to ±400 bps (5× the largest legitimate single-step observed on 04-18/19/20). Loud counter + pre-clamp value log — clamp must not be silent. Protects against any DNA runaway, not just retail. | ⏸ Deferred post-H1 Phase 1 |
+| **C — anchor-enqueue sanity check** | `engine.py::_compute_predictions`; skip anchor if \|emb\| > 2000 bps or non-finite; counter `forecaster.anchor_dropped`. Defense-in-depth behind Fix A. | ⏸ Deferred post-Fix-A |
 | **B — retail quadratic → tanh saturator** | `behavioral_dna.py::retail_dna`; replace `0.0004 · state²` overshoot with `40 · tanh(state/400)` saturator; cap `chase` at `min(4·prev_delta, 200)`. Mechanism change — requires full WS3 H2 re-evaluation. | ⏸ Conditional — lands only if Fix A's counter fires on 04-18/19/20 clean days |
 | **D — projector state reset on gap** | Flag-gated ForecastAuditor window truncation + conviction-history warm-start reset + cold-start calibrator for one projection after gap > 300 s. | ⏸ Deferred — re-scope after A+B+C attribute cleanly |
 | **E — strengthen `mean_reversion_rate`** | YAML bump `0.005 → 0.015` or horizon-aware schedule. One-line change but interacts with WS3 H2 consensus fit (the 0.02 → 0.005 drop was motivated). | ⏸ Deferred — WS3 R2 candidate with own attribution sprint |
 
 Attribution discipline (per audit §4): Fix A → re-replay 04-21 → Fix C → re-replay → Fix B (if counter-promoted) → re-replay. One commit per mechanism, determinism gate between each. No bundling.
 
-### 5.2 Queued — post-R2 (forward map)
+### 5.2 Forward map — remaining workstreams
 
-Phase 11 reopens the research backlog once R2 lands cleanly. No new
-chips until R2 closes. Order is not fixed; H1 opens first by default
-(D1 causal ordering).
+R2 closed 2026-04-24; H1 Phase 0/I1 closed 2026-04-24; Q3-Q6
+audits delivered as a docs cohort 2026-04-24 (see §5.1.0 roll-up).
+The **measurement** commits for Q3/Q5 remain conditional on I3
+plumbing; Q4/Q6 recommendations are scheduled post-H1 per each
+audit's §5. Q2/Q7/Q8 unchanged.
 
-| # | Workstream | Scope sketch | Gate |
-|:--|:-----------|:-------------|:-----|
-| Q1 | **H1 — confidence-formula compounding** | Measure whether `signal_quality × directional × diversity_mult` structurally caps confidence < 0.25 regardless of the underlying signal. Scope doc first (`WS3_H1_SCOPE.md`), options A/B/C per §3. | Scope-first; requires explicit go-ahead after scope review. |
-| Q2 | **H3 — tribe correlation / N_eff** | Measure effective rank of 24-tribe vote matrix; diversity_mult inflation quantified. | Opens after H1 converges or nulls. |
-| Q3 | **WS2 — executor parity audit** | Shadow-vs-main executor fill/slippage/queue behaviour diff. Deferred since WS1; revisit scope vs. what WS3 absorbed. | Post-H1/H3. |
-| Q4 | **WS4 — regime classifier hysteresis** | WS2.5 exposed regime sensitivity; classifier stability across 5-60 s horizons is a raised-priority follow-up. | Post-H1/H3. |
-| Q5 | **WS5 — harvest boost ablation** | Remove the harvest-tribe amplification path; measure delta. | Post-H1/H3. |
-| Q6 | **WS3b — original WS3 warmup / persistence** | Weakness #4 from the original WS3 scope (persistence-weighted anchor horizons, warmup behaviour) reinstated as its own chip. | Post-H1/H3. |
-| Q7 | **WS7 — L2 microstructure data feed** | H4 escalation: only if H1 A/B/C + H3 each null against the 52 % bar. Paid-data conversation per `project_budget_constraint.md`. | Conditional — H1/H3 nulls. |
-| Q8 | **Phase 11 Retrospective** | Consolidate findings → phase close doc; recommend next phase. | Terminal. |
+| # | Workstream | Scope sketch | Gate / State |
+|:--|:-----------|:-------------|:-------------|
+| Q1 | **H1 — confidence-formula compounding** | Measure whether `signal_quality × directional × diversity_mult` structurally caps confidence < 0.25 regardless of the underlying signal. Phase 0 ✅, I1 ✅, Phase 1 ▶ blocked on ≥3 post-I1 days. Options A/B/C per [`WS3_H1_SCOPE.md`](WS3_H1_SCOPE.md) §4. | ▶ Phase 1 active (data-gated); earliest run 2026-04-27. |
+| Q2 | **H3 — tribe correlation / N_eff** | Measure effective rank of 24-tribe vote matrix; diversity_mult inflation quantified. | ⏸ Opens after H1 converges or nulls. |
+| Q3 | **WS2 — executor parity audit** | Shadow-vs-main executor fill/slippage/queue behaviour diff. Deferred since WS1. | ✅ Audit delivered `cb512fc` ([`WS2_executor_parity_audit.md`](WS2_executor_parity_audit.md)). Live-tape measurement of bias pending I3 plumbing (`realized_bps_paper_model`). |
+| Q4 | **WS4 — regime classifier hysteresis** | WS2.5 exposed regime sensitivity; classifier stability across 5-60 s horizons is a raised-priority follow-up. | ✅ Audit delivered `9bd1d86` ([`WS4_regime_hysteresis_audit.md`](WS4_regime_hysteresis_audit.md)). Schmitt-threshold intervention scoped post-H1. |
+| Q5 | **WS5 — harvest boost ablation** | Remove the harvest-tribe amplification path; measure delta. | ✅ Audit delivered `c46670a` ([`WS5_harvest_path_audit.md`](WS5_harvest_path_audit.md)). Sprint cannot fire harvest path by construction; live-tape ablation pending I3 plumbing. |
+| Q6 | **WS3b — original WS3 warmup / persistence** | Persistence-weighted anchor horizons, warmup behaviour (PLAN:183 "Weakness #4" rephrased). | ✅ Audit delivered `05e3b05` ([`WS3b_warmup_persistence_audit.md`](WS3b_warmup_persistence_audit.md)). Additive anchor-regime-label schema extension queued post-H1. |
+| Q7 | **WS7 — L2 microstructure data feed** | H4 escalation: only if H1 A/B/C + H3 each null against the 52 % bar. Paid-data conversation per `project_budget_constraint.md`. | ⏸ Conditional — H1/H3 nulls. |
+| Q8 | **Phase 11 Retrospective** | Consolidate findings → phase close doc; recommend next phase. | ⏸ Terminal. |
 
 ### 5.3 Deferred chips
 
@@ -278,41 +305,52 @@ this the default.
 
 ## 10. Immediate next action
 
-**Unblocked — R2 ready to execute.** Both prior gates have cleared:
+**H1 Phase 1 is the active chip — data-accumulation-gated.**
 
-1. **MAX_GAIN ceiling** — ✅ Option (ii) confirmed per
-   [`MEASUREMENT_INFRA.md`](MEASUREMENT_INFRA.md) §4.1 / commit `26cb61e`.
-2. **2026-04-21 projector divergence audit** — ✅ delivered
-   ([`proj_divergence_20260421_audit.md`](proj_divergence_20260421_audit.md)).
-   04-21 quarantined 08:44→14:00 UTC; Fix A queued post-R2 to unblock
-   re-admission.
+Prior gates cleared 2026-04-23 → 2026-04-24 (§5.1.0 closed-chips
+table): MAX_GAIN, 04-21 divergence audit, R2 A/B, H1 Phase 0, H1.I1
+instrumentation, H1.I1 full-day determinism gate. Analyzer script +
+tests landed 2026-04-24 ([`scripts/ws3_h1_decomp_analyze.py`](../../scripts/ws3_h1_decomp_analyze.py)).
+
+**Blocker on running the measurement today:** existing live-tape
+archives (04-18 → 04-21) predate I1 and do **not** carry the
+decomposition fields. Backfill is impossible per
+[`WS3_H1_SCOPE.md`](WS3_H1_SCOPE.md) §3.1. Forward clock starts at
+I1 landing (2026-04-24 13:40). No 04-22 / 04-23 data exists under
+`data/` — those days were not recorded, so there is no hidden
+backfill opportunity.
 
 **Forward sequence:**
 
-1. **R2 commit A** — `conviction_boost` removed from `ChessProjector`
-   + four compensating de-boost sites simplified. Attribution per
-   [`WS3_R2_step_A_attribution.md`](WS3_R2_step_A_attribution.md) §4.
-   Algebraic expectation **0.00 pp** directional delta; the condition-(a)
-   3 pp pause trigger is a refactor-bug safety rail, not a
-   mechanism-change gate.
-2. **R2 commit B** — `conviction_boost` read in `DecisionEngine` as a
-   sizing multiplier, Path-Integrity clamp interaction verified.
-3. **Fix A** — per-step `step_bps` clamp + loud counter (audit §4.A).
-4. **Fix C** — anchor-enqueue sanity check (audit §4.C).
-5. **Fix A counter readout** on 04-18/19/20 clean days → decide whether
-   **Fix B** is promoted (mechanism change, requires WS3 H2
-   re-evaluation) or deferred.
-6. **Re-replay 04-21 post-Fix-A**; if clean, re-admit to panel under a
-   `rebaseline_date` marker in
-   [`WS3_H2_option1a_snapshot.md`](WS3_H2_option1a_snapshot.md) §5.
-7. **H1 scope doc (Q1)** — default next chip once R2 + Fix A/C land
-   clean and the 4-day panel is reconstituted.
+1. **Live tape accrues ≥ 3 post-I1 days** (2026-04-24 tail, 04-25,
+   04-26). No action required from this workstream during accrual;
+   parallel paths (H3 scope prep, Fix A rescope, I3 planning) may
+   proceed.
+2. **H1 Phase 1 measurement** (earliest 2026-04-27) —
+   `python -m scripts.ws3_h1_decomp_analyze --days 2026-04-24
+   2026-04-25 2026-04-26`. Produces per-field distributions,
+   horizon-stratified tables, multiplicative sanity cross-check,
+   top-Q subset. JSON artifact lands in
+   `research/phase11_diagnostic/_ws3_h1_decomp/`.
+3. **Phase 1 snapshot doc** — `WS3_H1_phase1_snapshot.md` —
+   identifies the binding factor (scope §3.3 expected-if-true
+   signatures) and selects intervention A/B/C per scope §4.
+4. **Intervention commit (one of A/B/C)** — one mechanism change,
+   full determinism gate, full live-tape re-measurement across the
+   3-day post-I1 panel. Per scope §4.4 no stacking; ship the
+   strongest option identified by Phase 1, re-measure, re-open for
+   B/C only if the first option nulls against D3.
+5. **H3 opens** if H1 converges OR if H1 nulls (scope §3.4 kill
+   criterion). Q2 per §5.2 forward map.
+6. **Fix A / Fix C / 04-21 re-admission** (§5.1.1) — deferred
+   post-H1 Phase 1; 04-21 quarantine does not block H1 (H1 reads
+   post-I1 days only).
 
-Attribution discipline throughout: one commit per mechanism change,
-determinism gate between each (`scripts.verify_determinism --day
-2026-04-20`), no bundling. See §5 for the full forward map.
+**Attribution discipline** throughout: one commit per mechanism
+change, determinism gate between each (`scripts.verify_determinism
+--day 2026-04-20`), no bundling. See §5 for the full forward map.
 
 ---
 
-*PLAN last revised 2026-04-23 post-MEASUREMENT_INFRA. Next revision
-after R2 lands (sprint + live attribution).*
+*PLAN last revised 2026-04-24 post-H1.I1 + parallel-audit cohort.
+Next revision after H1 Phase 1 snapshot lands.*
