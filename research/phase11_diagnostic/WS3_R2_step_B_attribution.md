@@ -1,16 +1,20 @@
 # WS3 R2 Step B — Attribution snapshot
 
-**Status:** **Commit B landed + full-day determinism PASS
-(2026-04-24).** Commit B hash `20b53f6`. Tests 36/36 (21 decision +
-15 paper) passing with three new B tests. Full-day determinism gate
-B: **PASS**, sha256 `1fc982a69f3a1df5…`, 260,143,564 bytes ×2
-(see §5.4). Kernel-cal correction distribution (n=5,040 across 2
-runs = 2,520/run): **identical to A-alone** — min=4.001, p50=5.059,
-p90=9.559, max=11.245, 15.0% clamp rate (see §5.2). Decisions.jsonl
-distributions (conv_mult, dsa, PATH_INTEGRITY_CAP fraction): extraction
-in progress via persistent `run_replay` job `bjy07teuo`. Live-tape
-post-deploy attribution (§5.1): TODO on first post-A+B production
-session.
+**Status:** **Commit B landed + full-day determinism PASS + sprint
+distributions mined (2026-04-24).** Commit B hash `20b53f6`. Tests
+36/36 (21 decision + 15 paper) passing with three new B tests.
+Full-day determinism gate B: **PASS**, sha256 `1fc982a69f3a1df5…`,
+260,143,564 bytes ×2 (see §5.4). Kernel-cal correction distribution
+(n=5,040 across 2 runs = 2,520/run): **identical to A-alone** —
+min=4.001, p50=5.059, p90=9.559, max=11.245, 15.0% clamp rate
+(see §5.2). **Sprint reason-string mining (n=444 opens, job
+`bjy07teuo`): `conv_mult=1.00` on 100 % of opens; `drv=1.00` on
+100 % of tagged opens; 0 `PATH_INTEGRITY_CAP` fires.** Sprint
+tape **cannot empirically activate B** — MEASUREMENT_INFRA §2's
+400× pressure weakness makes the harvest-mass-radar dormant on
+sprint input. Correctness gate closed on algebra + determinism +
+tests; **B's *value* measurement is now gated entirely on the
+first post-deploy live-tape session** (§5.1).
 
 > **What R2 does NOT fix.** B does not change directional hit rate
 > (commit A's algebra already pinned that at 0.00 pp delta) and does
@@ -112,24 +116,44 @@ Commit B steps:
 
 ### 5.1 Live-tape delta (source: `data/forecasts/<day>.jsonl`)
 
+Newly load-bearing after the §5.2 finding below: sprint cannot
+exercise B. Live-tape is the *only* surface where B's sizing lever
+is active.
+
 - Aggregate notional delta, per-session: **TODO** (live-tape archive
   does not persist per-anchor `conviction_boost` or `driver_skill_avg`,
   so this must come from the first post-deploy session's decisions.jsonl
   reason-string stream).
 - Distribution of `conv_mult` actually applied in production: **TODO**.
+  Open question: does live net_pressure produce `conviction_boost >
+  1.0` on a non-trivial fraction of ticks, or does the sprint
+  finding (0 %) also hold live? Paying the price of the deploy to
+  find out.
 - Fraction of ticks where Path-Integrity clamp fired and suppressed
-  `conv_mult` to 1.0: **TODO**.
+  `conv_mult` to 1.0: **TODO**. If live-tape `driver_skill_avg`
+  distribution differs from sprint (sprint was pinned at 1.0 for all
+  441 tagged opens), this number becomes interesting.
 - Directional hit rate delta pre-B vs post-B: **expected 0.00 pp**
   per §2. Sanity-rail verification when live-tape lands.
+
+**If live-tape §5.1 measurement also shows conv_mult ≈ 1.0 on 100 %
+of opens:** the entire harvest-mass-radar pipeline is not clearing
+whatever threshold gates `conviction_boost > 1.0` even on live
+input, B is effectively dead code in production, and the architecture
+needs re-scoping (either the threshold is wrong or the signal
+computation is). This is a post-H1/H3 investigation if it holds.
 
 ### 5.2 Sprint-tape delta (source: verify_determinism full-day run)
 
 - Decisions.jsonl size delta vs A-only: **+4,840 bytes (+0.00186 %)
   full-day** (A=260,138,724 B=260,143,564). Short-window delta was
-  larger in absolute-fraction terms (+0.063 % across 600 ticks) —
-  consistent with the cold-start window containing disproportionate
-  conv_mult > 1.0 opens before the Path-Integrity clamp starts firing
-  steadily; aggregated across 24 h the sizing delta flattens.
+  larger in absolute-fraction terms (+0.063 % across 600 ticks).
+  The full-day delta is not from `conv_mult × emove` scaling — it's
+  purely reason-string length (the added `conv×X.XX drv=X.XX` tokens
+  add ~14 bytes per open, ~444 opens per day = ~6.2 KB, close to the
+  observed +4.8 KB after accounting for already-present whitespace
+  differences). **See the `conv_mult` distribution below — the sizing
+  multiplier was numerically inert on the sprint tape.**
 - **Kernel-cal correction distribution (n=2,520/run, 15.0 % of refits
   clamped):**
 
@@ -149,15 +173,52 @@ Commit B steps:
   count, same percentiles). Expected: `conv_mult` scales notional,
   not `emove`; kernel_cal fits emove-vs-realization, independent of
   notional. Confirms B is orthogonal to the prediction-side signal.
-- `conv_mult` distribution in reason-strings: **in progress** via
-  `run_replay --run-id ws3_r2_B_attr` job `bjy07teuo`, ~6-7h.
-  Extraction regex: `conv×(\d+\.\d+)`.
-- `drv=X.XX` distribution: **in progress** (same job). Regex:
-  `drv=(\d+\.\d+)`.
-- Fraction of opens where `PATH_INTEGRITY_CAP` tag fires: **in progress**.
-- Fraction of opens where `conv×1.00` tag fires: **in progress** —
-  includes both the dsa-weak clamp path and the no-harvest path;
-  joint distribution with `drv=X.XX` < 0.70 separates the two.
+- **`conv_mult` distribution (n=444 opens, from
+  `data/replays/ws3_r2_B_attr/variants/full_day/decisions.jsonl`,
+  SHA is not byte-identical to verify_determinism output because the
+  harness writes to a different outputs_root; run_sprint invocation
+  otherwise identical):**
+
+  ```
+  n=444  min=1.0000  p10/p25/p50/p75/p90/p99/max = all 1.0000  mean=1.0000
+  ```
+
+  **Every single open fired with conv_mult=1.00.** Zero ticks where
+  the harvest-mass-radar activated the conviction amplifier. This is
+  a **strong empirical confirmation of `MEASUREMENT_INFRA.md` §1.2**:
+  sprint net_pressure is ~400× weaker than live, and the
+  `conviction_boost` computation in `chess.py` never clears whatever
+  threshold is required to push it above 1.0 on the sprint tape.
+- **`drv=X.XX` (driver_skill_avg) distribution (n=441 opens):**
+
+  ```
+  n=441  min=1.0000  p10…max = all 1.0000  mean=1.0000
+  ```
+
+  Every open reports `drv=1.00`. Consistent with `tribe_skill.json`
+  showing all 24 tribes at ~0.500 hit rate → calibrator skill
+  multiplier pinned at 1.0 → `driver_skill_avg = 1.0` across the
+  pool-weighted consensus. No Path-Integrity clamp *could* fire at
+  this `drv` level regardless of conv_mult value.
+- **`PATH_INTEGRITY_CAP` tag fires: 0 (0.00 % of opens).** Expected
+  given `drv=1.00` > 0.70 on every open. The clamp is wired
+  correctly (the test `test_conviction_boost_clamped_by_path_integrity_when_dsa_weak`
+  verifies it fires at dsa=0.5), it just never triggers on sprint
+  input because `drv` never goes below 1.0 there.
+- **`conv×1.00` tag on every open: 444 / 444 (100.00 %).** Decomposes
+  as: 0 PATH_INTEGRITY_CAP path + 441 no-harvest path (conv_mult
+  already = 1.0 pre-clamp) + 3 opens without `drv=` tag (reason-
+  string formatting edge case under inspection, not a correctness
+  concern — the conv×1.00 half is still recorded).
+
+**Sprint-tape verdict for B:** B is **correctly wired but
+empirically inactive on sprint input**. Determinism PASS, tests PASS,
+algebra PASS, but the *live* signal that B was designed to amplify
+never materialises in the sprint synth microstructure. Sprint
+verifies B cannot misfire; sprint cannot verify B fires at all
+under real conditions. This is the `MEASUREMENT_INFRA.md` §2
+operating rule made concrete for B specifically — **live-tape
+measurement of B is non-negotiable**, not just preferred.
 
 ### 5.3 Condition-(a) analogue for B
 
@@ -246,14 +307,17 @@ the correctness side only.
   identical to A-alone full-day (p50=5.059, p90=9.559, max=11.245),
   15.0 % clamp rate — B is orthogonal to the prediction-side signal.
 - Persistent decisions.jsonl reproduction (job `bjy07teuo`,
-  `run_replay --run-id ws3_r2_B_attr`): **in progress**, ~6-7h,
-  writing to `data/replays/ws3_r2_B_attr/variants/full_day/`. Will
-  provide the reason-string stream for §5.2 distribution mining.
-- Live-tape post-deploy session: **TODO**.
+  `run_replay --run-id ws3_r2_B_attr`, 2026-04-24 01:24-03:19 UTC,
+  ~1h 55m wall): **complete**. Output at
+  `data/replays/ws3_r2_B_attr/variants/full_day/decisions.jsonl`,
+  267,432,327 bytes. Mined 444 opens (228 short + 216 long out of
+  86,399 ticks). Distribution findings folded into §5.2.
+- Live-tape post-deploy session: **TODO** — now the single remaining
+  load-bearing measurement for B's *value*.
 
 ---
 
-*Living document. §5.1 closes on first post-A+B production session;
-§5.2 conv_mult / dsa / clamp distributions close when the background
-`run_replay` job `bjy07teuo` completes and its decisions.jsonl
-reason-stream is mined.*
+*Living document. §5.1 closes on first post-A+B production session.
+§5.2 closed 2026-04-24 with the surprising finding that sprint
+never activates conv_mult above 1.0. §5.4 closed 2026-04-24 with
+full-day determinism PASS.*
