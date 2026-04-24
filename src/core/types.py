@@ -174,6 +174,17 @@ class Forecast(Struct):
     #                        Clean trend → 0.
     abs_activity_bps: float | None = None
     step_bps_signflips: int | None = None
+    # WS3 H5.A — saturation stamp. True when `step_bps_list` contained a
+    # non-finite (NaN/inf) entry OR any |step| > MAX_STEP_BPS (500 bps /
+    # ~5% single-step, ≈25σ on BTC 5s-bar). On hit, `chess.py` sanitizes
+    # the list (inf/NaN → 0, clamp to ±500), rebuilds `steps_bps` from
+    # the sanitized differences, and forces `directional_score = 0` and
+    # `base_conf = 0` so the existing `conf < min_conf` gate in the
+    # decision engine auto-holds (see WS3_H5_phase0_audit.md §6.3).
+    # Default False so pre-H5.A Forecast fixtures/replays stay untouched;
+    # a Phase-1 count of `saturation_hit=True` is the critical input for
+    # prioritising H6 (DNA-recursion audit) over further calibrator work.
+    saturation_hit: bool = False
 
 
 class Position(Struct):

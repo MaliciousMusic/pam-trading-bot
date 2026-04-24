@@ -786,6 +786,52 @@ class ChessProjector:
             step_bps_list.append(cum - prev_cum)
             prev_cum = cum
 
+        # WS3 H5.A — saturation clamp on `step_bps_list`.
+        # Phase 0 audit (research/phase11_diagnostic/WS3_H5_phase0_audit.md)
+        # found the 1/99 attractor is produced by a single-horizon spike in
+        # `steps_bps` (|entry| up to ~6.5e+295) which then materialises as an
+        # adjacent ±HUGE pair in `step_bps_list`. The projector was forwarding
+        # these to the Forecast (and through to `abs_activity_bps`, the tape,
+        # and the logger) without any `isfinite`/magnitude guard. `confidence`
+        # then defaults to `NaN`/1.0 depending on the path, which slipped past
+        # the decision engine's non-NaN-aware `conf < min_conf` check and
+        # opened 12 shorts with `emove=NaN` (audit §6.3).
+        # H5.A defence: coerce NaN/inf→0 and clamp |step| ≤ MAX_STEP_BPS, then
+        # rebuild `steps_bps` from the sanitized differences so downstream
+        # consumers (sigma fitter, sample-path terminals, jsonl) see a single
+        # coherent view. When any clamp fires we flag `saturation_hit` and
+        # force `directional_score`/`base_conf` to 0.0 below — that zero
+        # propagates to `final_conf`, and the existing `conf < min_conf`
+        # gate in DecisionEngine holds the tick. No DNA-recursion fix here:
+        # that explosive dynamic is still live inside per-tribe `curve[h]`
+        # (H6 audit scope). This clamp is observational containment only.
+        MAX_STEP_BPS = 500.0  # ~5% single-step ≈ 25σ on BTC 5s-bar.
+
+        def _sat(b: float) -> float:
+            if not math.isfinite(b):
+                return 0.0
+            if b > MAX_STEP_BPS:
+                return MAX_STEP_BPS
+            if b < -MAX_STEP_BPS:
+                return -MAX_STEP_BPS
+            return b
+
+        saturation_hit = any(
+            (not math.isfinite(b)) or abs(b) > MAX_STEP_BPS
+            for b in step_bps_list
+        )
+        if saturation_hit:
+            step_bps_list = [_sat(b) for b in step_bps_list]
+            cum = 0.0
+            steps_bps = []
+            for b in step_bps_list:
+                cum += b
+                steps_bps.append(cum)
+            logger.warning(
+                "[projector] step_bps_list saturation hit — forcing conf=0 "
+                "(see WS3_H5_phase0_audit.md §6.3)"
+            )
+
         # Per-step aggregate for the confidence computation. The decayed
         # votes came from the isolated walks (each tribe's vote at its own
         # step timestamp), so the aggregate's uncertainty measure is still
@@ -802,8 +848,17 @@ class ChessProjector:
             (1.0 - s.uncertainty) * w for s, w in zip(step_aggs, kernel)
         ) / k_sum
         abs_activity = sum(abs(b) * w for b, w in zip(step_bps_list, kernel))
-        directional = abs(expected_move_bps) / abs_activity if abs_activity > 0 else 0.0
-        base_conf = max(0.0, min(1.0, signal_quality * directional))
+        if saturation_hit:
+            # Force zero so `final_conf = base_conf * diversity_mult = 0`
+            # passes through the existing `conf < min_conf` hold-gate in
+            # DecisionEngine. See H5.A rationale block above the sanitize
+            # step. `directional_score = 0` also keeps the persisted tape
+            # value bounded (was 1/99 = 0.01010 attractor pre-fix).
+            directional = 0.0
+            base_conf = 0.0
+        else:
+            directional = abs(expected_move_bps) / abs_activity if abs_activity > 0 else 0.0
+            base_conf = max(0.0, min(1.0, signal_quality * directional))
         # WS3 H5.I1 — sign-flip count across consecutive entries of the
         # per-step increment curve. Under the pure-alternation attractor
         # (`step_bps_list ≈ [+X, −X, +X, −X, …]`) this lands at n_steps−1;
@@ -907,6 +962,7 @@ class ChessProjector:
             diversity_mult=diversity_mult,
             abs_activity_bps=abs_activity,
             step_bps_signflips=step_bps_signflips,
+            saturation_hit=saturation_hit,
         )
 
     # -- Phase 1a: redundancy / cross-correlation ------------------------
