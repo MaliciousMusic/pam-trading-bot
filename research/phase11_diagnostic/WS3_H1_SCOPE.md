@@ -95,7 +95,7 @@ the audit's output):
 | P3 | `diversity_mult = 0.6 + 0.4 × diversity_score` applies as a **floor × multiplier**, not a floor-when-diverse. A single-category bloc gets `0.6×` (40 % haircut) on already-small base_conf. | The floor was presumably chosen to keep single-bloc signals from dominating. In practice every step's bloc status compounds 0.6× on already-sub-0.25 base_conf → final_conf ≤ 0.15. |
 | P4 | `consensus_sign` is computed **before** `diversity_mult`; `diversity_score` is computed using `consensus_sign`. Does `_diversity_and_breakdown` actually need `consensus_sign`, or is it symmetric? | If diversity is sign-conditional, the score is biased against sign-divided councils (where half the tribes vote opposite) — but a sign-divided council is arguably high-diversity, low-confidence (correct direction unclear), and the bias might double-count. |
 | P5 | `kernel = [self.confidence_decay ** i for i in range(n_steps)]` — with `confidence_decay < 1` the weight at step 0 is 1.0 and at step N is ~ε. Is this kernel used only for confidence, or does it also weight `expected_move_bps` (line 793)? | It weights both. If `emove` is short-horizon-dominated (true by construction) but `directional` normalizes against the same kernel-weighted denominator, the ratio is kernel-invariant — but any discontinuity in how `signal_quality` uses the same kernel vs. a different normalizer would skew one side of the ratio. |
-| P6 | `abs_activity = sum(abs(b) × w for b, w in zip(step_bps_list, kernel))`. Is `step_bps_list` cumulative (curve values) or per-step deltas? Docstring and usage disagree in the wider file. | If `step_bps_list` is the *curve* (cumulative), `abs_activity` is Σ |cumulative_i| × kernel — which grows with horizon and makes `directional` structurally smaller at long horizons. If per-step deltas, it's Σ |Δ_i|, which is path-length. Different quantities → different normalizers → different directional ratios. |
+| P6 | `abs_activity = sum(abs(b) × w for b, w in zip(step_bps_list, kernel))`. Is `step_bps_list` the consensus **cumulative curve** or **per-step deltas**? From the H2 path audit trace (`chess.py:760-762`), consensus `steps_bps` is cumulative bps. | **Cumulative branch (active per H2 audit):** `abs_activity = Σ|cumulative_i| × kernel_i`. `|emove|` is the kernel-weighted *terminal* of the cumulative curve. The ratio `|emove| / Σ|cumulative_i|·kernel` has no textbook interpretation — denominator grows monotonically with horizon (cumulative magnitudes accumulate), numerator doesn't necessarily grow, so `directional` is structurally smaller at long horizons **regardless of path shape**. Bug-level concern: `directional` is reading "average conviction of the cumulative magnitude stream" not "fraction of path length that was net displacement." **Delta branch (hypothetical):** if `step_bps_list` were per-step deltas, `abs_activity = Σ|Δ_i|·kernel` = kernel-weighted path length, and `directional = |net displacement| / path length` is the classical path-efficiency quantity (bounded in [0,1] with a clean geometric meaning). H1 audit resolves which branch is active: if cumulative, that's a likely bug worth fixing before any Option B/C intervention; if deltas, formula is clean and H1 proceeds against a structurally-defensible normalizer. |
 
 **Expected audit output.** Either:
 - **bug-found.** Concrete discrepancy between the formula and its
@@ -169,11 +169,23 @@ On the post-instrumentation live-tape archive, compute:
 - Conditional: on the 236 WS1 trade-firing ticks (post-
   instrumentation equivalent), which factor is lowest?
   Distinguishes H1 from the aggregator-is-bottleneck variant.
+- **Horizon stratification (required, not optional).** Compute every
+  distribution above separately per horizon label (15s / 1m / 5m /
+  10m — whichever subset the post-instrumentation archive carries).
+  Rationale: the R2 step A attribution surfaced a 15 s sub-random
+  hit rate (39.95 % long / 42.04 % short, N=18,505) flagged as "H1
+  input, two-phenomena framing to confirm or refute." H1 clearing
+  aggregate 52 % while leaving 15 s sub-random would be a strange
+  result to land without understanding — stratification catches that
+  case and separates "H1 fixes a single mixed phenomenon" from "H1
+  fixes one horizon and a separate mechanism governs the other."
 
 **Script:** `scripts/ws3_h1_decomp_analyze.py` (new), reads
 `data/forecasts/<day>.jsonl` for a day list, emits table to
 stdout + optional JSON artefact to
-`research/phase11_diagnostic/_ws3_h1_decomp/`.
+`research/phase11_diagnostic/_ws3_h1_decomp/`. Stratification by
+horizon label is a required dimension of the output, not an
+optional flag.
 
 ### 3.3 Expected signatures if H1 true
 
@@ -187,10 +199,34 @@ From `WS3_SCOPE.md` §3.3, pinned here:
   `signal_quality`) is the binding factor — distinguishes H1 from
   an aggregator-quality bottleneck.
 
-If any of these signatures reverse (e.g. `signal_quality` p95 > 0.8
-but `final_conf` still caps at 0.25), the bottleneck is **not** the
-compounding; it's the last factor whose range doesn't explain the
-observed cap. H1 nulls; note which factor and proceed to H3.
+**Per-horizon expectation (H1-true):** if the multiplicative stack
+is the bottleneck, the cap should be present across *all* horizons
+— the formula does not depend on horizon label. Expected post-
+intervention lift is therefore **roughly uniform across 15s / 1m /
+5m / 10m** (proportional to each horizon's pre-intervention conf
+distribution, not a one-horizon-only lift).
+
+**Per-horizon differential signature (H1-true with horizon
+interaction):** if post-intervention lift is concentrated at long
+horizons (5m / 10m) and leaves 15 s unchanged, H1 is partially true
+but interacts with a horizon-specific mechanism (plausibly the
+decay kernel — P1 / P5 in the Phase 0 audit). Treat as "H1 true
+with a caveat" rather than clean H1-true; flag for H3 or a
+targeted kernel audit rather than claiming clean H1 acceptance.
+
+**Per-horizon differential signature (H1-false for 15 s):** if 15 s
+hit rate remains sub-random post-intervention (i.e. < 45 %) even
+when 1m/5m/10m clear 52 %, 15 s is governed by a mechanism H1 does
+not touch — almost certainly the anti-informative-at-short-horizon
+finding surfaced in R2 step A. H1 may still land its aggregate 52 %
+win, but the 15 s subset needs a separate post-H1 investigation
+(out of H1 scope; flag in the closeout).
+
+If any of the structural signatures reverse (e.g. `signal_quality`
+p95 > 0.8 but `final_conf` still caps at 0.25), the bottleneck is
+**not** the compounding; it's the last factor whose range doesn't
+explain the observed cap. H1 nulls; note which factor and proceed
+to H3.
 
 ### 3.4 Kill criterion
 
@@ -222,8 +258,14 @@ final_conf = clip(conf_raw, 0, 1)
 ```
 
 With `α + β + γ = 1`. Weights chosen to preserve **ranking** of the
-top-decile WS1 ticks (regress post-change rank on pre-change rank
-across the instrumented-panel ticks; require Spearman ρ ≥ 0.85).
+top-decile-by-pre-change-`final_conf` tick subset. Rank-preservation
+check: Spearman ρ ≥ 0.85 between pre-change and post-change ranks
+**on that top-decile subset**, rationale being that sizing decisions
+are most sensitive to top-decile ordering — the bottom 90 % doesn't
+trade. If subset choice becomes load-bearing at measurement time
+(e.g. trade-firing subset is smaller than top-decile under post-
+change thresholds), document the rationale for the alternative
+subset in the intervention attribution doc; do not switch silently.
 
 Headline effect: a tick with moderate signal on all three
 dimensions lifts from 0.03-0.10 into the 0.4-0.6 range. Downstream
@@ -231,9 +273,15 @@ sizing/entry reacts — H1's acceptance is measured on whether the
 resulting tick set produces ≥ 52 % directional hit at 20 s, not
 whether conf is higher in isolation.
 
-**Risk:** the weights are an unknown. Starting point is
-α=β=γ=1/3; iteration on the weights is not further intervention —
-it's Option A parameter sweep within a single intervention commit.
+**Parameter sweep bound.** Starting point α=β=γ=1/3. If Phase 1
+signals a single dominant offender, weight that factor higher (e.g.
+α=0.5, β=γ=0.25 if signal_quality is worst). **Cap: 3 weight
+configurations per A pass.** If none of the 3 configurations clears
+panel-aggregate 52 % at 20 s, Option A is declared null even if
+monotonic progress is observed across the 3 — sweep-to-overfit is
+not an acceptable path. The 3 configurations are logged in the
+attribution doc with pre-measurement rationale; the selection is
+not a post-hoc choice.
 
 **Determinism cost:** single formula change, pure function.
 Determinism gate trivially re-runs.
@@ -281,6 +329,18 @@ Option A lifts aggregate to 50-52 %, pause on A and try param
 sweep within A before switching to B/C (Decision D4). If A nulls,
 ship B against the original (pre-A) formula; do not stack.
 
+**Multi-factor-binding tiebreaker.** If Phase 1 shows two factors
+simultaneously binding (e.g. `signal_quality` mean 0.35 *and*
+`diversity_score` mean 0.45, neither alone explaining the final_conf
+cap), default to **Option A** (flatten the stack). Rationale: A
+addresses multiplicative compounding generically — it does not
+require identifying which single factor is "the" offender, and both
+binding factors lift simultaneously under a weighted-sum structure.
+Reserve B and C for single-factor cases where Phase 1 identifies one
+dominant offender and the other two factors sit in clearly usable
+ranges. The tiebreaker prevents thrashing between B and C on a case
+where neither is individually sufficient.
+
 ## 5. Acceptance criteria
 
 Per `WS3_SCOPE.md` §10 (unchanged):
@@ -294,6 +354,27 @@ regress.
 
 **(b)** All three options ship, each measured in isolation, and
 none clears 52 %. H1 is written up as null; H3 opens.
+
+**Partial-lift stopping rule.** If any option lands in the
+**48-51 %** range (meaningfully above the 44.5 % baseline but short
+of the 52 % bar), **pause before running the remaining options**.
+Partial lift admits two competing readings:
+
+- *H1 partially true, H3 additive.* Mechanism is real but
+  incomplete; combining H1's fix with an H3 intervention is the
+  right next step. In this branch, exhausting the remaining H1
+  options first is wasted work — they're sweeping within a
+  single-mechanism model that Phase 1 already shows is incomplete.
+- *H1 near-exhausted.* The remaining options would give diminishing
+  returns (e.g. A lifted to 50 %, B/C plausibly add another 1-2 pp
+  but not 4 pp). Completing the sweep is defensible for closeout
+  evidence but not as a path to acceptance.
+
+Default is not "always run all three." Pause at 48-51 %, reopen
+the scope doc with Phase 1's per-factor numbers, and decide
+explicitly between (a) combine with H3 now vs (b) complete the
+H1 sweep for closeout completeness. This decision is a D4-style
+reviewer checkpoint, not an autopilot.
 
 **Explicitly not an acceptance criterion:** post-friction net PnL.
 H1 is signal diagnosis only (D3).
@@ -395,6 +476,53 @@ reviewer decision, not a dependency.
   for Phase 0), `MEASUREMENT_INFRA.md` (D6 operating rule),
   `WS3_R2_step_A_attribution.md` + `_step_B_attribution.md`
   (R2 closure evidence that H1 opens against).
+
+## 11. Parallel-workstream policy during H1 forward accumulation
+
+Post-H1.I1, the critical path is **calendar time** — 3+ production
+days must elapse against the instrumented auditor before Phase 1
+has signal. This window is long enough that blocking other
+workstreams on it would waste reviewer/agent cycles. Policy:
+
+**Can proceed in parallel:** bounded audits that do not touch the
+conf formula or the auditor write path.
+
+- WS2 shadow-parity audits (execution-layer divergence telemetry).
+- WS4 regime-hysteresis audits (regime classifier behaviour,
+  separate module from `ChessProjector`).
+- WS5 harvest-mass ablation studies (post-R2 step B; targets the
+  harvest mass radar, which is upstream of conviction_boost, not of
+  `final_conf`).
+- WS3b warmup audits (anchor warmup behaviour pre-steady-state;
+  separate from conf-decomposition measurement).
+- `PLAN.md` §5.1.1 post-R2 queue (Fix A divergence telemetry,
+  Fix C sprint dna_delta guard) — already declared H1-orthogonal
+  in §9 above.
+
+**Standing caveat — H1-perturbation check.** Any finding from a
+parallel workstream that could perturb H1 measurement **pauses and
+consults H1 before landing**. Examples of perturbation:
+
+- A change to `ChessProjector.project` or any of its inputs
+  (step_aggs, step_bps, kernel, diversity_score computation).
+- A change to `ForecastAuditor.record_tick` ordering, filtering, or
+  the `_persist` path that could alter which ticks enter the
+  live-tape archive or how they're labelled.
+- A change to the regime classifier that would alter which ticks are
+  marked "trade-firing" (the conditional subset in §3.2).
+- Any change that would force a live-tape archive format migration
+  mid-window — H1 requires schema stability across the forward
+  accumulation period.
+
+Parallel workstreams that touch none of the above (pure
+instrumentation, pure analysis, module-isolated fixes) do not need
+to pause for H1.
+
+**Not parallel-safe:** H3 work. H3 is sequenced after H1 per D1 and
+will either re-open (if H1 nulls) or land against a different
+formula shape (if H1 lands an option). Opening H3 during H1 forward
+accumulation creates a double-intervention window where attribution
+becomes intractable.
 
 ---
 
