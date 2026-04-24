@@ -424,6 +424,9 @@ class TradingEngine:
                     None if forecast.driver_skill_avg is None
                     else forecast.driver_skill_avg >= 0.7
                 ),
+                regime_label=(
+                    regime_snapshot["label"] if regime_snapshot else None
+                ),
             )
             backscore_snapshot = self.auditor.snapshot()
             # Phase G loop: feed freshly resolved anchors to the skill

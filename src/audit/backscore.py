@@ -63,6 +63,13 @@ class PendingAnchor:
     conviction_boost: float | None = None
     harvest_mass_ratio: float | None = None
     path_integrity_ok: bool | None = None
+    # WS3 I3.b — regime-transition measurement surface. Only the anchor-
+    # dispatch label lives on PendingAnchor; the resolve-time label is
+    # stamped onto the Resolved record at maturation. Pairing the two
+    # lets the Q6 offline analyzer count how many anchors straddled a
+    # regime transition. None when the engine didn't pass a label
+    # (pre-I3.b ticks / sprint runs with no regime detector wired).
+    regime_label_at_tick: str | None = None
 
 
 @dataclass(slots=True)
@@ -96,6 +103,11 @@ class Resolved:
     conviction_boost: float | None = None
     harvest_mass_ratio: float | None = None
     path_integrity_ok: bool | None = None
+    # WS3 I3.b — regime label at dispatch (mirror from PendingAnchor) and
+    # at resolve (stamped by _resolve_due from the current record_tick's
+    # `regime_label`). The pair is the Q6 transition-counter join key.
+    regime_label_at_tick: str | None = None
+    regime_label_at_resolve: str | None = None
 
 
 class ForecastAuditor:
@@ -140,13 +152,14 @@ class ForecastAuditor:
         conviction_boost: float | None = None,
         harvest_mass_ratio: float | None = None,
         path_integrity_ok: bool | None = None,
+        regime_label: str | None = None,
     ) -> list[Resolved]:
         """Resolve any matured anchors against `price`, then enqueue the
         new anchors from this tick. Returns the list of records just
         resolved (so the engine can attach them to its broadcast)."""
         now = ts.timestamp() if isinstance(ts, datetime) else float(ts)
 
-        resolved_now = self._resolve_due(now, price)
+        resolved_now = self._resolve_due(now, price, regime_label=regime_label)
         self._enqueue(now, price, predictions,
                       forecast_conf=forecast_conf,
                       forecast_emove_bps=forecast_emove_bps,
@@ -160,7 +173,8 @@ class ForecastAuditor:
                       step_bps_signflips=step_bps_signflips,
                       conviction_boost=conviction_boost,
                       harvest_mass_ratio=harvest_mass_ratio,
-                      path_integrity_ok=path_integrity_ok)
+                      path_integrity_ok=path_integrity_ok,
+                      regime_label=regime_label)
         return resolved_now
 
     def _enqueue(
@@ -182,6 +196,7 @@ class ForecastAuditor:
         conviction_boost: float | None = None,
         harvest_mass_ratio: float | None = None,
         path_integrity_ok: bool | None = None,
+        regime_label: str | None = None,
     ) -> None:
         for p in predictions:
             horizon = int(p.get("horizon_seconds", 0))
@@ -211,6 +226,7 @@ class ForecastAuditor:
                 conviction_boost=conviction_boost,
                 harvest_mass_ratio=harvest_mass_ratio,
                 path_integrity_ok=path_integrity_ok,
+                regime_label_at_tick=regime_label,
             )
             self._pending.append(anchor)
 
@@ -218,7 +234,10 @@ class ForecastAuditor:
         while len(self._pending) > self._max_pending:
             self._pending.popleft()
 
-    def _resolve_due(self, now: float, realized_price: float) -> list[Resolved]:
+    def _resolve_due(
+        self, now: float, realized_price: float,
+        *, regime_label: str | None = None,
+    ) -> list[Resolved]:
         out: list[Resolved] = []
         # The pending deque is chronologically ordered on tick_ts, but
         # target_ts ordering can differ across horizons so we walk all of
@@ -263,6 +282,8 @@ class ForecastAuditor:
                 conviction_boost=a.conviction_boost,
                 harvest_mass_ratio=a.harvest_mass_ratio,
                 path_integrity_ok=a.path_integrity_ok,
+                regime_label_at_tick=a.regime_label_at_tick,
+                regime_label_at_resolve=regime_label,
             )
             out.append(rec)
             self._resolved.append(rec)
@@ -308,6 +329,11 @@ class ForecastAuditor:
             "conviction_boost": rec.conviction_boost,
             "harvest_mass_ratio": rec.harvest_mass_ratio,
             "path_integrity_ok": rec.path_integrity_ok,
+            # WS3 I3.b — regime-transition measurement surface. The
+            # (open, close) pair lets Q6 count anchors that straddled a
+            # regime transition. None on pre-I3.b archives.
+            "regime_label_at_tick": rec.regime_label_at_tick,
+            "regime_label_at_resolve": rec.regime_label_at_resolve,
         }
         line = serde.dumps(payload) + b"\n"
         with path.open("ab") as f:

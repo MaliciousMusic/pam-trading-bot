@@ -260,6 +260,7 @@ class SprintEngine:
                         None if forecast.driver_skill_avg is None
                         else forecast.driver_skill_avg >= 0.7
                     ),
+                    regime_label=regime_label,
                 )
                 if self.kernel_calibrator is not None and resolved_now:
                     self.kernel_calibrator.apply_resolved(resolved_now)
