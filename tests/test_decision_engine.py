@@ -32,6 +32,7 @@ def _mk_forecast(
     dsa: float | None = None,
     category_mass: dict | None = None,
     avg_voter_horizon_s: float | None = None,
+    conviction_boost: float | None = None,
 ) -> Forecast:
     ts = datetime(2026, 4, 20, 12, 0, 0, tzinfo=timezone.utc)
     step = Aggregate(ts=ts, net_pressure=0.1, buy_mass=1.0, sell_mass=0.0,
@@ -48,6 +49,7 @@ def _mk_forecast(
         driver_skill_avg=dsa,
         category_mass=category_mass,
         avg_voter_horizon_s=avg_voter_horizon_s,
+        conviction_boost=conviction_boost,
     )
 
 
@@ -271,12 +273,13 @@ def test_htf_stale_score_treated_as_no_signal():
     assert i.size_usd == pytest.approx(i0.size_usd, rel=1e-6)
 
 
-# -------------- Peak-favorable: conviction-boost de-boost (C2 linkage) ----
+# -------------- Peak-favorable: argmax of raw consensus curve -------------
 
-def test_peak_favorable_uses_deboosted_curve():
-    """The stamped peak-favorable step should be argmax of the RAW curve,
-    not the boosted one. Uniform scaling doesn't shift argmax today but the
-    contract matters for future horizon-dependent boost shapes."""
+def test_peak_favorable_argmax_of_raw_curve():
+    """The stamped peak-favorable step is the argmax of `steps_bps` (long)
+    or argmin (short). The curve is the raw consensus path — the projector
+    no longer multiplies it by conviction_boost, so the stamped boost value
+    is irrelevant to peak timing."""
     from src.core.types import Forecast
     ts = datetime(2026, 4, 20, 12, 0, 0, tzinfo=timezone.utc)
     step = Aggregate(ts=ts, net_pressure=0.1, buy_mass=1.0, sell_mass=0.0,
@@ -292,6 +295,58 @@ def test_peak_favorable_uses_deboosted_curve():
     eng = DecisionEngine(_settings())
     intent = eng.decide(ts, f, _state(), 50_000.0)
     assert intent.peak_favorable_s == 240
+
+
+# -------------- WS3 R2 commit B: conviction_boost as sizing multiplier ----
+
+def test_conviction_boost_amplifies_size_when_path_integrity_ok():
+    """With driver_skill_avg ≥ 0.7 (Path-Integrity pass), conv_mult=1.5
+    should scale the notional by 1.5× vs the conv_mult=1.0 case. Same
+    inputs otherwise so the ratio isolates the boost effect."""
+    eng = DecisionEngine(_settings())
+    base = _mk_forecast(
+        emove_bps=+10, conf=0.5, dsa=0.8, conviction_boost=1.0,
+    )
+    boosted = _mk_forecast(
+        emove_bps=+10, conf=0.5, dsa=0.8, conviction_boost=1.5,
+    )
+    i_base = eng.decide(base.ts, base, _state(), 50_000.0)
+    i_boost = eng.decide(boosted.ts, boosted, _state(), 50_000.0)
+    assert i_base.action == "open_long"
+    assert i_boost.action == "open_long"
+    assert i_boost.size_usd == pytest.approx(1.5 * i_base.size_usd, rel=1e-6)
+    assert "conv×1.50" in i_boost.reason
+
+
+def test_conviction_boost_clamped_by_path_integrity_when_dsa_weak():
+    """With driver_skill_avg < 0.7 (Path-Integrity fail), conv_mult must
+    be clamped to 1.0 — the boost cannot amplify sizing when the signal
+    is carried by unreliable drivers. Notional should equal the boost=1.0
+    case, and reason should carry the PATH_INTEGRITY_CAP tag."""
+    eng = DecisionEngine(_settings())
+    base = _mk_forecast(
+        emove_bps=+10, conf=0.5, dsa=0.5, conviction_boost=1.0,
+    )
+    boosted = _mk_forecast(
+        emove_bps=+10, conf=0.5, dsa=0.5, conviction_boost=1.5,
+    )
+    i_base = eng.decide(base.ts, base, _state(), 50_000.0)
+    i_boost = eng.decide(boosted.ts, boosted, _state(), 50_000.0)
+    assert i_base.size_usd == pytest.approx(i_boost.size_usd, rel=1e-6)
+    assert "conv×1.00" in i_boost.reason
+    assert "PATH_INTEGRITY_CAP" in i_boost.reason
+
+
+def test_conviction_boost_default_is_unity():
+    """Forecasts without a conviction_boost stamped (None) must size as
+    if conv_mult=1.0 — no accidental amplification from a missing field."""
+    eng = DecisionEngine(_settings())
+    f_none = _mk_forecast(emove_bps=+10, conf=0.5, dsa=0.8, conviction_boost=None)
+    f_one = _mk_forecast(emove_bps=+10, conf=0.5, dsa=0.8, conviction_boost=1.0)
+    i_none = eng.decide(f_none.ts, f_none, _state(), 50_000.0)
+    i_one = eng.decide(f_one.ts, f_one, _state(), 50_000.0)
+    assert i_none.size_usd == pytest.approx(i_one.size_usd, rel=1e-6)
+    assert "conv×1.00" in i_none.reason
 
 
 if __name__ == "__main__":

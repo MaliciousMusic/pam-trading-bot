@@ -128,23 +128,24 @@ def test_volatility_rail_noop_when_no_realized_vol():
     assert ex.positions[0].expected_move_bps == pytest.approx(200.0)
 
 
-# ============== C2: forecast TP de-boost (raw_move / boost) ================
+# ============== Forecast TP target from raw consensus emove ================
 
-def test_forecast_tp_uses_deboosted_target():
-    """Forecast TP layer should compute target from raw_move = emove / boost,
-    so a 1.5× harvest boost doesn't push the TP 50% farther than consensus."""
+def test_forecast_tp_target_invariant_under_boost_stamp():
+    """Forecast TP target = |emove| × conf × factor. The projector no longer
+    inflates emove by conviction_boost, so the stamped boost value has no
+    effect on the TP target — same target whether boost=1.5 or boost=1.0."""
     # Disable shape/ratchet/edge so forecast-TP is isolated.
     ex = _mk_executor(exit_strategy_over={
         "ratchet_arm_bps": 0.0,
         "shape_grace_seconds": 0.0,
     })
-    # Entry: 60 bps stamped at 1.5× boost ⇒ raw_move=40 bps.
+    # Entry: 40 bps raw consensus, boost=1.5 stamped (irrelevant to TP).
     # TP target = |40| × 0.6 conf × 1.0 factor = 24 bps.
-    intent = _mk_intent(emove_bps=60.0, conf=0.6, conviction_boost=1.5)
+    intent = _mk_intent(emove_bps=40.0, conf=0.6, conviction_boost=1.5)
     ex.execute(intent, state=_state(50_000.0))
     assert len(ex.positions) == 1
     # Push to +28 bps of notional — after entry slip ~2.5 the unreal is
-    # ~25.5 bps > deboosted target 24 bps.
+    # ~25.5 bps > target 24 bps.
     new_price = 50_000.0 * (1 + 28 / 10_000)
     f = _mk_forecast(emove_bps=+20, conf=0.6)   # council still aligned
     ex.evaluate_exits(_ts(1, 0), new_price, f)
@@ -152,8 +153,9 @@ def test_forecast_tp_uses_deboosted_target():
     assert any("forecast target" in t.get("reason", "") for t in ex.recent_trades)
 
 
-def test_forecast_tp_no_boost_unchanged():
-    """With conviction_boost=1.0, target is raw emove×conf (no de-boost effect)."""
+def test_forecast_tp_target_same_with_boost_one():
+    """With conviction_boost=1.0, target is identical to the boost=1.5 case
+    above — confirms the TP layer is invariant under boost stamping."""
     ex = _mk_executor(exit_strategy_over={
         "ratchet_arm_bps": 0.0,
         "shape_grace_seconds": 0.0,

@@ -40,6 +40,15 @@ class PendingAnchor:
     forecast_conf: float
     forecast_emove_bps: float
     net_pressure: float
+    # WS3 H1.I1 — confidence-formula decomposition, one copy per anchor so
+    # every resolved horizon-row carries the same decomp as the tick that
+    # emitted it. All five are None when the projector didn't populate them
+    # (pre-H1 Forecast objects, unit-test fixtures).
+    signal_quality: float | None = None
+    directional_score: float | None = None
+    base_conf: float | None = None
+    diversity_score: float | None = None
+    diversity_mult: float | None = None
 
 
 @dataclass(slots=True)
@@ -59,6 +68,13 @@ class Resolved:
     directional_hit: bool             # sign(predicted_move)==sign(realized_move) AND both non-zero
     forecast_conf: float
     net_pressure: float
+    # WS3 H1.I1 — same decomposition mirror as PendingAnchor; copied across
+    # at resolution time.
+    signal_quality: float | None = None
+    directional_score: float | None = None
+    base_conf: float | None = None
+    diversity_score: float | None = None
+    diversity_mult: float | None = None
 
 
 class ForecastAuditor:
@@ -93,6 +109,11 @@ class ForecastAuditor:
         forecast_conf: float,
         forecast_emove_bps: float,
         net_pressure: float,
+        signal_quality: float | None = None,
+        directional_score: float | None = None,
+        base_conf: float | None = None,
+        diversity_score: float | None = None,
+        diversity_mult: float | None = None,
     ) -> list[Resolved]:
         """Resolve any matured anchors against `price`, then enqueue the
         new anchors from this tick. Returns the list of records just
@@ -103,7 +124,12 @@ class ForecastAuditor:
         self._enqueue(now, price, predictions,
                       forecast_conf=forecast_conf,
                       forecast_emove_bps=forecast_emove_bps,
-                      net_pressure=net_pressure)
+                      net_pressure=net_pressure,
+                      signal_quality=signal_quality,
+                      directional_score=directional_score,
+                      base_conf=base_conf,
+                      diversity_score=diversity_score,
+                      diversity_mult=diversity_mult)
         return resolved_now
 
     def _enqueue(
@@ -115,6 +141,11 @@ class ForecastAuditor:
         forecast_conf: float,
         forecast_emove_bps: float,
         net_pressure: float,
+        signal_quality: float | None = None,
+        directional_score: float | None = None,
+        base_conf: float | None = None,
+        diversity_score: float | None = None,
+        diversity_mult: float | None = None,
     ) -> None:
         for p in predictions:
             horizon = int(p.get("horizon_seconds", 0))
@@ -134,6 +165,11 @@ class ForecastAuditor:
                 forecast_conf=forecast_conf,
                 forecast_emove_bps=forecast_emove_bps,
                 net_pressure=net_pressure,
+                signal_quality=signal_quality,
+                directional_score=directional_score,
+                base_conf=base_conf,
+                diversity_score=diversity_score,
+                diversity_mult=diversity_mult,
             )
             self._pending.append(anchor)
 
@@ -176,6 +212,11 @@ class ForecastAuditor:
                 directional_hit=hit,
                 forecast_conf=a.forecast_conf,
                 net_pressure=a.net_pressure,
+                signal_quality=a.signal_quality,
+                directional_score=a.directional_score,
+                base_conf=a.base_conf,
+                diversity_score=a.diversity_score,
+                diversity_mult=a.diversity_mult,
             )
             out.append(rec)
             self._resolved.append(rec)
@@ -202,6 +243,15 @@ class ForecastAuditor:
             "directional_hit": rec.directional_hit,
             "forecast_conf": rec.forecast_conf,
             "net_pressure": rec.net_pressure,
+            # WS3 H1.I1 — confidence-formula decomposition. Emitted only when
+            # the projector populated them on Forecast (post-H1 code paths);
+            # None values are skipped so pre-H1 archives and the new schema
+            # stay readable by the same downstream tooling.
+            "signal_quality": rec.signal_quality,
+            "directional_score": rec.directional_score,
+            "base_conf": rec.base_conf,
+            "diversity_score": rec.diversity_score,
+            "diversity_mult": rec.diversity_mult,
         }
         line = serde.dumps(payload) + b"\n"
         with path.open("ab") as f:
