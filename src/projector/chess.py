@@ -144,6 +144,20 @@ _REGIME_CATEGORY_MULT: dict[str, dict[str, float]] = {
 }
 
 
+# WS3 H6.A — DNA recursion-input clamp. Phase 0 audit
+# (research/phase11_diagnostic/WS3_H6_phase0_audit.md) showed that two DNA
+# categories emit chain coefficients ≥ 1 under routine depth-scale (ta_dna
+# `0.65·prev_delta`, retail_dna panic `4.0·prev_delta` + quadratic state
+# overshoot). Stability requires bounding the `prev_delta_bps` /
+# `prev_state_bps` channel entering DNAContext at the per-step recursion —
+# the only path through which step N output can amplify step N+1 input.
+# 100 bps = 1% single-step state, well above any legitimate 5-second
+# trending motion on BTC (2026-04 realised σ ≈ 30 bps/5s) so legitimate
+# momentum signal is preserved; anything above is feedback-positive DNA
+# runaway by construction.
+DNA_CTX_CLAMP_BPS: float = 100.0
+
+
 class ChessProjector:
     def __init__(
         self,
@@ -183,6 +197,8 @@ class ChessProjector:
         # Wiggly-path knobs.
         self.auditor = auditor
         self.mean_reversion_rate = float(mean_reversion_rate)
+        # H6.A diagnostic — last projection's DNAContext clamp-hit count.
+        self._dna_clamp_hits_last: int = 0
         self.sample_paths_n = int(sample_paths_n)
         self.default_horizon_seconds = float(default_horizon_seconds)
         self.default_sigma_bps = float(default_sigma_bps)
@@ -547,6 +563,8 @@ class ChessProjector:
             step_epochs.append(_cur.timestamp())
         prev_epochs: list[float] = [start_ts.timestamp()] + step_epochs[:-1]
 
+        dna_clamp_hits = 0  # H6.A diagnostic — counted across all (tribe, step).
+
         for tribe in self.tribes:
             tid = tribe.spec.id
             cat = _TRIBE_CATEGORY.get(tid, "ta")
@@ -576,9 +594,17 @@ class ChessProjector:
                     sell_frac=v0.sell_frac * decay,
                 ))
                 # ── DNA: deterministic recursive step ──
+                # H6.A clamp — bound the feedback channel at DNA input, see
+                # WS3_H6_phase0_audit.md §6 (Option C). Full `cum_bps` /
+                # `prev_delta` continue to accumulate below; only the DNA
+                # *input window* is capped to ±DNA_CTX_CLAMP_BPS.
+                ps_in = max(-DNA_CTX_CLAMP_BPS, min(DNA_CTX_CLAMP_BPS, cum_bps))
+                pd_in = max(-DNA_CTX_CLAMP_BPS, min(DNA_CTX_CLAMP_BPS, prev_delta))
+                if ps_in != cum_bps or pd_in != prev_delta:
+                    dna_clamp_hits += 1
                 ctx = DNAContext(
-                    prev_state_bps=cum_bps,
-                    prev_delta_bps=prev_delta,
+                    prev_state_bps=ps_in,
+                    prev_delta_bps=pd_in,
                     regime=self.regime_label,
                     perceived=perceived[step_i] if step_i < len(perceived) else [],
                     signed_intent=signed,
@@ -618,6 +644,14 @@ class ChessProjector:
                     sim.last_funding_rate *= 0.995
             per_tribe_curves.append(curve)
             per_tribe_ids.append(tid)
+
+        # H6.A diagnostic — record clamp-hit count for tests/regression.
+        self._dna_clamp_hits_last = dna_clamp_hits
+        if dna_clamp_hits > 0:
+            logger.warning(
+                f"[projector] DNA ctx clamp fired {dna_clamp_hits} times "
+                "(see WS3_H6_phase0_audit.md §6)"
+            )
 
         # ── 6. Performance-weighted consensus ──
         # Consensus_h = Σ (Path_i,h · W_i,h · pool_weight_i) / Σ (W_i,h · pool_weight_i)
