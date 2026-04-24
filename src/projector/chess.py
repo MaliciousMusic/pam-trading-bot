@@ -886,6 +886,10 @@ class ChessProjector:
             harvest_mass_ratio=harvest_mass_ratio,
             conviction_boost=conviction_boost,
             realized_vol_bps=realized_vol_bps,
+            signal_quality=signal_quality,
+            directional_score=directional,
+            base_conf=base_conf,
+            diversity_mult=diversity_mult,
         )
 
     # -- Phase 1a: redundancy / cross-correlation ------------------------

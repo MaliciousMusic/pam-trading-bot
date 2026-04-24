@@ -411,6 +411,11 @@ class TradingEngine:
                 forecast_conf=forecast.confidence,
                 forecast_emove_bps=forecast.expected_move_bps,
                 net_pressure=agg.net_pressure,
+                signal_quality=forecast.signal_quality,
+                directional_score=forecast.directional_score,
+                base_conf=forecast.base_conf,
+                diversity_score=forecast.diversity_score,
+                diversity_mult=forecast.diversity_mult,
             )
             backscore_snapshot = self.auditor.snapshot()
             # Phase G loop: feed freshly resolved anchors to the skill

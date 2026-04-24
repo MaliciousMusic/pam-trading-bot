@@ -151,6 +151,17 @@ class Forecast(Struct):
     # boost can't stamp a position with a target beyond what market vol has
     # produced recently. None when there aren't enough price samples yet.
     realized_vol_bps: float | None = None
+    # WS3 H1.I1 — confidence-formula decomposition. Exposed so the auditor
+    # can persist every factor feeding `confidence` (= final_conf) and H1
+    # Phase 1 can attribute the structural 0.25 cap (WS1) to the binding
+    # factor. Computed in `ChessProjector.project` (chess.py:791-812) and
+    # otherwise discarded; these fields are the sole live-tape escape
+    # hatch for the decomposition. All default None so pre-H1 callers
+    # (and unit-test Forecast fixtures) stay untouched.
+    signal_quality: float | None = None
+    directional_score: float | None = None  # = |emove| / abs_activity, the ratio at chess.py:798
+    base_conf: float | None = None           # = signal_quality * directional_score, pre-clip
+    diversity_mult: float | None = None      # = 0.6 + 0.4 * diversity_score
 
 
 class Position(Struct):
