@@ -40,6 +40,8 @@ research/phase11_diagnostic/_ws3_h2_step4_forecasts/*.jsonl
 
 # Claude Code local session state
 .claude/settings.local.json
+.claude/scheduled_tasks.lock
+.claude/worktrees/
 
 # OS
 .DS_Store
