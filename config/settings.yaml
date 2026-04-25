@@ -1,5 +1,8 @@
 mode: paper                   # paper | live
-exchange: binance_perps
+# Primary venue. 2026-04-24: swapped from binance_perps to bybit_perps after
+# Binance USD-M futures WS silently geo-blocked the current host (PLAN.md
+# §5.1.2). Panel 04-18→04-21 is venue-obsolete; D5 clock reset.
+exchange: bybit_perps
 symbol: BTCUSDT
 base_capital_usd: 50000       # paper-only; bumped so per-trade P&L is visible
 

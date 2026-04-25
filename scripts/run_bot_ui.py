@@ -24,6 +24,7 @@ from src.execution.ledger import Ledger
 from src.execution.harden import HardenConfig
 from src.execution.paper import PaperExecutor
 from src.ingress.binance_ws import BinancePerpsWS
+from src.ingress.bybit_perps_ws import BybitPerpsWS
 from src.ingress.bybit_ws import BybitPublicWS
 from src.ingress.deribit_options import DeribitOptionsPoller
 from src.ingress.event_recorder import EventRecorder
@@ -64,6 +65,9 @@ async def main() -> None:
     cfg = settings()
     sources_cfg = data_sources()["sources"]
     ds = sources_cfg["binance_perps_ws"]
+    # Primary venue selector. 2026-04-24 venue swap (PLAN.md §5.1.2):
+    # Binance USD-M futures geo-blocked; Bybit V5 linear is the replacement.
+    venue = str(cfg.get("exchange", "binance_perps"))
 
     # Wire the logging block so the yaml actually controls loguru verbosity
     # and sink directory. Prior to this, settings.logging was decorative.
@@ -201,6 +205,7 @@ async def main() -> None:
         exit_strategy=cfg.get("exit_strategy", {}) or {},
         risk_cfg=cfg.get("risk", {}) or {},
         decision_cfg=cfg.get("decision", {}) or {},
+        paper_exec=executor,
     )
     tribe_scorer = None
     if shadow_ledgers:
@@ -233,7 +238,10 @@ async def main() -> None:
         tribe_scorer=tribe_scorer,
     )
 
-    client = BinancePerpsWS(bus, streams=ds["streams"])
+    if venue == "bybit_perps":
+        client = BybitPerpsWS(bus, symbol=cfg.get("symbol", "BTCUSDT"))
+    else:
+        client = BinancePerpsWS(bus, streams=ds["streams"])
     ui_cfg = {
         "size_min_pct": float(cfg["sizing"]["min_pct_equity"]),
         "size_max_pct": float(cfg["sizing"]["max_pct_equity"]),
@@ -317,7 +325,12 @@ async def main() -> None:
             poll_seconds=int(htf_cfg.get("poll_seconds", 60)),
         ).run())
 
-    if sources_cfg.get("bybit_ws", {}).get("enabled"):
+    # When Bybit is the primary venue, skip the cross-venue Bybit feed —
+    # we're already subscribed to every BTCUSDT stream we need from the
+    # primary client, and BybitPublicWS emits kind="cross_trade" which
+    # would double-count same-venue trades in the aggregator's cross-venue
+    # signal. Binance-primary keeps the cross-venue Bybit feed on.
+    if sources_cfg.get("bybit_ws", {}).get("enabled") and venue != "bybit_perps":
         coros.append(BybitPublicWS(bus, symbol=cfg.get("symbol", "BTCUSDT")).run())
     if sources_cfg.get("okx_ws", {}).get("enabled"):
         coros.append(OKXPublicWS(bus).run())
@@ -346,8 +359,8 @@ async def main() -> None:
     audit_horizon = int(cfg.get("audit", {}).get("horizon_seconds", 60))
     coros.append(DailyAuditScheduler(horizon_seconds=audit_horizon).run(tribe_specs))
 
-    logger.info("mode={} symbol={} equity=${:.2f}  UI at http://{}:{}",
-                cfg["mode"], cfg["symbol"], executor.equity_usd, host, port)
+    logger.info("mode={} venue={} symbol={} equity=${:.2f}  UI at http://{}:{}",
+                cfg["mode"], venue, cfg["symbol"], executor.equity_usd, host, port)
     logger.info("[boot] {} background tasks: exchange WS, trading engine, UI server, "
                 "audit scheduler + {} sentiment feed(s)",
                 len(coros), len(coros) - 4)

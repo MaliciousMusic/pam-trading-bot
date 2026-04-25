@@ -76,14 +76,21 @@ _TRIBE_CATEGORY: dict[str, str] = {
     "retail_degen_leveraged": "retail",
     "retail_app_newbie": "retail",
     "copy_trader": "retail",
+    "stablecoin_flow_buyer": "retail",  # on-ramp flow primarily retail-driven
     "ta_day_trader": "ta",
     "swing_trend_follower": "ta",
+    "cta_systematic_trend": "ta",
     "liquidation_hunter": "event",
     "news_fader": "event",
+    "news_scalper": "event",
+    "capitulation_buyer": "event",  # reacts to liquidation/flush tape
     "options_hedger_proxy": "hedger",
+    "options_dealer_gamma": "hedger",  # dealer gamma/delta hedging
     "leverage_cycle": "hedger",
+    "put_call_fader": "hedger",  # fades skew, hedger-adjacent
     "microstructure_prober": "microstructure",
     "mev_frontrunner": "mev",
+    "cascade_amplifier": "mev",  # amplifies in-progress liquidation cascades
     "passive_whale_twap": "whale",
 }
 # Rows: regime label (see regime.classifier.RegimeLabel).
@@ -137,6 +144,20 @@ _REGIME_CATEGORY_MULT: dict[str, dict[str, float]] = {
 }
 
 
+# WS3 H6.A — DNA recursion-input clamp. Phase 0 audit
+# (research/phase11_diagnostic/WS3_H6_phase0_audit.md) showed that two DNA
+# categories emit chain coefficients ≥ 1 under routine depth-scale (ta_dna
+# `0.65·prev_delta`, retail_dna panic `4.0·prev_delta` + quadratic state
+# overshoot). Stability requires bounding the `prev_delta_bps` /
+# `prev_state_bps` channel entering DNAContext at the per-step recursion —
+# the only path through which step N output can amplify step N+1 input.
+# 100 bps = 1% single-step state, well above any legitimate 5-second
+# trending motion on BTC (2026-04 realised σ ≈ 30 bps/5s) so legitimate
+# momentum signal is preserved; anything above is feedback-positive DNA
+# runaway by construction.
+DNA_CTX_CLAMP_BPS: float = 100.0
+
+
 class ChessProjector:
     def __init__(
         self,
@@ -176,6 +197,8 @@ class ChessProjector:
         # Wiggly-path knobs.
         self.auditor = auditor
         self.mean_reversion_rate = float(mean_reversion_rate)
+        # H6.A diagnostic — last projection's DNAContext clamp-hit count.
+        self._dna_clamp_hits_last: int = 0
         self.sample_paths_n = int(sample_paths_n)
         self.default_horizon_seconds = float(default_horizon_seconds)
         self.default_sigma_bps = float(default_sigma_bps)
@@ -540,6 +563,8 @@ class ChessProjector:
             step_epochs.append(_cur.timestamp())
         prev_epochs: list[float] = [start_ts.timestamp()] + step_epochs[:-1]
 
+        dna_clamp_hits = 0  # H6.A diagnostic — counted across all (tribe, step).
+
         for tribe in self.tribes:
             tid = tribe.spec.id
             cat = _TRIBE_CATEGORY.get(tid, "ta")
@@ -569,9 +594,17 @@ class ChessProjector:
                     sell_frac=v0.sell_frac * decay,
                 ))
                 # ── DNA: deterministic recursive step ──
+                # H6.A clamp — bound the feedback channel at DNA input, see
+                # WS3_H6_phase0_audit.md §6 (Option C). Full `cum_bps` /
+                # `prev_delta` continue to accumulate below; only the DNA
+                # *input window* is capped to ±DNA_CTX_CLAMP_BPS.
+                ps_in = max(-DNA_CTX_CLAMP_BPS, min(DNA_CTX_CLAMP_BPS, cum_bps))
+                pd_in = max(-DNA_CTX_CLAMP_BPS, min(DNA_CTX_CLAMP_BPS, prev_delta))
+                if ps_in != cum_bps or pd_in != prev_delta:
+                    dna_clamp_hits += 1
                 ctx = DNAContext(
-                    prev_state_bps=cum_bps,
-                    prev_delta_bps=prev_delta,
+                    prev_state_bps=ps_in,
+                    prev_delta_bps=pd_in,
                     regime=self.regime_label,
                     perceived=perceived[step_i] if step_i < len(perceived) else [],
                     signed_intent=signed,
@@ -611,6 +644,14 @@ class ChessProjector:
                     sim.last_funding_rate *= 0.995
             per_tribe_curves.append(curve)
             per_tribe_ids.append(tid)
+
+        # H6.A diagnostic — record clamp-hit count for tests/regression.
+        self._dna_clamp_hits_last = dna_clamp_hits
+        if dna_clamp_hits > 0:
+            logger.warning(
+                f"[projector] DNA ctx clamp fired {dna_clamp_hits} times "
+                "(see WS3_H6_phase0_audit.md §6)"
+            )
 
         # ── 6. Performance-weighted consensus ──
         # Consensus_h = Σ (Path_i,h · W_i,h · pool_weight_i) / Σ (W_i,h · pool_weight_i)
@@ -779,6 +820,52 @@ class ChessProjector:
             step_bps_list.append(cum - prev_cum)
             prev_cum = cum
 
+        # WS3 H5.A — saturation clamp on `step_bps_list`.
+        # Phase 0 audit (research/phase11_diagnostic/WS3_H5_phase0_audit.md)
+        # found the 1/99 attractor is produced by a single-horizon spike in
+        # `steps_bps` (|entry| up to ~6.5e+295) which then materialises as an
+        # adjacent ±HUGE pair in `step_bps_list`. The projector was forwarding
+        # these to the Forecast (and through to `abs_activity_bps`, the tape,
+        # and the logger) without any `isfinite`/magnitude guard. `confidence`
+        # then defaults to `NaN`/1.0 depending on the path, which slipped past
+        # the decision engine's non-NaN-aware `conf < min_conf` check and
+        # opened 12 shorts with `emove=NaN` (audit §6.3).
+        # H5.A defence: coerce NaN/inf→0 and clamp |step| ≤ MAX_STEP_BPS, then
+        # rebuild `steps_bps` from the sanitized differences so downstream
+        # consumers (sigma fitter, sample-path terminals, jsonl) see a single
+        # coherent view. When any clamp fires we flag `saturation_hit` and
+        # force `directional_score`/`base_conf` to 0.0 below — that zero
+        # propagates to `final_conf`, and the existing `conf < min_conf`
+        # gate in DecisionEngine holds the tick. No DNA-recursion fix here:
+        # that explosive dynamic is still live inside per-tribe `curve[h]`
+        # (H6 audit scope). This clamp is observational containment only.
+        MAX_STEP_BPS = 500.0  # ~5% single-step ≈ 25σ on BTC 5s-bar.
+
+        def _sat(b: float) -> float:
+            if not math.isfinite(b):
+                return 0.0
+            if b > MAX_STEP_BPS:
+                return MAX_STEP_BPS
+            if b < -MAX_STEP_BPS:
+                return -MAX_STEP_BPS
+            return b
+
+        saturation_hit = any(
+            (not math.isfinite(b)) or abs(b) > MAX_STEP_BPS
+            for b in step_bps_list
+        )
+        if saturation_hit:
+            step_bps_list = [_sat(b) for b in step_bps_list]
+            cum = 0.0
+            steps_bps = []
+            for b in step_bps_list:
+                cum += b
+                steps_bps.append(cum)
+            logger.warning(
+                "[projector] step_bps_list saturation hit — forcing conf=0 "
+                "(see WS3_H5_phase0_audit.md §6.3)"
+            )
+
         # Per-step aggregate for the confidence computation. The decayed
         # votes came from the isolated walks (each tribe's vote at its own
         # step timestamp), so the aggregate's uncertainty measure is still
@@ -795,8 +882,25 @@ class ChessProjector:
             (1.0 - s.uncertainty) * w for s, w in zip(step_aggs, kernel)
         ) / k_sum
         abs_activity = sum(abs(b) * w for b, w in zip(step_bps_list, kernel))
-        directional = abs(expected_move_bps) / abs_activity if abs_activity > 0 else 0.0
-        base_conf = max(0.0, min(1.0, signal_quality * directional))
+        if saturation_hit:
+            # Force zero so `final_conf = base_conf * diversity_mult = 0`
+            # passes through the existing `conf < min_conf` hold-gate in
+            # DecisionEngine. See H5.A rationale block above the sanitize
+            # step. `directional_score = 0` also keeps the persisted tape
+            # value bounded (was 1/99 = 0.01010 attractor pre-fix).
+            directional = 0.0
+            base_conf = 0.0
+        else:
+            directional = abs(expected_move_bps) / abs_activity if abs_activity > 0 else 0.0
+            base_conf = max(0.0, min(1.0, signal_quality * directional))
+        # WS3 H5.I1 — sign-flip count across consecutive entries of the
+        # per-step increment curve. Under the pure-alternation attractor
+        # (`step_bps_list ≈ [+X, −X, +X, −X, …]`) this lands at n_steps−1;
+        # under a clean trending curve, at 0. Zero-entries don't count as
+        # a flip (a*b == 0.0 fails the strict < 0 test).
+        step_bps_signflips = sum(
+            1 for a, b in zip(step_bps_list, step_bps_list[1:]) if a * b < 0.0
+        )
 
         # Phase 1b — Council entropy / diversity score. Compute once the
         # consensus direction is known, then scale confidence by it: a high
@@ -890,6 +994,9 @@ class ChessProjector:
             directional_score=directional,
             base_conf=base_conf,
             diversity_mult=diversity_mult,
+            abs_activity_bps=abs_activity,
+            step_bps_signflips=step_bps_signflips,
+            saturation_hit=saturation_hit,
         )
 
     # -- Phase 1a: redundancy / cross-correlation ------------------------
@@ -998,7 +1105,7 @@ class ChessProjector:
         so the decision engine can detect crowded trades."""
         category_mass: dict[str, dict[str, float]] = {}
         for tid, (v, _signed, _strength) in initial_votes.items():
-            cat = _TRIBE_CATEGORY.get(tid, "ta")
+            cat = _TRIBE_CATEGORY[tid]
             pw = pool_w.get(tid, 0.0)
             bucket = category_mass.setdefault(cat, {"buy": 0.0, "sell": 0.0})
             bucket["buy"] += pw * v.buy_frac

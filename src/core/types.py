@@ -162,6 +162,29 @@ class Forecast(Struct):
     directional_score: float | None = None  # = |emove| / abs_activity, the ratio at chess.py:798
     base_conf: float | None = None           # = signal_quality * directional_score, pre-clip
     diversity_mult: float | None = None      # = 0.6 + 0.4 * diversity_score
+    # WS3 H5.I1 — cumulative-path attractor instrumentation. Both optional,
+    # None when the projector pre-dates H5.I1 (unit-test fixtures / replayed
+    # older Forecast payloads).
+    #   abs_activity_bps  = Σ |step_bps_i| · decay_i  (denominator of
+    #                       directional_score; persisted to diagnose the
+    #                       1/99 attractor seen in live tape).
+    #   step_bps_signflips = #(consecutive sign flips in step_bps_list).
+    #                        Upper bound n_steps − 1. Pure alternation
+    #                        (P4 suspected-bug pattern) → n_steps − 1.
+    #                        Clean trend → 0.
+    abs_activity_bps: float | None = None
+    step_bps_signflips: int | None = None
+    # WS3 H5.A — saturation stamp. True when `step_bps_list` contained a
+    # non-finite (NaN/inf) entry OR any |step| > MAX_STEP_BPS (500 bps /
+    # ~5% single-step, ≈25σ on BTC 5s-bar). On hit, `chess.py` sanitizes
+    # the list (inf/NaN → 0, clamp to ±500), rebuilds `steps_bps` from
+    # the sanitized differences, and forces `directional_score = 0` and
+    # `base_conf = 0` so the existing `conf < min_conf` gate in the
+    # decision engine auto-holds (see WS3_H5_phase0_audit.md §6.3).
+    # Default False so pre-H5.A Forecast fixtures/replays stay untouched;
+    # a Phase-1 count of `saturation_hit=True` is the critical input for
+    # prioritising H6 (DNA-recursion audit) over further calibrator work.
+    saturation_hit: bool = False
 
 
 class Position(Struct):

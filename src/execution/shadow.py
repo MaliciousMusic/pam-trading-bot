@@ -74,6 +74,13 @@ class _ShadowTrade:
     hit_tp: bool
     hit_sl: bool
     expected_move_bps: float
+    # WS3 I3.c — executor-parity measurement surface. Per-close bps the
+    # trade would have realized if priced through PaperExecutor's pure
+    # fill model (`_fill_price_deterministic`, no Harden overlay) instead
+    # of shadow's own simpler `_fill_price`. None when no PaperExecutor
+    # reference was wired at shadow-ledger construction time (unit-test
+    # fixtures, sprint-without-executor, legacy call sites).
+    realized_bps_paper_model: float | None = None
 
 
 class TribeShadowLedger:
@@ -116,6 +123,13 @@ class TribeShadowLedger:
         size_base_pct: float = 2.0,
         size_conv_scale: float = 1.0,
         min_vote_conviction: float = 0.10,
+        # WS3 I3.c — optional reference to the real PaperExecutor so that
+        # `_close_position` can log a parallel `realized_bps_paper_model`
+        # using `PaperExecutor._fill_price_deterministic`. Duck-typed (we
+        # only call `._fill_price_deterministic(...)`), so unit-test stubs
+        # can pass a minimal object. None → field stays None on every
+        # `_ShadowTrade`.
+        paper_exec: Any | None = None,
     ) -> None:
         self.tribe = tribe
         self.tribe_id = tribe.spec.id
@@ -132,6 +146,8 @@ class TribeShadowLedger:
         self.max_total_notional_pct = float(max_total_notional_pct)
         self.max_hold_seconds = int(max_hold_seconds)
         self.max_session_dd_pct = float(max_session_dd_pct)
+        # WS3 I3.c — paper-model reference for parity measurement.
+        self._paper_exec = paper_exec
 
         # Personality → per-position SL floor. Panicky tribes cut fast, calm
         # tribes ride drawdowns further. Linear interpolation between 1.5%
@@ -563,6 +579,24 @@ class TribeShadowLedger:
         fee = self._fee(p.size_usd)
         net = pnl - fee
         self._equity += net
+        # WS3 I3.c — parallel paper-model fill for executor-parity
+        # measurement. Same close, same fee, priced through Paper's
+        # `_fill_price_deterministic` instead of shadow's simpler
+        # `_fill_price`. None when no PaperExecutor was wired, or on
+        # any unexpected call-site mismatch (duck-typed safety net).
+        paper_model_bps: float | None = None
+        if self._paper_exec is not None and p.size_usd > 0:
+            try:
+                paper_fill, _ = self._paper_exec._fill_price_deterministic(
+                    mark, exit_side, p.size_usd,
+                )
+                if p.side is Side.BUY:
+                    paper_pnl = p.size_usd * (paper_fill - p.entry_price) / p.entry_price
+                else:
+                    paper_pnl = p.size_usd * (p.entry_price - paper_fill) / p.entry_price
+                paper_model_bps = ((paper_pnl - fee) / p.size_usd) * 1e4
+            except Exception:
+                paper_model_bps = None
         self._trades_completed += 1
         if net > 0:
             self._wins += 1
@@ -602,6 +636,7 @@ class TribeShadowLedger:
             hit_tp=bool(hit_tp),
             hit_sl=bool(hit_sl),
             expected_move_bps=float(emove),
+            realized_bps_paper_model=paper_model_bps,
         ))
 
     def snapshot(self) -> dict[str, Any]:
@@ -627,10 +662,16 @@ def build_shadow_ledgers(
     exit_strategy: dict | None = None,
     risk_cfg: dict | None = None,
     decision_cfg: dict | None = None,
+    paper_exec: Any | None = None,
 ) -> dict[str, TribeShadowLedger]:
     """Factory: build one TribeShadowLedger per tribe using the same
     exit-strategy / risk block the real PaperExecutor reads, plus the
     shadow_ledgers overrides. Returns {} when shadow_ledgers.enabled is False.
+
+    When `paper_exec` is provided, every shadow ledger receives a
+    reference and logs `realized_bps_paper_model` per close for WS3 I3.c
+    executor-parity measurement. None (sprint, tests) leaves the new
+    field as None per additive-schema convention.
     """
     sh = cfg.get("shadow_ledgers", {}) or {}
     if not bool(sh.get("enabled", False)):
@@ -666,6 +707,7 @@ def build_shadow_ledgers(
             size_base_pct=float(sh.get("size_base_pct", 2.0)),
             size_conv_scale=float(sh.get("size_conv_scale", 1.0)),
             min_vote_conviction=float(sh.get("min_vote_conviction", 0.10)),
+            paper_exec=paper_exec,
         )
     logger.info("[shadow] built {} per-tribe shadow ledgers at ${:,.0f} each",
                 len(out), start_equity)

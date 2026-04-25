@@ -16,6 +16,7 @@ from src.decision.engine import DecisionEngine
 from src.execution.ledger import Ledger
 from src.execution.paper import PaperExecutor
 from src.ingress.binance_ws import BinancePerpsWS
+from src.ingress.bybit_perps_ws import BybitPerpsWS
 from src.projector.chess import ChessProjector
 from src.tribes.loader import load_all
 from src.tribes.market_state import MarketState
@@ -23,7 +24,7 @@ from src.tribes.market_state import MarketState
 
 async def main() -> None:
     cfg = settings()
-    ds = data_sources()["sources"]["binance_perps_ws"]
+    venue = cfg.get("exchange", "binance_perps")
 
     tribes = load_all()
     if not tribes:
@@ -56,9 +57,15 @@ async def main() -> None:
         tick_seconds=int(cfg["clock"]["tick_seconds"]),
     )
 
-    client = BinancePerpsWS(bus, streams=ds["streams"])
-    logger.info("mode={}  symbol={}  starting equity ${:.2f}",
-                cfg["mode"], cfg["symbol"], executor.equity_usd)
+    # Primary-venue client selection. 2026-04-24 venue swap (PLAN.md §5.1.2):
+    # Binance USD-M futures geo-blocked; Bybit V5 linear is the replacement.
+    if venue == "bybit_perps":
+        client = BybitPerpsWS(bus, symbol=cfg["symbol"])
+    else:
+        ds = data_sources()["sources"]["binance_perps_ws"]
+        client = BinancePerpsWS(bus, streams=ds["streams"])
+    logger.info("mode={}  venue={}  symbol={}  starting equity ${:.2f}",
+                cfg["mode"], venue, cfg["symbol"], executor.equity_usd)
     await asyncio.gather(client.run(), engine.run())
 
 

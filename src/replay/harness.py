@@ -252,6 +252,15 @@ class SprintEngine:
                     base_conf=forecast.base_conf,
                     diversity_score=forecast.diversity_score,
                     diversity_mult=forecast.diversity_mult,
+                    abs_activity_bps=forecast.abs_activity_bps,
+                    step_bps_signflips=forecast.step_bps_signflips,
+                    conviction_boost=forecast.conviction_boost,
+                    harvest_mass_ratio=forecast.harvest_mass_ratio,
+                    path_integrity_ok=(
+                        None if forecast.driver_skill_avg is None
+                        else forecast.driver_skill_avg >= 0.7
+                    ),
+                    regime_label=regime_label,
                 )
                 if self.kernel_calibrator is not None and resolved_now:
                     self.kernel_calibrator.apply_resolved(resolved_now)

@@ -1361,6 +1361,7 @@ The live loop trades Merciless by default as of the `2026-04-21` freeze (`config
 | **Phase 11 — Realistic Execution** | book-depth fills, capacity clip, half-spread | ✅ shipped |
 | **Phase 10-Harden** | Merciless execution overlay (§21) — reality tax **−0.45 % ± 0.06 pp** (4-seed sweep) | ✅ shipped (commit `fc5e537`), default-on since `2026-04-21` |
 | **Stability Gate (G2)** | **7 An-0 days under Merciless, Sharpe > 2.0, zero guard alerts** — spec: `docs/STABILITY_GATE.md` | ⏳ **OPEN — blocks live-capital bridge** |
+| **Signal-quality diagnostic (WS3)** | H-thread investigation blocking G2 — WS1 found 44.5 % directional hit at 20 s. Current state: H5.A saturation clamp landed, H6.A DNA recursion-input clamp landed (door #1), H6.B Phase 0 audit identifies door #2 (depth-scale × DNA-output) with fix queued. See [`research/phase11_diagnostic/PLAN.md`](research/phase11_diagnostic/PLAN.md). | ▶ in flight (H6.B fix next) |
 | **Phase 12** | Silent tribe — microstructure L2 inputs | ◻ pending (post-G2) |
 | **Phase 13** | Evolutionary variant search | ◻ pending (post-G2) |
 | **Phase 14** | Adversarial replay fixtures | ◻ pending (post-G2) |
