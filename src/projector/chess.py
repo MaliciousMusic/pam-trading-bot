@@ -158,6 +158,23 @@ _REGIME_CATEGORY_MULT: dict[str, dict[str, float]] = {
 DNA_CTX_CLAMP_BPS: float = 100.0
 
 
+# H6.B — depth-scale cap (Option B, WS3_H6B_phase0_audit.md §7).
+#
+# `scale = depth_ref_usd / max(side_depth, depth_floor_usd)` is the only
+# unbounded multiplier in the per-step `step_bps = (dna + event) * scale`
+# chain. With H6.A bounding DNA input at ±100 bps, ta_dna output ≤ 65 bps;
+# at scale > 7.7 the product breaches the H5.A 500-bps saturation
+# ceiling on routine BTC chop. Capping the scale at 5 leaves a 2-3×
+# headroom for ta_dna and 30+× headroom for the bounded-recursion
+# categories, while preserving 1 ≤ scale ≤ 5 — the regime where
+# "thin books amplify pushes" remains economically interpretable.
+# Beyond 5×, the multiplier overfits microstructure (5bps-side depth
+# under $2M) into a synthetic per-step amplification with no
+# matching real signal. Reversible single-knob: bump to 7 / 10 if
+# cascade-regime regression strangles signal in H6.C.
+DEPTH_SCALE_MAX: float = 5.0
+
+
 class ChessProjector:
     def __init__(
         self,
@@ -199,6 +216,7 @@ class ChessProjector:
         self.mean_reversion_rate = float(mean_reversion_rate)
         # H6.A diagnostic — last projection's DNAContext clamp-hit count.
         self._dna_clamp_hits_last: int = 0
+        self._depth_scale_cap_hits_last: int = 0
         self.sample_paths_n = int(sample_paths_n)
         self.default_horizon_seconds = float(default_horizon_seconds)
         self.default_sigma_bps = float(default_sigma_bps)
@@ -564,6 +582,7 @@ class ChessProjector:
         prev_epochs: list[float] = [start_ts.timestamp()] + step_epochs[:-1]
 
         dna_clamp_hits = 0  # H6.A diagnostic — counted across all (tribe, step).
+        depth_scale_cap_hits = 0  # H6.B diagnostic — counted across all (tribe, step).
 
         for tribe in self.tribes:
             tid = tribe.spec.id
@@ -625,7 +644,13 @@ class ChessProjector:
                     else sim.bid_depth_5bps_usd
                 )
                 if side_depth and side_depth > 0:
-                    scale = self.depth_ref_usd / max(side_depth, self.depth_floor_usd)
+                    raw_scale = self.depth_ref_usd / max(side_depth, self.depth_floor_usd)
+                    # H6.B cap — bound the multiplier at DEPTH_SCALE_MAX, see
+                    # WS3_H6B_phase0_audit.md §7 (Option B). Closes door #2
+                    # (scale × DNA-output amplification) on top of H6.A.
+                    scale = min(raw_scale, DEPTH_SCALE_MAX)
+                    if raw_scale > DEPTH_SCALE_MAX:
+                        depth_scale_cap_hits += 1
                 else:
                     scale = 1.0
                 step_bps = total_bps * scale
@@ -651,6 +676,13 @@ class ChessProjector:
             logger.warning(
                 f"[projector] DNA ctx clamp fired {dna_clamp_hits} times "
                 "(see WS3_H6_phase0_audit.md §6)"
+            )
+        # H6.B diagnostic — record cap-hit count for tests/regression.
+        self._depth_scale_cap_hits_last = depth_scale_cap_hits
+        if depth_scale_cap_hits > 0:
+            logger.warning(
+                f"[projector] depth-scale cap fired {depth_scale_cap_hits} times "
+                "(see WS3_H6B_phase0_audit.md §7)"
             )
 
         # ── 6. Performance-weighted consensus ──
