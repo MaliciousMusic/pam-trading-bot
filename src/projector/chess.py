@@ -158,6 +158,26 @@ _REGIME_CATEGORY_MULT: dict[str, dict[str, float]] = {
 DNA_CTX_CLAMP_BPS: float = 100.0
 
 
+# H6.C — DNA-output clamp (Option A, WS3_H6C_phase0_audit.md §5).
+#
+# Caps `dna_delta = dna_fn(ctx)` at ±DNA_DELTA_CLAMP_BPS post-evaluation.
+# Phase 0 live instrumentation (PID 5780, 234 projections, 2026-04-25)
+# observed `max_dna` per projection drift monotonically from 65 bps
+# (warmup) to 2,744 bps (steady state) despite H6.A bounding the
+# recursion inputs at ±100 bps. Source: `intent_drift = c × base_strength
+# × signed_intent` in every DNA function (whale c=0.55, mev 0.35, ta 0.25,
+# arb 0.30, ...). `base_strength = conviction × calibrator_skill ×
+# effective_gain` where `calibrator.skill_multiplier(tid)` is unbounded
+# in code — feedback loop calibrator → prediction → calibrator.
+# Capping at output is the single-knob containment that bounds the
+# entire DNA output regardless of which internal term explodes
+# (skill, regime_multiplier, perceived shocks, retail panic).
+# Reversible: tune to 75 if H5.A still saturating, 150 if signal
+# strangled. With H6.B scale ≤ 5: per-tribe step_bps ≤ 500 strict
+# (= MAX_STEP_BPS), consensus weighted mean ≤ 500 with margin.
+DNA_DELTA_CLAMP_BPS: float = 100.0
+
+
 # H6.B — depth-scale cap (Option B, WS3_H6B_phase0_audit.md §7).
 #
 # `scale = depth_ref_usd / max(side_depth, depth_floor_usd)` is the only
@@ -217,6 +237,8 @@ class ChessProjector:
         # H6.A diagnostic — last projection's DNAContext clamp-hit count.
         self._dna_clamp_hits_last: int = 0
         self._depth_scale_cap_hits_last: int = 0
+        # H6.C diagnostic — last projection's DNA-output clamp-hit count.
+        self._dna_delta_clamp_hits_last: int = 0
         self.sample_paths_n = int(sample_paths_n)
         self.default_horizon_seconds = float(default_horizon_seconds)
         self.default_sigma_bps = float(default_sigma_bps)
@@ -583,6 +605,7 @@ class ChessProjector:
 
         dna_clamp_hits = 0  # H6.A diagnostic — counted across all (tribe, step).
         depth_scale_cap_hits = 0  # H6.B diagnostic — counted across all (tribe, step).
+        dna_delta_clamp_hits = 0  # H6.C diagnostic — counted across all (tribe, step).
 
         for tribe in self.tribes:
             tid = tribe.spec.id
@@ -630,7 +653,15 @@ class ChessProjector:
                     base_strength=base_strength,
                     h=step_i,
                 )
-                dna_delta = dna_fn(ctx)
+                dna_delta_raw = dna_fn(ctx)
+                # H6.C cap — bound the DNA output at DNA_DELTA_CLAMP_BPS,
+                # see WS3_H6C_phase0_audit.md §5 (Option A). Closes door #3
+                # (intent_drift = c × base_strength × signed_intent
+                # unbounded via calibrator skill_multiplier feedback).
+                dna_delta = max(-DNA_DELTA_CLAMP_BPS,
+                                min(DNA_DELTA_CLAMP_BPS, dna_delta_raw))
+                if dna_delta != dna_delta_raw:
+                    dna_delta_clamp_hits += 1
                 # Real scheduled events (separate from the random world
                 # shocks) — preserves the existing event-wave overlay.
                 event_bps = step_event_bps(
@@ -683,6 +714,13 @@ class ChessProjector:
             logger.warning(
                 f"[projector] depth-scale cap fired {depth_scale_cap_hits} times "
                 "(see WS3_H6B_phase0_audit.md §7)"
+            )
+        # H6.C diagnostic — record DNA-output clamp-hit count.
+        self._dna_delta_clamp_hits_last = dna_delta_clamp_hits
+        if dna_delta_clamp_hits > 0:
+            logger.warning(
+                f"[projector] dna_delta clamp fired {dna_delta_clamp_hits} times "
+                "(see WS3_H6C_phase0_audit.md §5)"
             )
 
         # ── 6. Performance-weighted consensus ──
